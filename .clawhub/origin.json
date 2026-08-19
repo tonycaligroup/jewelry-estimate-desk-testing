@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "registry": "http://cc-app.cc-app.svc.cluster.local:8000/api/v1/marketplace",
+  "slug": "jewelry-estimate-desk",
+  "installedVersion": "1.1.0",
+  "installedAt": 1786563155750,
+  "artifact": {
+    "kind": "archive",
+    "sha256": "916da99a25cc9ecd00cfd014712cfec6748e4144bf7e7c474ce7ea946935dbe2",
+    "integrity": "sha256-kW2pmiXMns0Az9AUcSz+xnSOQUS/fnxHTOfqlGk12+I="
+  },
+  "skillFile": {
+    "path": "SKILL.md",
+    "sha256": "6a44a6639e6ad94f70c540b58ce3c9f324269c24b04f544285ed8b96a26abe10"
+  }
+}
