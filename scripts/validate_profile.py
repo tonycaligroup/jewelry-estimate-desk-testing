@@ -25,11 +25,13 @@ def _read_path(data: dict[str, Any], path: str) -> Any:
     return value
 
 
-def validate_profile(data: Any) -> list[str]:
+def validate_profile(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
-        return ["profile must be a JSON object"]
+        return {"errors": ["profile must be a JSON object"], "missing_fields": []}
 
     errors: list[str] = []
+    missing_fields: list[str] = []
+
     if data.get("schema_version") != 1:
         errors.append("schema_version must be 1")
 
@@ -41,6 +43,21 @@ def validate_profile(data: Any) -> list[str]:
         value = _read_path(data, path)
         if not isinstance(value, str) or not EMAIL_RE.fullmatch(value):
             errors.append(f"{path} must be a valid email address")
+
+    # Business address — required for calendar invites
+    address = _read_path(data, "shop.address")
+    if not isinstance(address, dict):
+        errors.append("shop.address is required (business address for calendar invites)")
+    else:
+        for field in ("street", "city", "state", "zip"):
+            value = address.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"shop.address.{field} is required")
+
+    # Business website — optional but recommended
+    website = _read_path(data, "shop.website")
+    if not isinstance(website, str) or not website.strip():
+        missing_fields.append("shop.website")
 
     stage = _read_path(data, "autonomy.trust_stage")
     if type(stage) is not int or stage not in {1, 2, 3}:
@@ -61,7 +78,7 @@ def validate_profile(data: Any) -> list[str]:
         except ZoneInfoNotFoundError:
             errors.append("scheduling.timezone must be a valid IANA timezone")
 
-    return errors
+    return {"errors": errors, "missing_fields": missing_fields, "ready": not errors}
 
 
 def load_profile(path: Path) -> dict[str, Any]:
@@ -84,12 +101,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data = load_profile(args.profile)
     except ValueError as exc:
-        print(json.dumps({"ready": False, "errors": [str(exc)]}))
+        print(json.dumps({"ready": False, "errors": [str(exc)], "missing_fields": []}))
         return 2
 
-    errors = validate_profile(data)
-    print(json.dumps({"ready": not errors, "errors": errors}, sort_keys=True))
-    return 0 if not errors else 2
+    result = validate_profile(data)
+    errors = result["errors"]
+    missing_fields = result["missing_fields"]
+    ready = not errors
+
+    output = {"ready": ready, "errors": errors, "missing_fields": missing_fields}
+    print(json.dumps(output, sort_keys=True))
+    return 0 if ready else 2
 
 
 if __name__ == "__main__":

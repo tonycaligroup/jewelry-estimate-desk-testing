@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 3.3.0
+version: 3.3.1
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail or wholesale custom-jewelry estimate workflows; do not use for appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -90,9 +90,18 @@ Before reading or processing an inquiry, run:
 python3 {baseDir}/scripts/validate_profile.py estimate-desk/shop-profile.json
 ```
 
-Proceed only when it exits 0 and returns `{"ready": true}`. If it fails, show
-the owner the returned field errors and stop. Do not modify the installed skill
-to store shop settings.
+The output is `{"ready": true|false, "errors": [...], "missing_fields": [...]}`.
+
+- **ready: true, missing_fields is empty** — proceed normally.
+- **ready: true, missing_fields is non-empty** — the profile is valid but has
+  optional fields not yet collected (e.g. `shop.website`). Prompt the owner for
+  those fields and update the profile. Do not block on them.
+- **ready: false** — show the owner the returned `errors` and stop. Do not
+  proceed until all errors are resolved. Common case: existing profile from a
+  prior version missing `shop.address` — collect the business address and
+  update the profile.
+
+Do not modify the installed skill to store shop settings.
 
 ## Trust stages
 

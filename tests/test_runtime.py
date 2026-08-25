@@ -30,6 +30,13 @@ def valid_profile() -> dict:
             "mode": "retailer",
             "approver_email": "owner@example.com",
             "outbound_mailbox": "sales@example.com",
+            "address": {
+                "street": "123 Main St",
+                "city": "Los Angeles",
+                "state": "CA",
+                "zip": "90001"
+            },
+            "website": "https://example.com"
         },
         "autonomy": {"trust_stage": 1},
         "pricing": {"markup_multiplier": 1.25},
@@ -39,18 +46,23 @@ def valid_profile() -> dict:
 
 class ProfileTests(unittest.TestCase):
     def test_valid_profile(self) -> None:
-        self.assertEqual(validate_profile.validate_profile(valid_profile()), [])
+        result = validate_profile.validate_profile(valid_profile())
+        self.assertEqual(result["errors"], [])
+        self.assertTrue(result["ready"])
 
     def test_percentage_string_is_rejected(self) -> None:
         profile = valid_profile()
         profile["pricing"]["markup_multiplier"] = "25%"
-        errors = validate_profile.validate_profile(profile)
-        self.assertTrue(any("markup_multiplier" in error for error in errors))
+        result = validate_profile.validate_profile(profile)
+        self.assertTrue(any("markup_multiplier" in error for error in result["errors"]))
+        self.assertFalse(result["ready"])
 
     def test_at_cost_is_rejected(self) -> None:
         profile = valid_profile()
         profile["pricing"]["markup_multiplier"] = 1.0
-        self.assertTrue(validate_profile.validate_profile(profile))
+        result = validate_profile.validate_profile(profile)
+        self.assertTrue(result["errors"])
+        self.assertFalse(result["ready"])
 
 
 class ApprovalTests(unittest.TestCase):
