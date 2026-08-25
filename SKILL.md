@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 3.3.1
+version: 3.3.2
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail or wholesale custom-jewelry estimate workflows; do not use for appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -34,6 +34,11 @@ and delivery commitment behind owner approval.
    Never identify, merge, select, or address a customer by display name. Two
    senders with the same name but different email addresses are different
    customers and must have separate estimates and routes.
+9. The calendar is the source of truth for meeting state. Never infer that a
+   meeting exists from email content, subject lines, or scheduling language.
+   Before claiming a meeting is already scheduled, query the calendar for
+   events with that customer's email as an attendee. If no event is found, no
+   meeting exists regardless of what any email says.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, with no fallback. Monitoring crons must use
@@ -360,12 +365,18 @@ After successful verification:
    lacks a message ID, do not retry automatically; inspect the Gmail thread or
    escalate to the owner first.
 
-For scheduling, query live free/busy, intersect with declared windows, offer
-specific times, then re-check immediately before creating an event. Include the
-customer's email address (from `route.json` recipient field) as an attendee in
-the calendar event so they receive the invitation. Confirm to the customer only
-after the calendar write succeeds. Use the owner's IANA timezone, never the
-pod's UTC clock.
+For scheduling, **always query the calendar first** before making any claims
+about existing meetings. Use `gws calendar events list` or the Maton gateway
+to search for events with the customer's email as an attendee. Never infer
+meeting state from email content, subject lines, or scheduling language in
+messages.
+
+After confirming no conflicting meeting exists, query live free/busy, intersect
+with declared windows, offer specific times, then re-check immediately before
+creating an event. Include the customer's email address (from `route.json`
+recipient field) as an attendee in the calendar event so they receive the
+invitation. Confirm to the customer only after the calendar write succeeds.
+Use the owner's IANA timezone, never the pod's UTC clock.
 
 If a rendering is authorized, read `references/rendering-standards.md` first.
 
