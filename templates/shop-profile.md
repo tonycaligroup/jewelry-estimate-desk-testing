@@ -56,6 +56,10 @@ Buffer after in-person: <15m>   Min notice: <2h>   Book out to: <30 days>
 Location: <showroom address>    Video: <how links are created>
 Must also attend: <bench / gemologist / partner>
 
+## Inbox Monitoring
+Business hours: <Mon-Fri 9am-5pm | description>
+Monitoring timezone: <IANA, e.g. America/Los_Angeles>
+
 ## Terms
 Lead time: <x> business days     Rush: +<x>% if feasible
 Deposit: <x>%                    Tax: <handling>
@@ -63,6 +67,8 @@ Quote valid: <x> days            Rendering policy: <offer | on request | never>
 
 ## Systems
 CRM/POS: <system>   Write access: yes | no
+
+ready: true | false   # <-- REQUIRED. Phase 0 hard gate. Set to true after setup.
 ```
 
 ## Filling it in
@@ -71,6 +77,10 @@ CRM/POS: <system>   Write access: yes | no
 Four fields, ninety seconds.
 
 **Required before the first booking:** timezone, calendar, windows, durations.
+
+**Required before Phase 1 processing:** `ready: true` at the very end of the
+profile. Until this field exists and is `true`, the agent will not process
+any inquiries.
 
 **The two that decide accuracy:** `Labor` and `Typical finished weights`.
 Everything else can be a market average. These two cannot — they're specific
