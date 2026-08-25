@@ -1,71 +1,0 @@
-�
-��jj��>�dZddlmZddlZddlZddlZddlZddlZddlm	Z	ddl
-mZmZmZejd��Zejd��Zd,d�Zd-d�Zd-d�Z	d.d/d�Zd0d�Zd1d�Z	d.d2d!�Zejfd3d'�Zd4d5d*�Zed+kreje����dSdS)6z5Invoke supported Kolo CLI operations without a shell.�)�annotationsN)�Path)�Any�Callable�Sequencez^jed-[0-9a-f]{16}$z ^agent:[A-Za-z0-9_.:@/-]{1,255}$�pathr�return�strc�Зtj|�d�����}t|t��st|�d����tj|ddd���S)Nzutf-8)�encodingz must contain a JSON objectFT)�,�:)�ensure_ascii�	sort_keys�
-separators)�json�loads�	read_text�
-isinstance�dict�
-ValueError�dumps)r�values  �scripts/kolo_safe.py�read_json_argumentrsa����D�N�N�G�N�<�<�=�=�E��e�T�"�"�?��D�=�=�=�>�>�>��:�e�%�4�J�W�W�W�W�rc�X�t�|��std���|S)NzCestimate ID must match jed- followed by 16 lowercase hex characters)�ESTIMATE_ID_RE�	fullmatchr�rs r�validate_estimate_idr!�-���#�#�E�*�*�`��^�_�_�_��Lrc�X�t�|��std���|S)NzCsession key must be an agent: session key returned by sessions_list)�SESSION_KEY_RErrr s r�validate_session_keyr% r"r�main�estimate_id�details�session_key�agent_id�	list[str]c���t|��}t|��}t|��}ddd|dd|��dddd	d
-|d|d|gS)N�kolo�request-approval�
---agent-idz--actionuCustom estimate — z--reasoningz9Structured custom-jewelry estimate ready for owner reviewz--risk-level�medium�	--detailsz--execution-payload�--session-key)r!r%r)r'r(r)r*�payloads     r�build_request_approvalr4&sm��'�{�3�3�K�&�{�3�3�K� ��)�)�G������,�{�,�,��C���������!�rc�X�t|��}dddd|����d�gS)Nr-�notify-ownerz-mz	Estimate z/ is ready for approval. Open the brief in Kolo.)r!�upper)r's r�build_notify_ownerr8@s<��&�{�3�3�K����X�K�%�%�'�'�X�X�X�	�r�record_type�external_idr3�statusc
-��tjd|��std���tjd|��std���tjd|��std���ddd	|d
-|dt|��d|g
-S)Nzskill\.[a-z0-9_.-]+zinvalid record typez[A-Za-z0-9_.:@-]+zinvalid external ID�[a-z0-9_-]+zinvalid statusr-�record-upsert�--record-type�--external-id�	--payload�--status)�rerrr)r9r:r3r;s    r�build_record_upsertrDJs����<�.��<�<�0��.�/�/�/��<�,�k�:�:�0��.�/�/�/��<���/�/�+��)�*�*�*���������7�#�#����r�title�description�
-event_type�idempotency_keyc�����r.t���dkst�fd�dD����rtd���|rt|��dkrtd���tjd|��std���tjd	|��std
-���ddd|d�d|d|d|dt|��gS)N��c3� �K�|]}|�vV��	dS�N�)�.0�	characterrEs  �r�	<genexpr>z#build_log_action.<locals>.<genexpr>gs(�����+W�+W�9�I��,>�+W�+W�+W�+W�+W�+Wrz
-z/title must contain 1-160 characters on one linei�z*description must contain 1-2000 charactersr=zinvalid event typez[A-Za-z0-9_.:@-]{1,200}zinvalid idempotency keyr-�
-log-actionr/�--title�--description�--event-type�--idempotency-keyr1)�len�anyrrCrr)rErFrGrHr(r*s`     r�build_log_actionrX_s�����L�C��J�J��$�$��+W�+W�+W�+W�PV�+W�+W�+W�(W�(W�$��J�K�K�K��G�#�k�*�*�T�1�1��E�F�F�F��<��
-�3�3�/��-�.�.�.��<�2�O�D�D�4��2�3�3�3���������������7�#�#��r�argv�Sequence[str]�runner�/Callable[..., subprocess.CompletedProcess[str]]� subprocess.CompletedProcess[str]c�<�|t|��dddd���S)NTF)�check�capture_output�text�shell)�list)rYr[s  r�run_commandrd�s&���6�$�t�*�*�D��D�PU�V�V�V�Vr�list[str] | None�intc���tj��}|�dd���}|�d��}|�dd���|�dt
-d���|�d	d���|�d
-d���|�d��}|�dd���|�d��}|�dd���|�dd���|�dt
-d���|�dd���|�d��}|�dd���|�dd���|�dd���|�dd���|�dt
-d���|�d
-d���|�|��}	|jdkr't|j	|j
-|j|j��}n�|jdkrt|j	��}nd|jdkr't|j|j|j|j��}n2t'|j|j|j|j|j
-|j��}t1|��}	|	jrt5|	jd���dS#t6t8t:jt>j f$r3}
-t5tC|
-��tDj#���Yd}
-~
-dSd}
-~
-wwxYw)N�commandT)�dest�requiredr.z--estimate-id)rjr1)�typerjr2r/r&)�defaultr6r>r?r@rArBrQrRrSrTrU�)�endr)�file�)$�argparse�ArgumentParser�add_subparsers�
-add_parser�add_argumentr�
-parse_argsrhr4r'r(r)r*r8rDr9r:r3r;rXrErFrGrHrd�stdout�print�OSErrorrr�JSONDecodeError�
-subprocess�CalledProcessErrorr
-�sys�stderr)rY�parser�sub�approval�notify�upsert�log�argsrh�result�excs           rr&r&�sA���$�&�&�F�
-�
-�
-�Y��
-�
->�
->�C��~�~�0�1�1�H����/�D��9�9�9����+�D�4��@�@�@����/�D��9�9�9����,���7�7�7��^�^�N�+�+�F�
-����$��7�7�7��^�^�O�,�,�F�
-����$��7�7�7�
-����$��7�7�7�
-����$���>�>�>�
-���
-�T��2�2�2�
-�.�.��
-&�
-&�C����Y���.�.�.����_�t��4�4�4����^�d��3�3�3����(�4��8�8�8����[�t�d��;�;�;����\�6��2�2�2����T�"�"�D���<�-�-�-�,�� �$�,��0@�$�-���G�G��\�^�+�+�(��)9�:�:�G�G��\�_�,�,�)�� �$�"2�D�L�$�+���G�G�'��
-�� ����$�������G��W�%�%���=�	)��&�-�R�(�(�(�(��q���Z��!5�z�7T�U�����c�#�h�h�S�Z�(�(�(�(��q�q�q�q�q��������s�C"K$�$'L>�(L9�9L>�__main__)rrr	r
-)rr
-r	r
-)r&)
-r'r
-r(rr)r
-r*r
-r	r+)r'r
-r	r+)
-r9r
-r:r
-r3rr;r
-r	r+)rEr
-rFr
-rGr
-rHr
-r(rr*r
-r	r+)rYrZr[r\r	r]rL)rYrer	rf)�__doc__�
-__future__rrqrrCr{r}�pathlibr�typingrrr�compilerr$rr!r%r4r8rDrX�runrdr&�__name__�exitrMrr�<module>r�s���;�;�"�"�"�"�"�"���������	�	�	�	�����
-�
-�
-�
-�������*�*�*�*�*�*�*�*�*�*����1�2�2�����?�@�@��X�X�X�X���������HN������4��������6������H?I�n�W�W�W�W�W�6�6�6�6�6�r�z����C�H�T�T�V�V�������r
