@@ -1,5 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
+version: 3.3.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail or wholesale custom-jewelry estimate workflows; do not use for appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -72,12 +73,16 @@ On first setup, copy `{baseDir}/templates/shop-profile.json` to the runtime
 location and collect:
 
 1. Shop name, owner name, approver email, outbound mailbox, and signature.
-2. Mode: `retailer`, `wholesale_middle_man`, or `both`.
-3. Markup multiplier. Convert `25%` to `1.25` and confirm with the example
+2. Business address (street, city, state, zip) — used for calendar invites and
+   email communications.
+3. Business website (if available) — used for calendar invites and email
+   signatures.
+4. Mode: `retailer`, `wholesale_middle_man`, or `both`.
+5. Markup multiplier. Convert `25%` to `1.25` and confirm with the example
    `$1,000 cost → $1,250 quote` before saving.
-4. Trust stage. Default to Stage 1.
-5. Booking mode and IANA timezone.
-6. Optional inbox-monitoring hours and timezone.
+6. Trust stage. Default to Stage 1.
+7. Booking mode and IANA timezone.
+8. Optional inbox-monitoring hours and timezone.
 
 Before reading or processing an inquiry, run:
 
@@ -93,12 +98,14 @@ to store shop settings.
 
 | Stage | Autonomous work | Owner approval still required |
 |---|---|---|
-| 1 — Watch me | Read, calculate, and draft only | Every outbound message, price, and booking |
-| 2 — Ask questions | Price-free specification requests | Every price and booking |
-| 3 — Book me | Stage 2 plus booking inside declared windows | Every price |
+| 1 — Watch me | Read, calculate, draft, and schedule | Every outbound message and price |
+| 2 — Ask questions | Stage 1 plus price-free specification requests | Every price |
+| 3 — Book me | Stage 2 work | Every price |
 
-Never advance the stage automatically. Missing or unreadable stage means
-Stage 1.
+Scheduling autonomy (offering times, creating calendar events, sending
+scheduling confirmations) is permitted at all stages. Trust stage restrictions
+apply to pricing and estimates, not to scheduling. Never advance the stage
+automatically. Missing or unreadable stage means Stage 1.
 
 ## Inbox monitoring
 
@@ -169,15 +176,31 @@ address, message text, or piece type. Stay silent when no new messages exist.
 
 ## Email reply invariant
 
-Every customer-facing Gmail message from this skill—including the initial
-acknowledgment, specification request, estimate, scheduling message, and
-follow-up—must use `scripts/gmail_reply.py` with the route produced from the
-exact inbound message by `scripts/gmail_route.py`. Never compose a standalone
-email, invent a generic subject such as `Your inquiry`, or retrieve a recipient
-from a name-based customer record. If route construction or reply construction
-fails, stop without sending. A customer name may be retained as display-only
-contact metadata, but it must never select an estimate, identity, recipient, or
-thread.
+**CRITICAL: Every customer-facing Gmail message from this skill—including the
+initial acknowledgment, specification request, estimate, scheduling message,
+and follow-up—must use `scripts/gmail_reply.py` with the route produced from
+the exact inbound message by `scripts/gmail_route.py`.**
+
+**Failure mode:** If you compose a new email with a subject like "Re: Following
+up on your inquiry" instead of replying to the original thread, you have
+violated this invariant. The customer will see a separate thread, not a
+continuation of their inquiry.
+
+**Checklist before sending ANY customer email:**
+1. You have the original Gmail message JSON (from the inbox monitor or a fresh
+   Gmail API fetch).
+2. You ran `gmail_route.py` on that message to produce `route.json`.
+3. You ran `gmail_reply.py` with `route.json` and your reply body to produce
+   `gmail-send.json`.
+4. The `gmail-send.json` contains the original `threadId`, `In-Reply-To`, and
+   `References` headers.
+
+If you are composing a new subject line, you are doing it wrong. Stop and
+recover the original message first. Never compose a standalone email, invent a
+generic subject such as `Your inquiry`, or retrieve a recipient from a
+name-based customer record. If route construction or reply construction fails,
+stop without sending. A customer name may be retained as display-only contact
+metadata, but it must never select an estimate, identity, recipient, or thread.
 
 ## Phase 1: triage
 
@@ -329,9 +352,11 @@ After successful verification:
    escalate to the owner first.
 
 For scheduling, query live free/busy, intersect with declared windows, offer
-specific times, then re-check immediately before creating an event. Confirm to
-the customer only after the calendar write succeeds. Use the owner's IANA
-timezone, never the pod's UTC clock.
+specific times, then re-check immediately before creating an event. Include the
+customer's email address (from `route.json` recipient field) as an attendee in
+the calendar event so they receive the invitation. Confirm to the customer only
+after the calendar write succeeds. Use the owner's IANA timezone, never the
+pod's UTC clock.
 
 If a rendering is authorized, read `references/rendering-standards.md` first.
 
