@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import base64
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
 import inbox_claim
+import gmail_reply
 import kolo_safe
 import validate_profile
 
@@ -180,6 +182,44 @@ class InboxClaimTests(unittest.TestCase):
                 root, "gmail-message-2", state["claim_token"], "processed"
             )
             self.assertEqual(finished["status"], "processed")
+
+
+class GmailReplyTests(unittest.TestCase):
+    def route(self) -> dict:
+        return {
+            "channel": "gmail",
+            "mailbox": "sales@example.com",
+            "recipient": "customer@example.net",
+            "gmail_message_id": "18d0123456789abc",
+            "thread_id": "18d0thread1234567",
+            "original_message_id": "<original@example.net>",
+            "original_subject": "Custom ring estimate",
+            "references": ["<earlier@example.net>"],
+        }
+
+    def decode(self, raw: str) -> str:
+        padding = "=" * (-len(raw) % 4)
+        return base64.urlsafe_b64decode(raw + padding).decode("utf-8")
+
+    def test_reply_stays_in_original_thread(self) -> None:
+        payload = gmail_reply.build_reply(self.route(), "Approved estimate: $4,200")
+        message = self.decode(payload["raw"])
+        self.assertEqual(payload["threadId"], "18d0thread1234567")
+        self.assertIn("Subject: Re: Custom ring estimate", message)
+        self.assertIn("In-Reply-To: <original@example.net>", message)
+        self.assertIn("References: <earlier@example.net> <original@example.net>", message)
+
+    def test_missing_original_thread_is_rejected(self) -> None:
+        route = self.route()
+        del route["thread_id"]
+        with self.assertRaises(ValueError):
+            gmail_reply.build_reply(route, "Approved estimate: $4,200")
+
+    def test_missing_original_message_id_is_rejected(self) -> None:
+        route = self.route()
+        del route["original_message_id"]
+        with self.assertRaises(ValueError):
+            gmail_reply.build_reply(route, "Approved estimate: $4,200")
 
 
 if __name__ == "__main__":

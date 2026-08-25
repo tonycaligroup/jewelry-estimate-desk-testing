@@ -26,6 +26,9 @@ and delivery commitment behind owner approval.
 6. Never send a customer message to `deliveryContext.to` or `kolo:<uuid>`.
    Those destinations are for the owner. Reply through the original customer
    connector, mailbox, recipient, and thread.
+7. An estimate originating from email must be a reply to the original inbound
+   message, never a new email or thread. If the original Gmail thread ID or RFC
+   `Message-ID` is unavailable, stop and recover the original message first.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, with no fallback. Monitoring crons must use
@@ -41,6 +44,8 @@ route to the pinned agent.
   and write idempotent audit events without a shell.
 - `scripts/inbox_claim.py`: prevent overlapping processing in a shared Kolo
   workspace using atomic directory creation.
+- `scripts/gmail_reply.py`: construct a Gmail reply payload bound to the
+  original thread and RFC message headers.
 - `templates/shop-profile.json`: runtime profile template.
 - `templates/customer-emails.md`: customer message templates.
 - `templates/spec-gate-email.md`: batched retail intake request.
@@ -200,7 +205,9 @@ python3 {baseDir}/scripts/approval_guard.py new-id
 Write `current-state.json` with:
 
 - `estimate_id`
-- `route`: original channel, mailbox, recipient, Gmail message ID, and thread ID
+- `route`: original channel, mailbox, recipient, immutable Gmail message ID,
+  Gmail thread ID, original RFC `Message-ID`, original subject, and existing
+  `References` message IDs
 - `specification`: the exact priced written specification
 - `proposed_price`
 - internal pricing, assumptions, feasibility, appointment options, and draft
@@ -245,15 +252,25 @@ does not enforce this binding; this verification is mandatory.
 
 After successful verification:
 
-1. Fill `templates/customer-emails.md` using the exact owner-approved price.
+1. Fill `templates/customer-emails.md` using the exact owner-approved price and
+   save only the reply body to `$WORK/customer-reply.txt`.
 2. Include the canonical high-end/pending-CAD substance from
    `templates/approved-estimate-note.md`, estimated—not guaranteed—lead time,
    validity date, and two or three live appointment options with timezone.
 3. Call `kolo integration-routing`. For Gmail through Maton, read the
-   api-gateway skill and send a base64url-encoded RFC 5322 reply through
-   `gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send`. Preserve the
-   stored outbound mailbox, recipient, `threadId`, `In-Reply-To`, and
-   `References` headers.
+   api-gateway skill, write the approved route object to `$WORK/route.json`, and
+   build the send body with:
+
+   ```bash
+   python3 {baseDir}/scripts/gmail_reply.py \
+     "$WORK/route.json" "$WORK/customer-reply.txt" "$WORK/gmail-send.json"
+   ```
+
+   Send that JSON unchanged through
+   `gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send`. The top-level
+   `threadId` and the encoded RFC 5322 `In-Reply-To` and `References` headers
+   are all mandatory. Do not substitute a newly composed message if building
+   the reply fails.
 4. Never use the Kolo `message` tool, `deliveryContext.to`, or `kolo:<uuid>` for
    the customer. Use those only for an owner-facing copy or notification.
 5. Store the provider's outbound message ID. If the response is uncertain or
