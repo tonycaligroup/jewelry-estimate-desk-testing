@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 3.3.2
+version: 3.3.3
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail or wholesale custom-jewelry estimate workflows; do not use for appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -190,31 +190,57 @@ address, message text, or piece type. Stay silent when no new messages exist.
 
 ## Email reply invariant
 
-**CRITICAL: Every customer-facing Gmail message from this skill—including the
+**MANDATORY: Every customer-facing Gmail message from this skill—including the
 initial acknowledgment, specification request, estimate, scheduling message,
-and follow-up—must use `scripts/gmail_reply.py` with the route produced from
+and follow-up—MUST use `scripts/gmail_reply.py` with the route produced from
 the exact inbound message by `scripts/gmail_route.py`.**
+
+**You cannot send a customer email without these scripts. Period.**
 
 **Failure mode:** If you compose a new email with a subject like "Re: Following
 up on your inquiry" instead of replying to the original thread, you have
 violated this invariant. The customer will see a separate thread, not a
-continuation of their inquiry.
+continuation of their inquiry. This is a critical bug that breaks the customer
+experience.
 
-**Checklist before sending ANY customer email:**
+**Pre-send validation (required before EVERY customer email):**
+
 1. You have the original Gmail message JSON (from the inbox monitor or a fresh
-   Gmail API fetch).
-2. You ran `gmail_route.py` on that message to produce `route.json`.
-3. You ran `gmail_reply.py` with `route.json` and your reply body to produce
-   `gmail-send.json`.
-4. The `gmail-send.json` contains the original `threadId`, `In-Reply-To`, and
-   `References` headers.
+   Gmail API fetch). If you don't have it, STOP and fetch it first.
 
-If you are composing a new subject line, you are doing it wrong. Stop and
+2. You ran `gmail_route.py` on that message to produce `route.json`:
+   ```bash
+   python3 {baseDir}/scripts/gmail_route.py \
+     "$WORK/gmail-message.json" '<outbound-mailbox>' "$WORK/route.json"
+   ```
+
+3. You ran `gmail_reply.py` with `route.json` and your reply body:
+   ```bash
+   python3 {baseDir}/scripts/gmail_reply.py \
+     "$WORK/route.json" "$WORK/customer-reply.txt" "$WORK/gmail-send.json"
+   ```
+
+4. You verified `gmail-send.json` contains:
+   - `threadId` (from the original message)
+   - `In-Reply-To` header (original Message-ID)
+   - `References` header (includes original Message-ID)
+
+5. You send that JSON unchanged through the Maton gateway:
+   ```bash
+   curl -X POST "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send" \
+     -H "Authorization: Bearer $MATON_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d "@$WORK/gmail-send.json"
+   ```
+
+**If you cannot complete all 5 steps, you cannot send the email. Stop and recover.**
+
+**If you are composing a new subject line, you are doing it wrong. Stop and
 recover the original message first. Never compose a standalone email, invent a
 generic subject such as `Your inquiry`, or retrieve a recipient from a
 name-based customer record. If route construction or reply construction fails,
 stop without sending. A customer name may be retained as display-only contact
-metadata, but it must never select an estimate, identity, recipient, or thread.
+metadata, but it must never select an estimate, identity, recipient, or thread.**
 
 ## Phase 1: triage
 
