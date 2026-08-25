@@ -14,6 +14,10 @@ from typing import Any, Callable, Sequence
 
 ESTIMATE_ID_RE = re.compile(r"^jed-[0-9a-f]{16}$")
 SESSION_KEY_RE = re.compile(r"^agent:[A-Za-z0-9_.:@/-]{1,255}$")
+OWNER_NOTIFICATION_MESSAGES = {
+    "approval-ready": "Estimate {estimate_id} is ready for approval. Open the brief in Kolo.",
+    "customer-replied": "Customer replied on estimate {estimate_id}. Open Kolo to review.",
+}
 
 
 def read_json_argument(path: Path) -> str:
@@ -61,13 +65,19 @@ def build_request_approval(
     ]
 
 
-def build_notify_owner(estimate_id: str) -> list[str]:
+def build_notify_owner(estimate_id: str, event: str = "approval-ready") -> list[str]:
     estimate_id = validate_estimate_id(estimate_id)
+    try:
+        message = OWNER_NOTIFICATION_MESSAGES[event].format(
+            estimate_id=estimate_id.upper()
+        )
+    except KeyError as exc:
+        raise ValueError("invalid owner notification event") from exc
     return [
         "kolo",
         "notify-owner",
         "-m",
-        f"Estimate {estimate_id.upper()} is ready for approval. Open the brief in Kolo.",
+        message,
     ]
 
 
@@ -145,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
 
     notify = sub.add_parser("notify-owner")
     notify.add_argument("--estimate-id", required=True)
+    notify.add_argument(
+        "--event", choices=sorted(OWNER_NOTIFICATION_MESSAGES), default="approval-ready"
+    )
 
     upsert = sub.add_parser("record-upsert")
     upsert.add_argument("--record-type", required=True)
@@ -167,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.estimate_id, args.details, args.session_key, args.agent_id
             )
         elif args.command == "notify-owner":
-            command = build_notify_owner(args.estimate_id)
+            command = build_notify_owner(args.estimate_id, args.event)
         elif args.command == "record-upsert":
             command = build_record_upsert(
                 args.record_type, args.external_id, args.payload, args.status

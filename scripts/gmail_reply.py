@@ -13,6 +13,8 @@ from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Any
 
+from gmail_route import email_identity_key
+
 
 MESSAGE_ID_RE = re.compile(r"^<[^<>\s]+>$")
 
@@ -54,6 +56,9 @@ def build_reply(route: dict[str, Any], body: str) -> dict[str, str]:
     )
     mailbox = require_email(route, "mailbox")
     recipient = require_email(route, "recipient")
+    identity_key = require_text(route, "identity_key")
+    if identity_key != email_identity_key(recipient):
+        raise ValueError("route.identity_key does not match route.recipient")
     subject = require_text(route, "original_subject")
     if not body.strip():
         raise ValueError("reply body must not be empty")

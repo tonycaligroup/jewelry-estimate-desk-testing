@@ -14,8 +14,11 @@ nudges.
 1. Read the current estimate with `kolo record-get`.
 2. Stop silently if it is approved, declined, dormant, or has a newer customer
    reply.
-3. Verify the intended customer channel, recipient, and thread from the stored
-   route. Never use the owner's `deliveryContext.to` for a customer message.
+3. For Gmail, rebuild the route from the latest inbound customer message with
+   `scripts/gmail_route.py`. Require its email-derived `identity_key`, recipient,
+   and thread ID to match the stored route, then build the nudge with
+   `scripts/gmail_reply.py`. Never select a customer by name or use the owner's
+   `deliveryContext.to` for a customer message.
 4. At Stage 1, draft the nudge for owner review. At Stage 2 or 3, send only when
    the stored trust stage and standing authorization permit it.
 

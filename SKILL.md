@@ -29,6 +29,10 @@ and delivery commitment behind owner approval.
 7. An estimate originating from email must be a reply to the original inbound
    message, never a new email or thread. If the original Gmail thread ID or RFC
    `Message-ID` is unavailable, stop and recover the original message first.
+8. For Gmail, the normalized sender email address is the customer identity.
+   Never identify, merge, select, or address a customer by display name. Two
+   senders with the same name but different email addresses are different
+   customers and must have separate estimates and routes.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, with no fallback. Monitoring crons must use
@@ -46,6 +50,8 @@ route to the pinned agent.
   workspace using atomic directory creation.
 - `scripts/gmail_reply.py`: construct a Gmail reply payload bound to the
   original thread and RFC message headers.
+- `scripts/gmail_route.py`: derive the recipient and private customer identity
+  key from the exact inbound Gmail message rather than a display name.
 - `templates/shop-profile.json`: runtime profile template.
 - `templates/customer-emails.md`: customer message templates.
 - `templates/spec-gate-email.md`: batched retail intake request.
@@ -103,7 +109,10 @@ only one polling cron for this skill. Search Gmail through the path returned by
 
 For each matching Gmail message:
 
-1. Extract the immutable Gmail `id`; do not use `threadId` as the message ID.
+1. Confirm it is inbound from the customer. Skip messages sent by the shop's
+   outbound mailbox and any message whose ID is already stored as an outbound
+   provider message ID. Extract the immutable Gmail `id`; do not use `threadId`
+   as the message ID.
 2. Claim it before any notification, draft, send, or record mutation:
 
    ```bash
@@ -115,9 +124,37 @@ For each matching Gmail message:
    completed the message; skip it without side effects.
 3. Immediately write a `processing` record keyed by the Gmail message ID using
    `scripts/kolo_safe.py record-upsert` and a JSON payload file.
-4. Process messages sequentially in the same monitor run. Do not create a
+4. Save the full Gmail message resource to private job state and derive its
+   route before any lookup, draft, notification, or send:
+
+   ```bash
+   python3 {baseDir}/scripts/gmail_route.py \
+     "$WORK/gmail-message.json" '<profile-outbound-mailbox>' "$WORK/route.json"
+   ```
+
+   The resulting `identity_key` is a hash of the normalized sender email. Never
+   look up or reuse a route by sender display name. Link the message to an
+   existing estimate only when both `identity_key` and Gmail `thread_id` match
+   that estimate. A name match is irrelevant; an email or thread mismatch means
+   a separate estimate. If a stored thread points to a different identity key,
+   stop as `manual_review` without sending.
+5. If its Gmail thread ID belongs to an existing estimate, notify the owner at
+   every trust stage before drafting or sending any further customer response:
+
+   ```bash
+   python3 {baseDir}/scripts/kolo_safe.py notify-owner \
+     --event customer-replied --estimate-id '<jed-id>'
+   ```
+
+   This notification is mandatory whenever monitoring is enabled and contains
+   only the opaque estimate ID, never customer content. The claimed Gmail
+   message ID is its deduplication key: store the notification outcome on that
+   processing record and do not send the alert again for the same message. If
+   delivery is uncertain, record `owner_notification_status: uncertain` and do
+   not retry the alert independently.
+6. Process messages sequentially in the same monitor run. Do not create a
    second monitoring cron or manually start a concurrent monitor.
-5. After successful triage and any authorized action, mark both the Kolo record
+7. After successful triage and any authorized action, mark both the Kolo record
    and local claim `processed`. If failure occurs after an external send might
    have happened, mark `manual_review` and never retry automatically. Retry once
    only when failure is proven to have occurred before any external side effect.
@@ -127,8 +164,20 @@ workspace, but cannot guarantee exclusion across independent hosts. Treat a
 stale `processing` claim as manual review, not permission to repeat a send.
 
 The cron's message must contain only fixed instructions and opaque/provider IDs.
-Owner notifications use the opaque estimate ID, never a customer name or piece
-type. Stay silent when no new messages exist.
+Owner notifications use the opaque estimate ID, never a customer name, email
+address, message text, or piece type. Stay silent when no new messages exist.
+
+## Email reply invariant
+
+Every customer-facing Gmail message from this skill—including the initial
+acknowledgment, specification request, estimate, scheduling message, and
+follow-up—must use `scripts/gmail_reply.py` with the route produced from the
+exact inbound message by `scripts/gmail_route.py`. Never compose a standalone
+email, invent a generic subject such as `Your inquiry`, or retrieve a recipient
+from a name-based customer record. If route construction or reply construction
+fails, stop without sending. A customer name may be retained as display-only
+contact metadata, but it must never select an estimate, identity, recipient, or
+thread.
 
 ## Phase 1: triage
 
@@ -169,6 +218,7 @@ assumptions.
 When fields are missing, use `templates/spec-gate-email.md`: one friendly,
 price-free, batched request; do not re-ask known facts; offer two real open
 slots with timezone. At Stage 1, draft it. At Stage 2 or 3, it may be sent.
+For Gmail, send it only through the Email reply invariant above.
 After one partial reply, ask once more only for load-bearing gaps; then escalate
 the decision to the owner.
 
@@ -205,9 +255,9 @@ python3 {baseDir}/scripts/approval_guard.py new-id
 Write `current-state.json` with:
 
 - `estimate_id`
-- `route`: original channel, mailbox, recipient, immutable Gmail message ID,
-  Gmail thread ID, original RFC `Message-ID`, original subject, and existing
-  `References` message IDs
+- `route`: original channel, mailbox, recipient email, email-derived
+  `identity_key`, immutable Gmail message ID, Gmail thread ID, original RFC
+  `Message-ID`, original subject, and existing `References` message IDs
 - `specification`: the exact priced written specification
 - `proposed_price`
 - internal pricing, assumptions, feasibility, appointment options, and draft
@@ -258,8 +308,9 @@ After successful verification:
    `templates/approved-estimate-note.md`, estimated—not guaranteed—lead time,
    validity date, and two or three live appointment options with timezone.
 3. Call `kolo integration-routing`. For Gmail through Maton, read the
-   api-gateway skill, write the approved route object to `$WORK/route.json`, and
-   build the send body with:
+   api-gateway skill. Rebuild `$WORK/route.json` from the exact latest inbound
+   Gmail message and confirm it matches the approved route byte-for-byte before
+   building the send body with:
 
    ```bash
    python3 {baseDir}/scripts/gmail_reply.py \
@@ -286,10 +337,11 @@ If a rendering is authorized, read `references/rendering-standards.md` first.
 
 ## Phase 5: records, follow-up, and cleanup
 
-Record the estimate under the opaque estimate ID. The record should retain the
-inbound message ID and timestamp; approval binding hash and approved price;
-specification and assumptions; internal cost sheet; outbound provider message
-ID; trust stage; appointment data; and next action date. Use
+Record the estimate under the opaque estimate ID, never a customer name. The
+record should retain the email-derived identity key, inbound message ID and
+timestamp; approval binding hash and approved price; specification and
+assumptions; internal cost sheet; outbound provider message ID; trust stage;
+appointment data; and next action date. Use
 `scripts/kolo_safe.py record-upsert` with JSON files rather than generated shell
 commands.
 

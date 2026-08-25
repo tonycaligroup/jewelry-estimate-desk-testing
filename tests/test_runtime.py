@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import approval_guard
 import inbox_claim
 import gmail_reply
+import gmail_route
 import kolo_safe
 import validate_profile
 
@@ -117,6 +118,23 @@ class SafeCliTests(unittest.TestCase):
         self.assertIn("JED-0123456789ABCDEF", argv[-1])
         self.assertNotIn("ring", argv[-1].lower())
 
+    def test_customer_reply_notifies_owner_without_customer_data(self) -> None:
+        argv = kolo_safe.build_notify_owner(
+            "jed-0123456789abcdef", "customer-replied"
+        )
+        self.assertEqual(argv[:2], ["kolo", "notify-owner"])
+        self.assertEqual(
+            argv[-1],
+            "Customer replied on estimate JED-0123456789ABCDEF. Open Kolo to review.",
+        )
+        self.assertNotIn("@", argv[-1])
+
+    def test_unknown_owner_notification_event_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            kolo_safe.build_notify_owner(
+                "jed-0123456789abcdef", "customer-name-from-inbox"
+            )
+
     def test_invalid_session_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "brief.json"
@@ -190,6 +208,7 @@ class GmailReplyTests(unittest.TestCase):
             "channel": "gmail",
             "mailbox": "sales@example.com",
             "recipient": "customer@example.net",
+            "identity_key": gmail_route.email_identity_key("customer@example.net"),
             "gmail_message_id": "18d0123456789abc",
             "thread_id": "18d0thread1234567",
             "original_message_id": "<original@example.net>",
@@ -220,6 +239,92 @@ class GmailReplyTests(unittest.TestCase):
         del route["original_message_id"]
         with self.assertRaises(ValueError):
             gmail_reply.build_reply(route, "Approved estimate: $4,200")
+
+    def test_recipient_cannot_change_independently_of_identity(self) -> None:
+        route = self.route()
+        route["recipient"] = "previous-customer@example.net"
+        with self.assertRaises(ValueError):
+            gmail_reply.build_reply(route, "Approved estimate: $4,200")
+
+
+class GmailRouteTests(unittest.TestCase):
+    def message(
+        self,
+        sender: str,
+        message_id: str = "<new@example.net>",
+        gmail_message_id: str = "gmail-message-2",
+        thread_id: str = "gmail-thread-2",
+    ) -> dict:
+        return {
+            "id": gmail_message_id,
+            "threadId": thread_id,
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": sender},
+                    {"name": "Subject", "value": "Quote request"},
+                    {"name": "Message-ID", "value": message_id},
+                    {"name": "References", "value": "<first@example.net>"},
+                ]
+            },
+        }
+
+    def test_sender_email_not_display_name_is_identity(self) -> None:
+        first = gmail_route.build_route(
+            self.message("Alex Smith <alex.one@example.net>"), "sales@example.com"
+        )
+        second = gmail_route.build_route(
+            self.message("Alex Smith <alex.two@example.net>"), "sales@example.com"
+        )
+        self.assertEqual(first["recipient"], "alex.one@example.net")
+        self.assertEqual(second["recipient"], "alex.two@example.net")
+        self.assertNotEqual(first["identity_key"], second["identity_key"])
+        self.assertNotIn("Alex Smith", json.dumps(first))
+
+    def test_second_same_name_quote_uses_second_email_and_thread(self) -> None:
+        first = gmail_route.build_route(
+            self.message(
+                "Alex Smith <alex.one@example.net>",
+                "<first@example.net>",
+                "gmail-message-1",
+                "gmail-thread-1",
+            ),
+            "sales@example.com",
+        )
+        second = gmail_route.build_route(
+            self.message(
+                "Alex Smith <alex.two@example.net>",
+                "<second@example.net>",
+                "gmail-message-2",
+                "gmail-thread-2",
+            ),
+            "sales@example.com",
+        )
+        first_payload = gmail_reply.build_reply(first, "First estimate")
+        second_payload = gmail_reply.build_reply(second, "Second estimate")
+        padding = "=" * (-len(second_payload["raw"]) % 4)
+        second_message = base64.urlsafe_b64decode(
+            second_payload["raw"] + padding
+        ).decode("utf-8")
+
+        self.assertNotEqual(first["identity_key"], second["identity_key"])
+        self.assertEqual(first_payload["threadId"], "gmail-thread-1")
+        self.assertEqual(second_payload["threadId"], "gmail-thread-2")
+        self.assertIn("To: alex.two@example.net", second_message)
+        self.assertNotIn("alex.one@example.net", second_message)
+
+    def test_shop_outbound_message_is_not_customer_route(self) -> None:
+        with self.assertRaises(ValueError):
+            gmail_route.build_route(
+                self.message("Jeweler <sales@example.com>"), "sales@example.com"
+            )
+
+    def test_route_preserves_exact_source_thread_and_message(self) -> None:
+        route = gmail_route.build_route(
+            self.message("Customer <customer@example.net>"), "sales@example.com"
+        )
+        self.assertEqual(route["gmail_message_id"], "gmail-message-2")
+        self.assertEqual(route["thread_id"], "gmail-thread-2")
+        self.assertEqual(route["original_message_id"], "<new@example.net>")
 
 
 if __name__ == "__main__":
