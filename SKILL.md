@@ -1,10 +1,10 @@
 ---
 name: "jewelry-estimate-desk-testing"
-description: "Custom-jewelry inquiry → spec → estimate → owner text approval → send. v1.3: inbox polling cron + Phase 4 call-to-action close."
+description: "Jewelry estimate desk — inbound custom jewelry inquiry → approved quote in minutes, without exposing a number to a customer before owner review."
 tags: [jewelry, estimating, quoting, sales, custom-jewelry, retail, wholesale, scheduling, crm, inbox-monitoring]
 ---
 
-# Jewelry Estimate Desk Testing
+# Jewelry Estimate Desk
 
 Turn an inbound custom-jewelry inquiry into an **approved quote** and a
 **booked appointment**, fast — without ever putting a number or a promise in
@@ -25,6 +25,12 @@ hands. Target under 15; under 5 on a familiar piece type. Logged every time.
 3. **Never expose cost inputs, markup, margins, or vendor identities.** One
    all-in number.
 4. **Never touch money.** No cards, deposits, refunds, or payment links.
+5. **Never interpolate untrusted text into shell commands.** ★ v1.8.0. All
+   customer names, emails, piece descriptions, budgets, and any other text
+   sourced from an inquiry go through JSON files or stdin — never through
+   shell string interpolation. Shell commands use fixed template strings with
+   agent-written identifiers only; all variable data lives in `--details` JSON
+   or `--payload` JSON files.
 
 **Required Kolo model:** run this skill through a dedicated agent pinned to
 `litellm-fireworks/qwen-3-7-plus` (Alibaba Qwen 3.7 Plus), with no fallback
@@ -32,10 +38,33 @@ model. Inbox-monitoring cron jobs must use the same `--model` override. If Kolo
 cannot verify that model for the session, stop and route the work to the pinned
 agent; never silently substitute another model.
 
+## Conventions
+
+- **customer-slug:** `firstname-lastname`, lowercase, hyphens for spaces
+  (e.g. `sarah-mitchell`). Use in record IDs, rendering project names,
+  idempotency keys, and file paths.
+- **job-id:** short piece descriptor, kebab-case (e.g. `oval-engagement-ring`).
+  Full identifier: `<customer-slug>-<job-id>`.
+- **Per-job temp files:** ★ v1.8.0. Every job gets uniquely-named temp files:
+  `/tmp/jewelry-<slug>-<job>-brief.json`,
+  `/tmp/jewelry-<slug>-<job>-record.json`,
+  `/tmp/jewelry-<slug>-<job>-log.json`,
+  `/tmp/jewelry-<slug>-<job>-notify.txt`.
+  Delete all after Phase 5 completes.
+- **Session key:** use `sessions_list` tool, read `sessionKey`.
+- **Calendar & Gmail:** `kolo integration-routing` → when path is `maton`,
+  read **api-gateway** skill at `/opt/kolo-skills/api-gateway/SKILL.md`.
+- **Record access:** use `kolo record-get` to READ. Never use `kolo record-status`
+  — it is write-only. `record.status` (top-level) ≠ `payload.status` (JSON field).
+- **Shell safety ★ v1.8.0:** Never embed customer names, emails, piece
+  descriptions, or budgets directly into shell commands. All untrusted data
+  goes through JSON files passed via `$(cat <file>)`. Use only agent-generated
+  identifiers (slugs, job-ids) in `--action`, `--title`, `--reasoning`.
+
 ```
 SHOP PROFILE READY? ──► no ──► STOP. Offer Phase 0 setup.
       │                        Do not process inquiries until
-      │                        the profile exists and has ready: true.
+      │                        the profile passes validation.
       yes
       │
       ▼
@@ -46,129 +75,127 @@ INBOX POLLING ACTIVE? ──► no ──► Offer to set up (Phase 0 question 7
       ▼
 inbound email → Phase 1 triage
       ↓
-Phase 1.5  SPEC GATE — do I have everything?
+Phase 1.5  SPEC GATE
       ├─ no  → ONE friendly batched ask, price internally anyway, wait
       └─ yes → Phase 2 price it
-                    ↓
-        Phase 3  brief + TEXT THE OWNER  ◄── customer send is blocked here
-                    ↓
-        owner reviews / edits / approves
-                    ↓
-        Phase 4  send approved number + high-end / pending-CAD note
-                  + call-to-action close with availability
+           ↓
+Phase 3  brief + TEXT THE OWNER  ◄── customer send blocked here
+           ↓
+owner reviews / edits / approves
+           ↓
+Phase 4  send approved number + high-end / pending-CAD note
+         + call-to-action close with availability
 ```
 
 ---
 
 ## Phase 0 — Shop Setup Gate
 
-**This is a hard gate. Do not process any inquiry, draft any email, or read
-any customer message until the shop profile exists and has `ready: true`.**
+**Hard gate. Do not process any inquiry until the shop profile passes validation.**
 
-A profile created mid-inquiry forces the owner to answer setup questions while
-a customer waits. That is the wrong time. The skill must be configured before
-the first email lands.
+### Required fields — validated before `ready: true` ★ HARDENED v1.8.0
+
+A profile with only `ready: true` is rejected. Verify before setting:
+
+| Field | Section | Check |
+|---|---|---|
+| Mode | Basics | `retailer`, `wholesale middle man`, or `both` |
+| Markup multiplier | Rate card | Number > 1.0 (e.g. `2.2`). NOT a bare percentage. |
+| Approver email | Basics | Must contain `@` |
+| Outbound mailbox | Basics | Must contain `@` |
+| Trust stage | Autonomy | `1`, `2`, or `3` |
+| Timezone | Scheduling | Valid IANA (e.g. `America/Los_Angeles`) |
+
+If any required field is missing or invalid: stop, tell the owner exactly which
+fields, set `ready: false` until fixed.
+
+### Markup normalization ★ FIXED v1.8.0
+
+**One field:** `markup_multiplier` — multiply COGS by this.
+- `2.2` = 2.2× COGS (120% markup)
+- `1.25` = 1.25× COGS (25% markup)
+- `1.0` = illegal (at-cost, rule 3)
+- If owner types "25%", convert to `1.25` and confirm: "I'm reading your
+  markup as 1.25× COGS — $1,000 cost → $1,250. Right?"
+
+Phase 2 always: `quote = COGS × markup_multiplier`, rounded clean.
 
 ### First-run detection
 
 1. Check `estimate-desk/shop-profile.md` (workspace root).
-2. **Exists with `ready: true`** → proceed to Phase 1.
-3. **Missing, or exists without `ready: true`** → stop. Offer setup:
-
-> "I see the jewelry estimate desk hasn't been set up yet. Let's fix that
-> now — 90 seconds and you'll never answer these questions mid-inquiry. Ready?"
+2. **Exists AND all 6 required fields valid AND `ready: true`** → proceed.
+3. **Missing, invalid, or no `ready: true`** → stop. Offer setup.
 
 ### Setup questions
 
-Ask in order, write answers immediately. Use `templates/shop-profile.md`.
+Use `templates/shop-profile.md`. Ask in order, write answers immediately.
+1. Shop name, email, name, location.
+2. Retailer, wholesale, or both?
+3. Markup multiplier (convert % to multiplier, confirm).
+4. Who approves + preferred medium (`kolo set-notify-preference --show`).
+5. Booking — preset windows or ask-each-time.
+6. Trust stage — confirm Stage 1.
+7. Business hours for inbox monitoring (default Mon–Fri 9am–5pm).
 
-1. **Shop name, your email, your name, location** — for the signature block.
-2. **Retailer, wholesale middle man, or both?**
-3. **Markup** — percentage over cost, or multiple (e.g. 2.5× on COGS).
-4. **Who approves prices** + preferred approval medium (`kolo set-notify-preference --show`).
-5. **Booking** — preset windows or ask-each-time. If preset: day-of-week windows, blackouts, minimum notice, durations by meeting type, timezone.
-6. **Trust stage** — confirm Stage 1 (drafts only, nothing sent without approval).
-7. **Business hours for inbox monitoring** ★ NEW in v1.3.0 — what hours should the agent poll for new inquiries? Default: Mon–Fri 9am–5pm in the shop's timezone, or whatever the owner specifies. "All day" = hourly round the clock. "None" = no automatic polling, owner prompts manually. Also capture: monitoring timezone (usually same as booking timezone).
+### Validation + signature
 
-### Signature confirmation
-
-Build the signature block from answers 1–6 and confirm. Then write the profile with `ready: true`.
-
-### The Upgrade (async)
-
-Send past invoices to build the rate card from real numbers.
+Build signature. Validate 6 required fields. Only write `ready: true` at the
+end after all validation passes.
 
 ---
 
-## Inbox Monitoring ★ NEW in v1.3.0
+## Inbox Monitoring ★ HARDENED v1.8.0
 
-**The agent watches the inbox so the owner doesn't have to.**
+### Message deduplication ★ NEW v1.8.0
 
-Once the profile has `ready: true` and business hours are set (question 7), the
-agent creates a cron job that polls Gmail for new jewelry inquiries. The owner
-gets notified, not surprised.
+Before processing any email, check its Gmail message ID:
+
+1. `kolo record-get --record-type "skill.jewelry_inbox_processed" --external-id "<gmail-message-id>"`
+2. Exists → skip (already processed). NO_REPLY.
+3. Not found (404) → new. Process. After triage:
+   ```bash
+   kolo record-upsert \
+     --record-type "skill.jewelry_inbox_processed" \
+     --external-id "<gmail-message-id>" \
+     --payload '{"thread_id":"<tid>","processed_at":"<ISO>","customer_slug":"<slug>"}' \
+     --status "processed"
+   ```
+
+Use the immutable Gmail API `id` field, NOT `threadId`.
 
 ### Setup
 
 ```bash
-# 1) Get the delivery target for the owner's chat
-#    sessions_list → deliveryContext.to → kolo:<uuid>
-
-# 2) Create the cron
+# sessions_list → deliveryContext.to → kolo:<uuid>
 openclaw cron add \
   --name "jewelry-inbox-watch" \
   --cron "0 9-17 * * 1-5" \
   --tz "<owner timezone>" \
   --model "litellm-fireworks/qwen-3-7-plus" \
+  --fallbacks "" \
   --session isolated \
   --announce \
   --channel kolo \
   --to "kolo:<uuid>" \
   --best-effort-deliver \
-  --message "Check Gmail for unread jewelry-related inquiries (subject keywords: estimate, quote, ring, pendant, bracelet, necklace, earrings, custom, engagement, wedding, band, chain, repair, CAD, rendering). If found: notify the owner with a one-line summary per inquiry, then run Phase 1 triage on each. If none found, NO_REPLY."
+  --message "Read the api-gateway skill, then use the Maton gateway to search Gmail for unread jewelry-related inquiries. Search both subject AND body for keywords: estimate, quote, ring, pendant, bracelet, necklace, earrings, custom, engagement, wedding, band, chain, repair, CAD, rendering. For EACH matching message: (1) extract Gmail message ID, (2) run 'kolo record-get --record-type skill.jewelry_inbox_processed --external-id <message-id>' to check if processed, (3) if NOT processed: notify owner with 'New estimate request — processing now.' (surprise-safe), run Phase 1 triage, then record the message ID. If no new inquiries, NO_REPLY."
 ```
 
-### Rules
-
-- **Frequency:** hourly during business hours (configurable; use `--cron` with the owner's `--tz`). The owner can say "every 30 minutes" or "Mon–Sat 8–8" — adjust the cron expression accordingly.
-- **Scope:** searches subject + sender for jewelry keywords. Does not poll non-jewelry email or read unrelated threads.
-- **On hit:** one-line ping to owner per new inquiry ("New estimate request from Sarah M. — engagement ring. Processing now."), then Phase 1 triage begins immediately.
-- **On existing threads:** detects replies on open estimates. Customer replied → re-run the spec gate, update the brief, ping the owner.
-- **No hits:** silent. No NO_REPLY noise.
-- **If the owner says "pause monitoring"** → disable the cron; re-enable on request.
-- **If business hours weren't set in Phase 0** → the agent processes manually when prompted. Offer to set up monitoring on the next interaction.
-
-### What the owner sees
-
-Instead of *"Hey Kolo, check for estimate emails"* every time, the owner gets:
-> "New estimate request from Sarah M. — oval diamond engagement ring. Spec gate running now. Brief in your chat in ~5 minutes."
-
-The skill runs proactively; the owner only sees the brief.
-
----
-
-## Before the First Inquiry — Proactive Triggers
-
-**The agent offers setup before any inquiry is processed.** Three triggers:
-
-1. **Jewelry keywords** in conversation + no profile → offer setup first.
-2. **Skill just installed** → missing profile is the trigger. First jewelry-related message, offer setup.
-3. **Owner asks about the skill's capabilities** → answer, then offer setup.
-4. **Business hours not set** ★ v1.3.0 → after profile is written with `ready: true`, if question 7 wasn't answered, offer inbox monitoring setup.
-
-**What NOT to do:** wait for an inquiry to discover the missing profile.
+**Rules:** hourly during business hours (use `--cron` with `--tz`); subject AND
+body; deduplicate on message ID; surprise-safe pings; silent on no hits;
+`--fallbacks ""` always.
 
 ---
 
 ## Trust Ladder
 
-| Stage | Agent may do on its own | Still needs the owner |
+| Stage | Agent may do | Still needs owner |
 |---|---|---|
-| **1 — Watch me** *(default)* | Nothing outbound. Draft everything, send nothing. | Every email, price, and booking |
-| **2 — Ask questions** | Send price-free info requests, **including the spec-gate ask** | Every price and booking |
-| **3 — Book me** | + Book/reschedule inside declared windows | Every price |
+| 1 — Watch me *(default)* | Draft only, send nothing | Every email, price, booking |
+| 2 — Ask questions | Price-free info requests | Every price and booking |
+| 3 — Book me | + Book/reschedule in windows | Every price |
 
-**Never advance a stage on your own.** Missing or unreadable stage → assume Stage 1.
+Never advance stage on your own. Missing/unreadable → Stage 1.
 
 ---
 
@@ -176,56 +203,40 @@ The skill runs proactively; the owner only sees the brief.
 
 | Request | Route |
 |---|---|
-| New custom piece, replica, redesign | Continue here |
-| Repair / resize / restring | Repair intake — no rendering |
-| Appraisal or insurance valuation | A valuation is not an estimate |
-| Job status check | Look it up, answer, done |
-| Price on existing inventory | Sales question |
-| Wants to come in / hop on a call | Phase 3c — book it, then continue |
-| Angry, legal, insurance, chargeback, media | Escalate. Draft nothing |
+| New custom piece, replica, redesign | Continue |
+| Repair / resize / restring | Repair intake |
+| Appraisal / insurance | Not an estimate |
+| Job status check | Look up, done |
+| Existing inventory price | Sales question |
+| Wants to come in / call | Phase 3c |
+| Angry, legal, insurance, chargeback, media | Escalate |
 
-Read the entire message body. Pull: piece type and quantity · metal/karat/color · stones (lab or natural, type, shape, carat, quality, count) · size · setting and style · engraving and finish · event date · budget · reference images · customer-supplied stones or heirloom metal · certificate · scheduling intent.
+Read entire body. Pull: piece type · metal/karat/color · stones (lab/natural,
+type, shape, carat, quality, count) · size · setting · engraving · finish ·
+event date · budget · reference images · customer-supplied stone/metal ·
+certificate · scheduling intent.
 
-**A photo never satisfies a gate field.** "Looks like ~1.5ct" is an assumption.
-
-**Surprise check:** reply only on the channel used, keep subject detail-free, never contact shared addresses.
-
----
-
-## Phase 1.5 — The Spec Completeness Gate
-
-Fill the checklist from the message, attachments, CRM, and the customer's own words — **never from a guess or a photo**.
-
-| Field | Applies to |
-|---|---|
-| Piece type & quantity | all |
-| Stone type | with stones |
-| Lab or natural | with stones |
-| Carat / ctw (center vs total) | with stones |
-| Color (grade band) | with stones |
-| Clarity | with stones |
-| Cut / shape | with stones |
-| Metal & karat | all |
-| Metal color | all |
-| Finger size | rings (required) |
-| Length / dimensions | chains, bracelets, pendants |
-| Setting & style | all |
-| Engraving / finish | all |
-| Event date | all |
-| Budget | retail |
-| Customer-supplied stone/metal | all |
-
-**Minimum floor (retail):** stone type, lab vs natural, color, clarity, cut, carat, metal + karat + color, and finger size on a ring. Those eight are not negotiable. Wholesale is exempt — state assumptions.
-
-**How to ask:** one batched email, 3–4 friendly clusters, never re-ask what's known, offer defaults, give an out on technical fields, surprise-safe ring size line, no prices, close with two real open slots.
-
-**Partial reply:** ask once more for only load-bearing missing fields, then owner decides.
+**A photo never satisfies a gate field.** Surprise-safe channel only.
 
 ---
 
-## Phase 2 — Price It Now
+## Phase 1.5 — Spec Completeness Gate
 
-Don't wait for the customer to price internally. Gate governs **sending**, not calculating.
+Fill from message, attachments, CRM, customer words — never guess or photo.
+
+**Minimum floor (retail) — 8 items, non-negotiable:**
+1. Stone type; 2. Lab/natural; 3. Color; 4. Clarity; 5. Cut; 6. Carat;
+7. Metal + karat + color (all three, one slot); 8. Finger size on a ring.
+
+Wholesale exempt. Ask: one batched email, 3–4 friendly clusters, never re-ask
+known, offer defaults, surprise-safe ring size line, no prices, close with two
+real open slots.
+
+---
+
+## Phase 2 — Price It
+
+Gate governs sending, not calculating. Price internally regardless.
 
 | Line | Basis |
 |---|---|
@@ -233,209 +244,193 @@ Don't wait for the customer to price internally. Gate governs **sending**, not c
 | Center stone | carat × $/ct |
 | Accent stones | total carat × $/ct |
 | CAD · casting | per profile |
-| Bench labor | estimated hours × $/hr (mandatory, never buried) |
-| Setting · finishing · engraving | per profile |
+| Bench labor | hours × $/hr (mandatory) |
+| Setting · finishing | per profile |
 | COGS | sum |
-| Quote | COGS × markup, rounded clean |
+| Quote | COGS × markup_multiplier ★ v1.8.0 |
 
-**Estimate on the high end, deliberately.** Price the top of the plausible range.
+**Markup always a multiplier:** `2.2` → $1,000→$2,200; `1.25`→$1,250; `1.0` illegal.
 
-**First job with no rate card:** quantity skeleton (quantities filled, dollars blank) + the Quick Start questions.
-
-**Price both columns where a real choice exists** (lab vs natural) and recommend one.
-
-Use the shop's dated rate card and invoice-derived comparable jobs before
-market defaults. Finished weight is often the largest error source; if it is
-genuinely unknown, show the owner a bracket instead of false precision. Keep
-production cost, retail price, and replacement value separate—this workflow
-never supplies an appraisal. Print a validity date and shorten it when metal is
-a large or volatile share of the quote.
+Estimate high end deliberately. First job: quantity skeleton from Typical
+weights + example hours. Price both columns (lab vs natural). Bracket when
+finished weight unknown.
 
 ---
 
 ## Phase 3 — One Brief
 
-Everything decidable at a glance: gate status · number + recommendation · customer + channel + piece · cost sheet · assumptions · draft customer email · event date feasibility · appointment slots · unknowns and whether they move the price.
+### Step 1: session key
+`sessions_list` → `sessionKey`.
+
+### Step 2: brief JSON
+Write to `/tmp/jewelry-<slug>-<job>-brief.json`. Required: `customer`, `piece`,
+`spec_gate`, `stone`, `metal`, `pricing` (with `markup_multiplier`), `labor`,
+`assumptions`, `finished_weight_g`, `feasibility`, `appointment`,
+`recommendation`, `draft_email`.
+
+### Step 3: Submit ★ HARDENED v1.8.0
 
 ```bash
 kolo request-approval \
   --agent-id main \
-  --action "Custom estimate — <Customer> — <piece> — $<quote>" \
-  --reasoning "<spec gate status, weights, stone spec, labor hours, option recommended, assumptions>" \
+  --action "Custom estimate — <slug>/<job-id>" \
+  --reasoning "Spec gate <x>/8, <metal> <piece-type>, <stone-type> <carat>, <hours>hrs" \
   --risk-level medium \
-  --details "$(cat /tmp/brief-details.json)" \
-  --session-key "<current session key>"
+  --details "$(cat /tmp/jewelry-<slug>-<job>-brief.json)" \
+  --session-key "<session key>"
 ```
 
-Write --details JSON to a file, pass `$(cat …)`. Inline JSON breaks on shell quoting. Also message the chat — the CLI call is not a notification.
+- `--action`: slug/job-id only. Never customer names.
+- `--reasoning`: spec-gate fields and numeric values only. Never raw customer text.
+- `--details`: `$(cat <per-job-file>)`, never inline JSON.
 
-Keep the computed quote and the owner-approved price separate. The number that
-goes to the customer is always the one the owner approved, even when it differs
-from the formula.
+If fails: missing session key → retry; invalid JSON → rewrite; other → retry
+once, escalate.
 
-### Phase 3a — Text the owner
-
-The moment the spec gate clears and the estimate exists. Also when customer goes quiet or can't answer a gate field.
+### Phase 3a — Text the owner ★ HARDENED v1.8.0
 
 ```bash
-kolo set-notify-preference --show
-kolo notify-owner -m "<short, decidable from a lock screen>"
+kolo set-notify-preference --show   # check medium first
 ```
 
-Confirm the owner's pinned medium. If SMS is unavailable and Kolo falls back to
-chat, say so in the brief rather than claiming a text was sent. Surprise rule
-applies to texts too. Shared phone → omit piece type. Then wait—never send off
-your own math.
+Write notification to `/tmp/jewelry-<slug>-<job>-notify.txt`:
+> "Estimate ready — spec <x>/8, <slug>/<job-id>. Brief #<N> in your chat."
 
----
+```bash
+kolo notify-owner -m "$(cat /tmp/jewelry-<slug>-<job>-notify.txt)"
+```
 
-## Phase 3b — The customer email
+Surprise-safe always. No names, no piece types. Shared phone → omit everything.
 
-One batched email. Always ask lab vs natural. Budget is design guidance. Confirm photo read in one sentence. No prices without approval. Close with two real open slots. Stage 2+ auto-sends the price-free gate email.
+### Phase 3b — Customer email
+One batched email. Ask lab vs natural. No prices without approval. Close with
+two real slots. Stage 2+ auto-sends price-free gate email.
 
----
-
-## Phase 3c — Scheduling
-
-Fires on meeting intent at any point. Never waits on the estimate.
-
-**Access:** `kolo integration-routing` → use exactly the returned path.
-
-**Two modes:** preset windows (Stage 3+, standing authorization) or ask-each-time.
-
-**Offering:** live free/busy → intersect with windows → 2–3 specific times with timezone and duration.
-
-**Booking:** re-check free/busy immediately before writing → create event → confirm to customer with date/time/timezone/duration/place → one-line heads-up to owner.
-
-Reschedule by updating the existing event, not creating a duplicate.
-Cancellation removes the event but keeps the estimate alive. A no-show gets
-one friendly re-offer. A declared window is permission, not availability; the
-live calendar always wins.
-
-Timezone is critical. Pod clock is UTC—resolve everything against the owner's
-IANA zone. If it is missing, use the stored owner timezone only for internal
-date math and confirm it before stating it to a customer. Never guess.
+### Phase 3c — Scheduling
+`kolo integration-routing` → when `maton`, read api-gateway skill. Two-step:
+(1) query free/busy → intersect windows → pick candidates; (2) re-check
+specific slots immediately before write; (3) write; (4) confirm. Owner IANA
+zone, never pod UTC.
 
 ---
 
 ## Phase 4 — After Approval
 
-1. **Send the approved quote** — one all-in number, with the high-end / pending-CAD note.
+1. **Send approved quote** — one all-in number, high-end/CAD note. Use
+   `message` tool with `target: kolo:<chat-uuid>` from `deliveryContext.to`.
+2. **Call-to-action close** — 2–3 specific times from live free/busy.
+3. **Rendering** — `image_generate`, `action:"generate"`, `count:2`,
+   `size:"1536x1024"`, `model:"litellm/gpt-image-2"`. Read
+   `references/rendering-standards.md` first. Include per-job spec block:
+   PROJECT/TYPE/METAL/CENTER/ACCENT STONES/SETTING/SHANK/PROFILE/FINISH/VIEW/
+   REFERENCE IMAGE 1-3/DO NOT CHANGE/REQUESTED CHANGE. Reference images via
+   `image` (primary) + `images` (secondary). Initial: sections 1–22. Iterative:
+   sections 12, 13, 21 only.
 
-2. **Close with a call-to-action** ★ NEW in v1.3.0. Every approved estimate email ends with a specific invitation to talk, paired with real availability:
-
-> "I'm happy to jump on a call to discuss more and dial in a tighter estimate — I'm available [X], [Y], or [Z]. Let me know what works best."
-
-Fill X, Y, Z from live free/busy (or preset windows). Never "let me know what works" — always 2–3 specific times with timezone. The point: the quote is a conversation starter, not a take-it-or-leave-it number.
-
-3. **Generate the rendering** — `image_generate`, count 2, aspect 4:3. Illustration, not a shop drawing.
-
-### The high-end / pending-CAD note
-
-Every approved estimate carries this near the number:
-
-> "Just so you know how to read this: we estimate on the high end on purpose. This figure is pending CAD and rendering approval, and once your design is finalized the final price is often a little lower — if it comes in under, we pass that straight along to you. Nothing is locked in until you've seen and approved the CAD."
-
-Adapt the wording, never the substance: high-end estimate, pending CAD, savings passed along, nothing committed until CAD approval.
-
-**Non-negotiables:** one number, no line items or vendor names, restate the priced spec in one line, lead time is an estimate not a promise, attach via `message` tool.
+### High-end note
+Near the number: estimate on high end, pending CAD, savings passed along,
+nothing committed until CAD approval. Canonical text in
+`templates/approved-estimate-note.md`. Non-negotiables: one number, no line
+items, no vendor names, spec in one line, lead time is estimate, attach via
+`message` tool.
 
 ---
 
 ## Phase 5 — Close the Loop
 
+### 5a. Write record
+
 ```bash
 kolo record-upsert \
   --record-type "skill.jewelry_estimate" \
-  --external-id "<customer-slug>-<job-number-or-date>" \
-  --payload "$(cat /tmp/estimate-record.json)" \
+  --external-id "<slug>-<job-id>-<YYYY-MM-DD>" \
+  --payload "$(cat /tmp/jewelry-<slug>-<job>-record.json)" \
   --status "estimate_sent"
 ```
 
-Statuses: `awaiting_specs` → `pending_approval` → `estimate_sent` → `appointment_booked` → `approved` / `declined` / `dormant`.
+Statuses: `awaiting_specs` → `pending_approval` → `estimate_sent` →
+`appointment_booked` → `approved`/`declined`/`dormant`.
 
-The record retains the inbound timestamp; spec and missing fields; assumptions;
-cost lines, COGS, markup, computed quote, and owner-approved price; notification
-time and medium; lead-time feasibility; rendering paths; appointment event ID,
-timezone, duration, type, location, and booking mode; trust stage; and next
-action date. Check for an existing record before writing so retries update it
-instead of creating a duplicate.
+### 5b. Log ★ HARDENED v1.8.0
+
+Write to `/tmp/jewelry-<slug>-<job>-log.json`, extract with `jq`:
 
 ```bash
+cat > /tmp/jewelry-<slug>-<job>-log.json << 'JSONEOF'
+{"title":"Custom estimate sent — <slug>/<job-id>","description":"$<price> · <lead-time> · spec <x>/8","event_type":"estimate_completed","idempotency_key":"<slug>-estimate-<YYYY-MM-DD>"}
+JSONEOF
+
 kolo log-action --agent-id main \
-  --title "Custom estimate sent — <Customer>, <piece>" \
-  --description "$<price> · <lead time> · <x> min to pending approval · spec complete <yes/no> · <appointment or none>" \
-  --event-type "estimate_completed" \
-  --idempotency-key "<customer-slug>-estimate-<YYYY-MM-DD>"
+  --title "$(jq -r .title /tmp/jewelry-<slug>-<job>-log.json)" \
+  --description "$(jq -r .description /tmp/jewelry-<slug>-<job>-log.json)" \
+  --event-type "$(jq -r .event_type /tmp/jewelry-<slug>-<job>-log.json)" \
+  --idempotency-key "$(jq -r .idempotency_key /tmp/jewelry-<slug>-<job>-log.json)"
 ```
 
-**Memory:** one line in `memory/YYYY-MM-DD.md`. **Nudge cadence:** once at 3 days, once at 7, then dormant. `awaiting_specs` nudges name only 2–3 missing fields.
+Memory: one line in `memory/YYYY-MM-DD.md`. Cleanup ★ v1.8.0:
+`rm -f /tmp/jewelry-<slug>-<job>-*.json /tmp/jewelry-<slug>-<job>-notify.txt`
+
+### 5c. Nudge crons ★ v1.7.0
+
+Day-3 and day-7 one-shot crons: explicit `kolo record-get` commands,
+timezone offsets in `--at`, `--fallbacks ""`, surprise-safe templates.
+See lines 548–590 of the previous revision (unchanged from v1.7.0).
 
 ---
 
 ## Guardrails
 
-**Money and commitments:** never take payment, never negotiate/discount, never promise unconfirmed delivery dates or rush feasibility, never say a piece is ready/started/shipped without confirmation.
-
-**Specs and estimates:** never send retail estimate on incomplete spec (eight-field floor), never fill gate field by assumption or photo, never send unapproved estimate, never omit the high-end/CAD note, never omit the call-to-action close ★ v1.3.0.
-
-**Valuation and claims:** never appraise, never quote heirloom/gold/diamond value, never claim origin/clarity/grade from a photo, never invent report numbers/vendors/weights.
-
-**Custody and people:** never accept custody of jewelry, never discuss one customer with another, never spoil a surprise, identify as shop's assistant if required.
-
-**Process:** state assumptions always, customer-supplied specs override photo reads, never resolve dates against pod UTC, don't overclaim.
-
-**Standing exceptions:** booking inside declared windows at Stage 3+. Price-free spec-gate asks at Stage 2+. Inbox polling at any stage once configured ★ v1.3.0.
+**Money:** never take payment, negotiate, discount, or promise unconfirmed
+delivery. **Specs:** retail gate floor, never guess from photo, never send
+unapproved, always high-end/CAD note + CTA close. **Valuation:** never appraise,
+quote heirloom value, claim grade from photo. **Custody:** never accept jewelry,
+never discuss customers with each other, never spoil surprise. **Records:**
+`kolo record-get` not `record-status`; `record.status` ≠ `payload.status`.
+**Shell ★ v1.8.0:** never interpolate customer text into shell commands.
+All inquiry data through JSON files; per-job temp files prevent races.
 
 ---
 
 ## Escalate — stop and get the owner
 
-Angry customer · pushback on a sent price · legal threat · insurance claim/chargeback · lost/damaged claim · estate/heirloom dispute · unclear request · press/media · document alteration/backdating · fraud/stolen-goods.
+Angry customer · price pushback · legal threat · insurance/chargeback ·
+lost/damaged claim · estate/heirloom dispute · unclear request · press/media ·
+document alteration · fraud/stolen-goods.
 
-**NOT escalations:** first-contact price question (pivot to budget), incomplete spec (ask, don't halt), missing shop profile (offer setup).
+**NOT escalations:** first-contact price question, incomplete spec, missing profile.
 
 ---
 
 ## Worked Examples
 
-**A. Retailer, Stage 3, preset windows.** Web lead: custom engagement ring, oval, yellow gold, October wedding. No budget, no size, no stone detail. Spec gate ❌. Free/busy → Thursday 2 PM and Friday 11 AM open. Batched gate email goes out (Stage 2+ auto-send). Priced internally — both lab and natural, 6.5 hrs bench. Brief in 6 minutes, provisional. Thursday consult clears every field. Owner approves edited number. Quote sent with high-end note + call-to-action close. Rendering follows.
+**A. Retailer, Stage 3.** Engagement ring, oval, yellow gold. Gate ❌. Priced
+lab/natural, 6.5 hrs bench. Brief in 6 min. Consult clears gate. Owner approves.
+Quote with high-end note + CTA. Rendering: litellm/gpt-image-2, 1536×1024.
+Nudges with PT offset. Notifications surprise-safe. Per-job temp files cleaned.
 
-**B. Wholesale, no contact.** Photo from trade group — 14K barbed-wire chain link, 16–18". Spec gate advisory. Priced from comparable index with hand-assembly labor. Bracket quoted. Brief in under 10. Owner still gets the approval text. One number, estimate-high disclaimer, no line items, no manufacturer named.
+**B. Wholesale.** Photo from trade group — chain link. Comparables. Bracket.
+Brief <10 min.
 
-**C. First inquiry arrives via inbox monitoring ★ v1.3.0.** Cron fires at 10am PT. Gmail search finds unread email from Sarah M. — "custom engagement ring estimate." Agent pings owner: "New estimate request from Sarah M. — oval diamond engagement ring. Processing now." Profile is ready, Stage 2. Agent triages, runs spec gate (❌ — missing carat, color, clarity, size, budget), prices internally with stated assumptions, drafts the batched spec-gate email, submits the brief. Owner sees the brief in chat ~5 minutes after the original ping — never had to say "check email."
+**C. Inbox monitoring ★ v1.8.0.** Cron fires 10am PT. Finds unread. Message ID
+not in processed store → new. Surprise-safe ping. Triage → brief → record
+message ID. Brief arrives ~5 min after ping.
+
+**D. First job.** Quantity skeleton from Typical weights + example hours. Ask
+owner for $/g, $/ct, $/hr.
 
 ---
 
-## Failure Modes
+## Failure Modes (v1.8.0 additions)
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Owner answered setup questions while customer waited | Profile created reactively mid-inquiry | Offer Phase 0 setup proactively |
-| Agent processed inquiry without shop signature | Phase 0 skipped | Phase 0 is a hard gate; check `ready: true` |
-| Quoted, then price moved when specs arrived | Sent estimate on incomplete spec | Eight-field floor before any retail send |
-| Number embarrassed the shop | Guessed lab vs natural or read carat off photo | A photo never satisfies a gate field |
-| Customer ghosted after intake | Twenty ungrouped questions | 3–4 friendly clusters with defaults |
-| Owner found out after customer did | Skipped the approval text | Text owner the moment gate clears |
-| Owner missed approval ping | Preference not pinned | `kolo set-notify-preference --medium sms` |
-| Customer expected final price | Note omitted or buried | High-end/CAD note near the number |
-| Agent stalled waiting on specs | Read gate as "stop working" | Gate blocks sending; price internally, brief anyway |
-| Agent refused to act on day one | Read Stage 1 as "do nothing" | Stage 1 = draft only; still triage, price, brief |
-| First job stalled with no rate card | Waited for prices that don't exist | Quantity skeleton, dollars blank |
-| Surprise ruined | Detail in subject or approval text | Detail-free on anything gift-shaped |
-| Escalated harmless "how much?" | Read price question as pushback | Pushback = reaction to a sent number |
-| Lost to faster competitor | Went to vendor first | Comparables, labeled an estimate |
-| Brief came back with questions | Not decidable at a glance | Gate status, cost sheet, assumptions, draft, slots |
-| Estimate far under cost | No labor line | Bench hours × rate, visible |
-| Off on plain metal piece | Guessed finished weight | Invoice typicals; bracket when unknown |
-| "Let me know what works" died | Open-ended scheduling | 2–3 specific times with timezone |
-| Double-booked the owner | Stale slot | Re-check free/busy immediately before write |
-| Appointment at 2 AM | Resolved against pod UTC | Owner's IANA zone, stated in every offer |
-| Owner ambushed by booking | Booked silently | One-line heads-up every time |
-| Discount given away | Answered "can you do better?" | Never negotiate — escalate |
-| Wrong price sent | Sent computed, not approved | Approved number wins |
-| Invalid JSON in --details | Inline JSON mangled | Write to file, pass `$(cat file)` |
-| Attachment missing in chat | Used inline `MEDIA:` | `message` tool, `kolo:<chat-uuid>` |
-| Quote went stale | No expiry on metal-heavy piece | Print validity; shorten when metal >40% of COGS |
-| Owner had to prompt "check email" every time ★ v1.3.0 | No inbox monitoring | Set up hourly cron during business hours |
-| Quote went out as dead-end number ★ v1.3.0 | No call-to-action close | Close every approved estimate with specific availability |
+| Markup as percentage, below-cost ★ v1.8.0 | "25%" entered | Normalize to 1.25; confirm; Phase 2 always `COGS × multiplier` |
+| Repeated alerts for same inquiry ★ v1.8.0 | No message ID tracking | Deduplicate on immutable Gmail message ID; `skill.jewelry_inbox_processed` |
+| `ready: true` with no config ★ v1.8.0 | No field validation | 6 required fields validated before setting ready |
+| Customer text executed as shell code ★ v1.8.0 | Interpolation in shell args | All inquiry text through JSON files; shell flags use agent IDs only |
+| Surprise spoiled on lock screen ★ v1.8.0 | Name + piece in notification | All notifications surprise-safe by default |
+| Cross-inquiry data leak ★ v1.8.0 | Fixed /tmp filenames | Per-job files: `/tmp/jewelry-<slug>-<job>-<purpose>.json` |
+
+All v1.3.0–v1.7.0 failure modes remain active (nudge record-get, --fallbacks,
+two-step booking, timezone offsets, record.status disambiguation, image model,
+inbox setup, CTA close, rendering constraints, spec gate floor, trust ladder).
