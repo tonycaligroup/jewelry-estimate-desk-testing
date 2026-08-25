@@ -1,0 +1,62 @@
+�
+��j�����dZddlmZddlZddlZddlZddlZddlZddlZddl	Z	ddl
+m
+Z
+mZddlmZddlmZd!d	�Zd"d�Zd#d�Zd$d�Zd%d&d�Zd'd�Zd(d�Zd)d*d�Zed kreje����dSdS)+aHBest-effort single-workspace claims for Gmail messages.
+
+Kolo records do not provide compare-and-swap. This helper uses atomic directory
+creation in the shared workspace to prevent overlapping runs on the same host.
+It deliberately does not auto-steal stale claims: an uncertain prior send must
+be reviewed instead of repeated.
+�)�annotationsN)�datetime�timezone)�Path)�Any�returnrc���tj�d��}|r!t|�����ntj��dzdz}|���dzdzS)N�OPENCLAW_WORKSPACEz	.openclawzworkspace-mainzestimate-deskzinbox-claims)�os�environ�getr�
+expanduser�home�resolve)�configured_workspace�	workspaces  �scripts/inbox_claim.py�default_claim_rootrsr���:�>�>�*>�?�?�� �	:��!�"�"�-�-�/�/�/��Y�[�[�;�&�)9�9��
+������0�>�A�A��
+message_id�strc���|rt|��dkrtd���tj|�d�������S)Niz(message ID must contain 1-512 characters�utf-8)�len�
+ValueError�hashlib�sha256�encode�	hexdigest)rs r�	claim_keyr "sT���E��Z���3�.�.��C�D�D�D��>�*�+�+�G�4�4�5�5�?�?�A�A�Ar�rootc�&�|t|��zS�N)r )r!rs  r�
+claim_pathr$(s���)�J�'�'�'�'r�path�state�dict[str, Any]�Nonec���|dtjd���d�z}|�tj|d���dzd���tj|d	��|�|d
+z��dS)Nzstate.�z.tmpT��	sort_keys�
+r��encodingi��
+state.json)�secrets�	token_hex�
+write_text�json�dumpsr�chmod�replace)r%r&�	temporarys   r�write_stater9,s����:�� 1�!� 4� 4�:�:�:�:�I������E�T�:�:�:�T�A�G��T�T�T��H�Y��������d�\�)�*�*�*�*�*r��attempts�intc�0�|dz}t|��D]H}	|�d���}n.#t$r!|dz|kr�tjd��Y�EwxYwtj|��}t|t��std���|S)Nr0rr.�g{�G�z�?z!claim state must be a JSON object)
+�range�	read_text�FileNotFoundError�time�sleepr4�loads�
+isinstance�dictr)r%r;�
+state_path�attempt�rawr&s      r�
+read_staterJ3s�����$�J���?�?����	��&�&��&�8�8�C��E�� �	�	�	���{�h�&�&���J�t������	�����J�s�O�O�E��e�T�"�"�>��<�=�=�=��Ls�0�(A�A�tuple[bool, dict[str, Any]]c���|�ddd���tj|d��t||��}t	jd��}t|��|dtjtj
+�����d�}	|�d���n!#t$rdt|��fcYSwxYwt||��d|fS)	NTi�)�parents�exist_ok�mode��
+processing)�message_id_sha256�claim_token�status�
+claimed_at)rOF)�mkdirrr6r$r1r2r r�nowr�utc�	isoformat�FileExistsErrorrJr9)r!rr%�tokenr&s     r�acquirer\Cs����J�J�t�d��J�7�7�7��H�T�5�����d�J�'�'�D���b�!�!�E�&�z�2�2����l�8�<�0�0�:�:�<�<�	��E�'��
+�
+��
+�������'�'�'��j��&�&�&�&�&�&�'������e������;�s�B,�,C
+�	C
+r[rTc���t||��}t|��}|�d��|krtd���|�d��dkr%td|�d�������||d<t	jtj�����|d<t||��|S)NrSzclaim token does not matchrTrQzclaim is already �finished_at)
+r$rJrrrrWrrXrYr9)r!rr[rTr%r&s      r�finishr_Vs����d�J�'�'�D��t���E��y�y����5�(�(��5�6�6�6��y�y����l�*�*��B�U�Y�Y�x�-@�-@�B�B�C�C�C��E�(�O�#�<���5�5�?�?�A�A�E�-����e�����Lr�argv�list[str] | Nonec	���tj��}|�dtt	�����|�dd���}|�d��}|�dd���d	D]E}|�|��}|�dd���|�d
+d����F|�|��}	|jdkrJt|j
+|j��\}}ttjd|i|�d�����|rdndS|jdkrdnd}	t|j
+|j|j|	��}ttj|d�����dS#t"t$tjf$rG}
+ttjdt)|
+��i��t*j���Yd}
+~
+dSd}
+~
+wwxYw)Nz--root)�type�default�commandT)�dest�required�claimz--message-id)rg)�complete�failz--token�acquiredr+rr*ri�	processed�manual_review�error)�file�)�argparse�ArgumentParser�add_argumentrr�add_subparsers�
+add_parser�
+parse_argsrer\r!r�printr4r5r_r[�OSErrorr�JSONDecodeErrorr�sys�stderr)r`�parser�subrh�namere�argsrkr&rT�excs           r�mainr�cs����$�&�&�F�
+����t�5G�5I�5I��J�J�J�
+�
+�
+�Y��
+�
+>�
+>�C��N�N�7�#�#�E�	���~���5�5�5�$�7�7���.�.��&�&�����^�d��;�;�;����Y���6�6�6�6����T�"�"�D���<�7�"�"�%�d�i���A�A�O�H�e��$�*�j�(�<�e�<��M�M�M�N�N�N� �'�1�1�a�'� $��
+� :� :������t�y�$�/�4�:�v�F�F���d�j��$�/�/�/�0�0�0��q���Z��!5�6�����d�j�'�3�s�8�8�,�-�-�C�J�?�?�?�?��q�q�q�q�q��������s �AF�3AF�G+�$<G&�&G+�__main__)rr)rrrr)r!rrrrr)r%rr&r'rr()r:)r%rr;r<rr')r!rrrrrK)
+r!rrrr[rrTrrr'r#)r`rarr<)�__doc__�
+__future__rrqrr4rr1rzrBrr�pathlibr�typingrrr r$r9rJr\r_r��__name__�exit�rr�<module>r�s�����#�"�"�"�"�"�������������	�	�	�	�����
+�
+�
+�
+�����'�'�'�'�'�'�'�'�������������B�B�B�B�B�B�B�B�(�(�(�(�+�+�+�+������ ����&
+�
+�
+�
+������4�z����C�H�T�T�V�V�������r

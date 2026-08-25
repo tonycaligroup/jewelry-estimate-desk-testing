@@ -1,0 +1,48 @@
+�
+��jB���dZddlmZddlZddlZddlZddlZddlZddlZddl	m
+Z
+ddlmZdZejd��Zd!d�Zd"d�Zd#d�Zd$d�Zd"d�Zd%d�Zd&d�Zd'd�Zd(d)d�Zed kreje����dSdS)*zDCreate and verify immutable approval bindings for jewelry estimates.�)�annotationsN)�Path)�Any)�estimate_id�route�specificationz^jed-[0-9a-f]{16}$�valuer�return�strc�2�tj|ddd���S)NFT)�,�:)�ensure_ascii�	sort_keys�
+separators)�json�dumps)r	s �scripts/approval_guard.py�canonical_jsonrs���:�e�%�4�J�W�W�W�W��state�dict[str, Any]c�2���fd�tD��}|r%tdd�|�������t�dt��r t
+��d��std����fd�tD��S)Nc���g|]}|�v�|��	S�r��.0�fieldrs  �r�
+<listcomp>z#binding_payload.<locals>.<listcomp>s#���G�G�G��E��4F�4F�u�4F�4F�4Frz!missing approval binding fields: z, rzCestimate_id must match jed- followed by 16 lowercase hex charactersc�"��i|]}|�|��Srrrs  �r�
+<dictcomp>z#binding_payload.<locals>.<dictcomp> s���<�<�<�E�E�5��<�<�<�<r)�BINDING_FIELDS�
+ValueError�join�
+isinstancer�ESTIMATE_ID_RE�	fullmatch)r�missings` r�binding_payloadr)s����G�G�G�G�.�G�G�G�G��S��Q�T�Y�Y�w�=O�=O�Q�Q�R�R�R��e�M�*�C�0�0�`��8P�8P��m��9�9�`��^�_�_�_�<�<�<�<�^�<�<�<�<rc���tt|�����d��}dtj|�����zS)N�utf-8zsha256:)rr)�encode�hashlib�sha256�	hexdigest)r�encodeds  r�binding_hashr1#sF���_�U�3�3�4�4�;�;�G�D�D�G��w�~�g�.�.�8�8�:�:�:�:rc�0�dtjd��zS)Nzjed-�)�secrets�	token_hexrrr�new_estimate_idr6(s���G�%�a�(�(�(�(rc���|�d��}t|t��st|ttf��std���t|��}t|��|d<|S)N�proposed_pricezproposed_price must be numericr1)�getr%�bool�int�floatr#�dictr1)rr8�results   r�build_requestr?,sm���Y�Y�/�0�0�N��.�$�'�'�;�z�.�3�PU�,�/W�/W�;��9�:�:�:��%�[�[�F�)�%�0�0�F�>���Mr�approved�current�tuple[bool, list[str]]c�"�g}|�d��dkr|�d��|�d��}t|t��st|tt
+f��s|�d��|�d��}t|��}||kr|�d��|�d��|�d��kr|�d	��||fS)
+N�approval_statusr@zapproval_status is not approved�owner_approved_pricez$owner_approved_price must be numericr1z9recipient, route, or specification changed after approvalrz"estimate_id changed after approval)r9�appendr%r:r;r<r1)r@rA�errors�price�expected�actuals      r�verify_executionrK5s����F��|�|�%�&�&�*�4�4����7�8�8�8��L�L�/�0�0�E��%����>�j���e��&E�&E�>����<�=�=�=��|�|�N�+�+�H��'�"�"�F��6������Q�R�R�R��|�|�M�"�"�g�k�k�-�&@�&@�@�@����:�;�;�;��:�v��r�pathrc���tj|�d�����}t|t��st|�d����|S)Nr+��encodingz must contain a JSON object)r�loads�	read_textr%r=r#�rLr	s  r�read_objectrSGsM���J�t�~�~�w�~�7�7�8�8�E��e�T�"�"�?��D�=�=�=�>�>�>��Lr�Nonec���|�tj|dd���dzd���|�d��dS)NF�)r�indent�
+r+rNi�)�
+write_textrr�chmodrRs  r�write_objectr[NsG���O�O�D�J�u�5��C�C�C�d�J�U\�O�]�]�]��J�J�u�����r�argv�list[str] | Noner;c	�0�tj��}|�dd���}|�d��|�d��}|�dt
+���|�dt
+���|�d	��}|�d
+t
+���|�dt
+���|�|��}	|jdkrtt����dS|jdkr6t|jtt|j������dStt|j��t|j����\}}tt%j||d�d�����|rdndS#t(t*t$jf$r=}tt%jdt/|��gd�����Yd}~dSd}~wwxYw)N�commandT)�dest�requiredznew-id�creater)�type�output�verifyr@rAr)�validrG)r�FrV)�argparse�ArgumentParser�add_subparsers�
+add_parser�add_argumentr�
+parse_argsr_�printr6r[rdr?rSrrKr@rArr�OSErrorr#�JSONDecodeErrorr)	r\�parser�subrbre�argsrfrG�excs	         r�mainruSs����$�&�&�F�
+�
+�
+�Y��
+�
+>�
+>�C��N�N�8�����^�^�H�%�%�F�
+����d��+�+�+�
+����t��,�,�,��^�^�H�%�%�F�
+���
+���.�.�.�
+���	���-�-�-����T�"�"�D���<�8�#�#��/�#�#�$�$�$��1��<�8�#�#����m�K��
+�4K�4K�&L�&L�M�M�M��1�(��T�]�)C�)C�[�QU�Q]�E^�E^�_�_���v��d�j�5�F�;�;�t�L�L�L�M�M�M�� �q�q�q� ���Z��!5�6�����d�j�5�S��X�X�J�?�?�@�@�A�A�A��q�q�q�q�q��������s%�0&F<�?F<�A"F<�<H�2H�H�__main__)r	rr
+r)rrr
+r)rrr
+r)r
+r)r@rrArr
+rB)rLrr
+r)rLrr	rr
+rT)N)r\r]r
+r;)�__doc__�
+__future__rrhr-r�rer4�sys�pathlibr�typingrr"�compiler&rr)r1r6r?rKrSr[ru�__name__�exitrrr�<module>r�s���J�J�"�"�"�"�"�"�������������	�	�	�	�����
+�
+�
+�
+�������������;�����1�2�2��X�X�X�X�=�=�=�=�;�;�;�;�
+)�)�)�)���������$��������
+�����6�z����C�H�T�T�V�V�������r

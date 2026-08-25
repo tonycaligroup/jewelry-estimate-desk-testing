@@ -1,0 +1,28 @@
+�
+��jr����dZddlmZddlZddlZddlZddlZddlmZddl	m
+Z
+ddlmZmZejd��Zhd�Zdd�Zdd�Zdd�Zddd�Zedkreje����dSdS)zNValidate a Jewelry Estimate Desk runtime profile without third-party packages.�)�annotationsN)�Path)�Any)�ZoneInfo�ZoneInfoNotFoundErrorz^[^\s@]+@[^\s@]+\.[^\s@]+$>�both�retailer�wholesale_middle_man�data�dict[str, Any]�path�str�returnrc���|}|�d��D]&}t|t��r||vrdS||}�'|S)N�.)�split�
+isinstance�dict)rr�value�parts    �scripts/validate_profile.py�
+_read_pathrsS���E��
+�
+�3�������%��&�&�	�$�e�*;�*;��4�4��d�����L��	list[str]c���t|t��sdgSg}|�d��dkr|�d��t	|d��}|t
+vr|�d��dD]Y}t	||��}t|t��rt�|��s|�|�d����Zt	|d	��}t|��tus|d
+vr|�d��t	|d��}t|t��st|ttf��s|�d��n|dkr|�d��t	|d��}t|t��r|s|�d��n6	t|��n%#t$r|�d��YnwxYw|S)N�profile must be a JSON object�schema_version�zschema_version must be 1z	shop.modez9shop.mode must be retailer, wholesale_middle_man, or both)zshop.approver_emailzshop.outbound_mailboxz must be a valid email addresszautonomy.trust_stage>r��z'autonomy.trust_stage must be 1, 2, or 3zpricing.markup_multiplierz;pricing.markup_multiplier must be a number greater than 1.0z2pricing.markup_multiplier must be greater than 1.0zscheduling.timezonez1scheduling.timezone must be a valid IANA timezone)rr�get�appendr�VALID_MODESr�EMAIL_RE�	fullmatch�type�int�bool�floatrr)r�errors�moderr�stage�
+multiplier�timezones        r�validate_profiler/s���d�D�!�!�1�/�0�0��F��x�x� �!�!�Q�&�&����0�1�1�1��d�K�(�(�D��;������Q�R�R�R�@�C�C���4��&�&���%��%�%�	C�X�-?�-?��-F�-F�	C��M�M�T�A�A�A�B�B�B���t�3�4�4�E��E�{�{�#����i�!7�!7����?�@�@�@��D�"=�>�>�J��*�d�#�#�L�:�j�3��,�+O�+O�L����S�T�T�T�T�	�q������J�K�K�K��$� 5�6�6�H��h��$�$�O�H�O����I�J�J�J�J�	O��X������$�	O�	O�	O��M�M�M�N�N�N�N�N�	O�����Ms�G�G4�3G4rc�P�	tj|�d�����}nW#t$r}t	d|����|�d}~wtj$r%}t	d|j�d|j����|�d}~wwxYwt|t��st	d���|S)Nzutf-8)�encodingzprofile not found: zinvalid JSON at line z	, column r)
+�json�loads�	read_text�FileNotFoundError�
+ValueError�JSONDecodeError�lineno�colnorr)rr�excs   r�load_profiler;Csˀ�\��
+�4�>�>�7�>�;�;�<�<�����@�@�@��5�t�5�5�6�6�C�?�������\�\�\��Q���Q�Q�c�i�Q�Q�R�R�X[�[�����\�����e�T�"�"�:��8�9�9�9��Ls �(+�
+A?�A�A?� A:�:A?�argv�list[str] | Noner'c	���tj��}|�dt���|�|��}	t|j��}nJ#t$r=}ttj
+dt|��gd�����Yd}~dSd}~wwxYwt|��}ttj
+||d�d�����|sdndS)	N�profile)r&F)�readyr*rT)�	sort_keysr)�argparse�ArgumentParser�add_argumentr�
+parse_argsr;r?r6�printr2�dumpsrr/)r<�parser�argsrr:r*s      r�mainrJOs����$�&�&�F�
+���	���-�-�-����T�"�"�D���D�L�)�)���������d�j�5�S��X�X�J�?�?�@�@�A�A�A��q�q�q�q�q����������d�#�#�F�	�$�*�6�z�V�<�<��
+M�
+M�
+M�N�N�N��!�1�1��!s�A�
+B"�%2B�B"�__main__)rrrrrr)rrrr)rrrr)N)r<r=rr')�__doc__�
+__future__rrBr2�re�sys�pathlibr�typingr�zoneinforr�compiler$r#rr/r;rJ�__name__�exit�rr�<module>rWs%��T�T�"�"�"�"�"�"���������	�	�	�	�
+�
+�
+�
+�������������4�4�4�4�4�4�4�4��2�:�3�4�4��:�:�:������$�$�$�$�N	�	�	�	�"�"�"�"�"� �z����C�H�T�T�V�V�������r

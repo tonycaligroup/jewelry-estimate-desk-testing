@@ -144,8 +144,10 @@ Everything I do is written down, including my mistakes.
 
 Two things, and the second one is optional at first.
 
-**1. Five questions, ninety seconds.** Retail or trade? Your markup? Who
-approves? Your hours? That's enough for me to start.
+**1. Six required settings, about ninety seconds.** Retail or trade? Your
+markup multiplier? Who approves, which mailbox sends, what trust stage should
+I use, and which timezone should control dates? I validate those settings
+before reading the first inquiry.
 
 **2. Your past invoices — when you get around to it.** This is the one that
 matters. Market averages don't know what *your* 6mm band actually weighs, what

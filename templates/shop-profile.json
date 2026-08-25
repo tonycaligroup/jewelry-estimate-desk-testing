@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "shop": {
+    "name": "",
+    "mode": "retailer",
+    "approver_name": "",
+    "approver_email": "",
+    "outbound_mailbox": "",
+    "cc_always": [],
+    "signature_block": "",
+    "disclose_agent_as_assistant": false
+  },
+  "autonomy": {
+    "trust_stage": 1,
+    "price_approval": "always_owner",
+    "standing_exceptions": []
+  },
+  "pricing": {
+    "markup_multiplier": 1.25,
+    "trade_markup_multiplier": null,
+    "metal_per_gram": {},
+    "stones_per_carat": {},
+    "fees": {},
+    "bench_labor_per_hour": null,
+    "typical_finished_weights": {},
+    "comparable_jobs": []
+  },
+  "defaults": {
+    "karat": null,
+    "metal_color": null,
+    "band_width_mm": null,
+    "setting": null,
+    "finish": null,
+    "chain_gauge": null,
+    "stone_origin": "ask_always"
+  },
+  "scheduling": {
+    "booking_mode": "ask_owner_each_time",
+    "timezone": "America/Los_Angeles",
+    "calendar": null,
+    "windows": [],
+    "blackouts": [],
+    "durations_minutes": {},
+    "buffer_minutes": 0,
+    "minimum_notice_minutes": 120,
+    "book_out_days": 30,
+    "location": null
+  },
+  "inbox_monitoring": {
+    "enabled": false,
+    "business_hours": "Mon-Fri 09:00-17:00",
+    "timezone": "America/Los_Angeles"
+  },
+  "terms": {
+    "lead_time_business_days": null,
+    "deposit_terms": null,
+    "tax_handling": null,
+    "quote_valid_days": 7,
+    "rendering_policy": "offer"
+  }
+}
