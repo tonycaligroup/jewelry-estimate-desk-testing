@@ -460,6 +460,24 @@ For each returned message:
    reply construction or sending fails, or provider acceptance is ambiguous,
    use manual review instead of `processed`; never resend an ambiguous reply.
 
+   For a later customer reply that still lacks required specifications, persist
+   the accepted same-thread follow-up receipt separately before finalizing:
+
+   ```bash
+   python3 {baseDir}/scripts/estimate_record.py record-followup-sent \
+     --estimate-id '<jed-id>' --source-message-id '<gmail-id>' \
+     --reply-body "$WORK/customer-reply.txt" \
+     --provider-response "$WORK/gmail-provider-response.json" \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --output "$WORK/current-record.json"
+   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
+     --record-type skill.jewelry_estimate --external-id '<jed-id>' \
+     --payload "$WORK/current-record.json" --status awaiting_specs
+   ```
+
+   `record-spec-gate-sent` is only for the initiating inquiry. Never overwrite
+   its immutable evidence with a later follow-up receipt.
+
    For every manual-review decision, persist the terminal claim and queue state
    before attempting the one privacy-safe owner notification:
 

@@ -129,6 +129,20 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                 if proposed_reply is None:
                     record = dict(record)
                     record["spec_gate_reply"] = existing_reply
+            existing_followups = existing.get("followup_replies", [])
+            proposed_followups = record.get("followup_replies", [])
+            if not isinstance(existing_followups, list) or not isinstance(
+                proposed_followups, list
+            ):
+                raise ValueError("followup_replies must be an array")
+            if existing_followups and not proposed_followups:
+                record = dict(record)
+                record["followup_replies"] = existing_followups
+                proposed_followups = existing_followups
+            if proposed_followups[: len(existing_followups)] != existing_followups:
+                raise ValueError("follow-up send evidence is immutable")
+            if len(proposed_followups) < len(existing_followups):
+                raise ValueError("follow-up send evidence cannot be removed")
         write_object(path, record)
     return record
 
@@ -215,6 +229,67 @@ def record_spec_gate_sent(
         return record
 
 
+def record_followup_sent(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    reply_body: str,
+    provider_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Append immutable evidence for a later same-thread specification reply."""
+    if not source_message_id or len(source_message_id) > 512:
+        raise ValueError("source message ID must contain 1-512 characters")
+    if not reply_body.strip():
+        raise ValueError("follow-up reply body must not be empty")
+    provider_message_id = provider_response.get("id")
+    provider_thread_id = provider_response.get("threadId")
+    for value, field in (
+        (provider_message_id, "provider response id"),
+        (provider_thread_id, "provider response threadId"),
+    ):
+        if not isinstance(value, str) or not value or len(value) > 512:
+            raise ValueError(f"{field} must contain 1-512 characters")
+        if any(ord(character) < 33 or ord(character) == 127 for character in value):
+            raise ValueError(f"{field} contains invalid characters")
+
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record["status"] != "awaiting_specs":
+            raise ValueError("specification follow-up requires awaiting_specs status")
+        if provider_thread_id != record["route"]["thread_id"]:
+            raise ValueError("provider response threadId does not match the owned thread")
+        evidence = {
+            "status": "sent",
+            "source_message_id_sha256": "sha256:"
+            + hashlib.sha256(source_message_id.encode("utf-8")).hexdigest(),
+            "provider_message_id": provider_message_id,
+            "thread_id": provider_thread_id,
+            "body_sha256": "sha256:"
+            + hashlib.sha256(reply_body.encode("utf-8")).hexdigest(),
+        }
+        followups = record.setdefault("followup_replies", [])
+        if not isinstance(followups, list):
+            raise ValueError("followup_replies must be an array")
+        for existing in followups:
+            if not isinstance(existing, dict):
+                raise ValueError("followup_replies contains invalid evidence")
+            if existing.get("source_message_id_sha256") != evidence[
+                "source_message_id_sha256"
+            ]:
+                continue
+            comparable = dict(existing)
+            comparable.pop("sent_at", None)
+            if comparable == evidence:
+                return record
+            raise ValueError("conflicting follow-up evidence for source message")
+        evidence["sent_at"] = datetime.now(timezone.utc).isoformat()
+        followups.append(evidence)
+        write_object(path, record)
+        return record
+
+
 def require_initial_reply_evidence(root: Path, message_id: str) -> None:
     """Refuse completion of an awaiting-specs inquiry without same-thread send proof."""
     matches: list[dict[str, Any]] = []
@@ -265,6 +340,13 @@ def main(argv: list[str] | None = None) -> int:
     spec_gate.add_argument("--provider-response", type=Path, required=True)
     spec_gate.add_argument("--record-root", type=Path, default=default_record_root())
     spec_gate.add_argument("--output", type=Path)
+    followup = sub.add_parser("record-followup-sent")
+    followup.add_argument("--estimate-id", required=True)
+    followup.add_argument("--source-message-id", required=True)
+    followup.add_argument("--reply-body", type=Path, required=True)
+    followup.add_argument("--provider-response", type=Path, required=True)
+    followup.add_argument("--record-root", type=Path, default=default_record_root())
+    followup.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "create-inquiry":
@@ -280,10 +362,20 @@ def main(argv: list[str] | None = None) -> int:
             records = lookup_thread(args.record_root, read_object(args.route))
             write_object(args.output, records)
             record = {"candidates": len(records)}
-        else:
+        elif args.command == "record-spec-gate-sent":
             record = record_spec_gate_sent(
                 args.record_root,
                 args.estimate_id,
+                args.reply_body.read_text(encoding="utf-8"),
+                read_object(args.provider_response),
+            )
+            if args.output is not None:
+                write_object(args.output, record)
+        else:
+            record = record_followup_sent(
+                args.record_root,
+                args.estimate_id,
+                args.source_message_id,
                 args.reply_body.read_text(encoding="utf-8"),
                 read_object(args.provider_response),
             )
