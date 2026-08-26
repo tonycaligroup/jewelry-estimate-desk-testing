@@ -570,6 +570,26 @@ class GmailReplyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gmail_reply.build_reply(route, "Approved estimate: $4,200")
 
+    def test_owner_only_pricing_information_is_rejected(self) -> None:
+        forbidden = (
+            "Assumptions: finished weight is 8 grams",
+            "Our metal cost is $42 per gram",
+            "COGS is $2,100 with a 1.25 markup",
+            "Bench labor rate is $125 per hour",
+            "The vendor is Example Stones and our margin is 20%",
+        )
+        for body in forbidden:
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                gmail_reply.build_reply(self.route(), body)
+
+    def test_customer_safe_specification_is_allowed(self) -> None:
+        body = (
+            "The design is an 18K white gold ring with a 1.5 carat oval center. "
+            "Your approved estimate is $4,200."
+        )
+        payload = gmail_reply.build_reply(self.route(), body)
+        self.assertEqual(payload["threadId"], self.route()["thread_id"])
+
 
 class GmailRouteTests(unittest.TestCase):
     def message(

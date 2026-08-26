@@ -81,7 +81,8 @@ Hello <Name>,
 Thank you for your patience. Here's the estimate for the piece we discussed.
 
 <One paragraph, general. Enough that they recognize their piece -- not enough
-to hand a competitor a build sheet. No weights, no component costs.>
+to hand a competitor a build sheet. Use only the customer-safe specification.
+No internal weights, jeweler cost assumptions, or component costs.>
 
 Estimate: $<approved price>
 
@@ -106,12 +107,13 @@ Happy to walk through any part of this. I have <slot 1> or <slot 2>
 ```
 This is an estimate based on previous comparable jobs, to help you close the
 sale. On custom work the price can move once a CAD is produced, and the final
-cost is often lower than estimated -- we estimate high and pass any savings
+price is often lower than estimated -- we estimate high and pass any savings
 along to you.
 ```
 
-Never: line items, per-gram, per-carat, component costs, vendor or
-manufacturer names, margin. **"Estimated lead time"** -- never a guaranteed
+Never: jeweler cost assumptions, line items, per-gram, per-carat, component
+costs, costing quantities, vendor or manufacturer names, markup, or margin.
+This applies to retail and wholesale. **"Estimated lead time"** -- never a guaranteed
 date, never a promise against a wedding, unless the owner said so in writing.
 
 ---

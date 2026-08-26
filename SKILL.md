@@ -18,8 +18,12 @@ and delivery commitment behind owner approval.
 1. Never send a price, discount, rush commitment, or delivery promise without
    the owner's approval of that exact estimate.
 2. Never send a retail estimate until the required specification is complete.
-3. Show the customer one all-in price. Never expose costs, markup, margin, or
-   vendor identity.
+3. Show the customer one all-in owner-approved price. Every jeweler cost and
+   pricing assumption is confidential owner-only information. Never expose or
+   summarize assumptions, COGS, component costs, rates, quantities used only
+   for costing, markup, margin, or vendor/manufacturer identity in any
+   customer-visible email, estimate, attachment, rendering, calendar event, or
+   explanation.
 4. Never take payments, cards, deposits, refunds, or payment-link actions.
 5. Never interpolate inquiry-derived data into shell commands. Use the bundled
    Python helpers, which invoke the Kolo CLI with argument arrays and no shell.
@@ -391,8 +395,9 @@ Before sending a retail estimate, require all applicable fields:
   customer supplies stone or metal.
 
 For a piece without stones, stone fields are not applicable; do not report a
-misleading `x/8` score. Wholesale estimates may use explicitly labeled
-assumptions.
+misleading `x/8` score. Wholesale estimates may label customer-visible
+product/specification unknowns, but never jeweler cost or pricing assumptions.
+Cost assumptions remain owner-only in every mode.
 
 When fields are missing, use `templates/spec-gate-email.md`: one friendly,
 price-free, batched request; do not re-ask known facts; offer two real open
@@ -439,7 +444,10 @@ Write `current-state.json` with:
   `Message-ID`, original subject, and existing `References` message IDs
 - `specification`: the exact priced written specification
 - `proposed_price`
-- internal pricing, assumptions, feasibility, appointment options, and draft
+- internal pricing, jeweler cost assumptions, feasibility, appointment options,
+  and draft. Keep the internal pricing and assumption fields separate from the
+  customer-safe specification; they are owner-only and must never be copied or
+  summarized into customer-facing content.
 
 Create the immutable approval request:
 
@@ -481,15 +489,19 @@ does not enforce this binding; this verification is mandatory.
 
 After successful verification:
 
-1. Fill `templates/customer-emails.md` using the exact owner-approved price and
-   save only the reply body to `$WORK/customer-reply.txt`.
+1. Fill `templates/customer-emails.md` using only the customer-safe written
+   specification and the exact owner-approved price. Do not read from, copy, or
+   summarize the internal pricing or jeweler cost assumption fields while
+   drafting. Save only the reply body to `$WORK/customer-reply.txt`.
 2. Include the canonical high-end/pending-CAD substance from
    `templates/approved-estimate-note.md`, estimated—not guaranteed—lead time,
    validity date, and two or three live appointment options with timezone.
 3. Call `kolo integration-routing`. For Gmail through Maton, read the
    api-gateway skill. Rebuild `$WORK/route.json` from the exact latest inbound
    Gmail message and confirm it matches the approved route byte-for-byte before
-   building the send body with:
+   building the send body with the command below. `gmail_reply.py` is also the
+   mandatory final confidentiality guard: it rejects customer text containing
+   jeweler cost assumptions or internal pricing language.
 
    ```bash
    python3 {baseDir}/scripts/gmail_reply.py \
