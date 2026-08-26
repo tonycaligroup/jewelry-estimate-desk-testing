@@ -226,6 +226,7 @@ def read_state(path: Path, attempts: int = 20) -> dict[str, Any]:
                 raise
             time.sleep(0.01)
     state = json.loads(raw)
+    migrated = False
     if isinstance(state, dict) and "schema_version" not in state:
         legacy_required = {"message_id_sha256", "claim_token", "status", "claimed_at"}
         if not legacy_required.issubset(state) or state.get("status") not in {
@@ -234,6 +235,31 @@ def read_state(path: Path, attempts: int = 20) -> dict[str, Any]:
         }:
             raise ValueError("unrecognized legacy claim state")
         state["schema_version"] = SCHEMA_VERSION
+        migrated = True
+    if (
+        isinstance(state, dict)
+        and state.get("processing_phase") in PROCESSING_PHASES
+        and "retry_count_at_phase" not in state
+    ):
+        # Pre-bounded-recovery states cannot prove which phase an earlier
+        # resume attempted. Treat any prior resume as the one allowed retry;
+        # this is conservative and prevents an upgrade from retrying it again.
+        state["retry_count_at_phase"] = (
+            1
+            if state.get("status") == "processing" and state.get("resume_count", 0) > 0
+            else 0
+        )
+        migrated = True
+    if (
+        isinstance(state, dict)
+        and state.get("processing_phase") in PROCESSING_PHASES
+        and "phase_entered_at" not in state
+    ):
+        state["phase_entered_at"] = state.get(
+            "last_progress_at", state.get("claimed_at")
+        )
+        migrated = True
+    if migrated:
         write_state(path, state)
     return validate_state(state)
 

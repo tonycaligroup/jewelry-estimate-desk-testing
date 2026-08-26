@@ -811,6 +811,31 @@ class InboxClaimTests(unittest.TestCase):
             self.assertEqual(migrated["schema_version"], 1)
             self.assertEqual(migrated["status"], "processed")
 
+    def test_prebounded_resumed_claim_does_not_receive_another_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, state = inbox_claim.acquire(root, "prebounded-resume")
+            path = inbox_claim.claim_path(root, "prebounded-resume")
+            state.pop("phase_entered_at")
+            state.pop("retry_count_at_phase")
+            state["resume_count"] = 1
+            state["last_progress_at"] = "2020-01-01T00:00:00+00:00"
+            inbox_claim.write_state(path, state)
+
+            migrated = inbox_claim.read_state(path)
+            resumed, _ = inbox_claim.resume_stale(
+                root,
+                "prebounded-resume",
+                600,
+                now=datetime(2020, 1, 1, 0, 20, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(migrated["retry_count_at_phase"], 1)
+            self.assertEqual(
+                migrated["phase_entered_at"], "2020-01-01T00:00:00+00:00"
+            )
+            self.assertFalse(resumed)
+
     def test_notification_write_ahead_crash_becomes_uncertain(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
