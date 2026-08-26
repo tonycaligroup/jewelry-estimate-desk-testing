@@ -3,14 +3,10 @@
 Fill the brackets. Never send below the trust stage that authorizes it.
 Nothing here contains a price except the estimate template.
 
-> **Subject lines — read before filling any bracket.** Engagement, anniversary
-> and gift work is often secret, and a subject line is what renders in a
-> lock-screen preview on a shared phone. **Any hint of a surprise → use a
-> detail-free subject** (`Following up on your inquiry`) and put the piece type
-> nowhere near it. `<piece>` in a subject is for a customer buying openly for
-> themselves — a trade buyer, a repair, a self-purchase. When in doubt, leave
-> it out; a vague subject costs nothing, and ruining a proposal is not a
-> recoverable error.
+> **These are body templates only. Never draft or replace the subject.** Every
+> email must be sent as a reply in the original inquiry thread through
+> `workflow_safe.py`; the original subject is preserved by the reply headers.
+> This also keeps surprise-sensitive inquiries out of a new lock-screen thread.
 
 ---
 
@@ -19,10 +15,6 @@ Nothing here contains a price except the estimate template.
 No prices. Not even a range. One email, batched.
 
 ```
-Subject: Following up on your inquiry
-         <- surprise-safe default. Only use "Your custom <piece> inquiry"
-            when you know the buyer isn't hiding this from anyone.
-
 Hello <Name>,
 
 Thank you for reaching out -- I appreciate you thinking of us to create this.
@@ -72,10 +64,6 @@ something you'll actually love."
 The number here is the **owner-approved** figure, not the computed one.
 
 ```
-Subject: Following up on your inquiry
-         <- keep the surprise-safe subject if you used one earlier; stay in
-            the same thread rather than starting a revealing new one.
-
 Hello <Name>,
 
 Thank you for your patience. Here's the estimate for the piece we discussed.
@@ -121,6 +109,8 @@ date, never a promise against a wedding, unless the owner said so in writing.
 ## 3. Appointment offer (Stage 3+ for autonomous send)
 
 Always 2-3 named times. Always the timezone. Never "what works for you?"
+Every label must be produced from a fresh provider-backed calendar receipt by
+`appointment_options.py`; never calculate or type the weekday independently.
 
 ```
 Hello <Name>,

@@ -41,13 +41,17 @@ def read_json_argument(path: Path) -> str:
 
 def validate_estimate_id(value: str) -> str:
     if not ESTIMATE_ID_RE.fullmatch(value):
-        raise ValueError("estimate ID must match jed- followed by 16 lowercase hex characters")
+        raise ValueError(
+            "estimate ID must match jed- followed by 16 lowercase hex characters"
+        )
     return value
 
 
 def validate_session_key(value: str) -> str:
     if not SESSION_KEY_RE.fullmatch(value):
-        raise ValueError("session key must be an agent: session key returned by sessions_list")
+        raise ValueError(
+            "session key must be an agent: session key returned by sessions_list"
+        )
     return value
 
 
@@ -101,7 +105,9 @@ def build_notify_monitor(event: str) -> list[str]:
     return ["kolo", "notify-owner", "-m", message]
 
 
-def build_record_upsert(record_type: str, external_id: str, payload: Path, status: str) -> list[str]:
+def build_record_upsert(
+    record_type: str, external_id: str, payload: Path, status: str
+) -> list[str]:
     if not re.fullmatch(r"skill\.[a-z0-9_.-]+", record_type):
         raise ValueError("invalid record type")
     if not re.fullmatch(r"[A-Za-z0-9_.:@-]+", external_id):
@@ -166,7 +172,7 @@ def run_command(
 def request_approval_claimed(
     claim_root: Path,
     message_id: str,
-    claim_token: str,
+    claim_token: str | None,
     action_key: str,
     estimate_id: str,
     details: Path,
@@ -175,6 +181,8 @@ def request_approval_claimed(
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
     """Create one approval request with durable ambiguity tracking."""
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
     command = build_request_approval(estimate_id, details, session_key, agent_id)
     binding_material = json.dumps(
         {
@@ -219,20 +227,24 @@ def request_approval_claimed(
 def notify_owner_claimed(
     claim_root: Path,
     message_id: str,
-    claim_token: str,
+    claim_token: str | None,
     notification_key: str,
     estimate_id: str,
     event: str,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
     """Send one claimed-message notification with durable ambiguity tracking."""
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
     command = build_notify_owner(estimate_id, event)
     acquired, state = inbox_claim.acquire_notification(
         claim_root, message_id, claim_token, notification_key
     )
     if not acquired:
         status = state["owner_notification"]["status"]
-        return subprocess.CompletedProcess(command, 0, f"notification already {status}\n", "")
+        return subprocess.CompletedProcess(
+            command, 0, f"notification already {status}\n", ""
+        )
     try:
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):
@@ -249,19 +261,23 @@ def notify_owner_claimed(
 def notify_monitor_claimed(
     claim_root: Path,
     message_id: str,
-    claim_token: str,
+    claim_token: str | None,
     notification_key: str,
     event: str,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
     """Send one generic monitor notification with durable ambiguity tracking."""
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
     command = build_notify_monitor(event)
     acquired, state = inbox_claim.acquire_notification(
         claim_root, message_id, claim_token, notification_key
     )
     if not acquired:
         status = state["owner_notification"]["status"]
-        return subprocess.CompletedProcess(command, 0, f"notification already {status}\n", "")
+        return subprocess.CompletedProcess(
+            command, 0, f"notification already {status}\n", ""
+        )
     try:
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):
@@ -279,11 +295,13 @@ def manual_review_claimed(
     monitor_root: Path,
     claim_root: Path,
     message_id: str,
-    claim_token: str,
+    claim_token: str | None,
     reason_code: str,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str]]:
     """Persist manual review before attempting its one owner notification."""
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
     queue_item = inbox_monitor.finalize_item(
         monitor_root,
         message_id,
@@ -360,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     approval_claimed = sub.add_parser("request-approval-claimed")
     approval_claimed.add_argument("--claim-root", type=Path, required=True)
     approval_claimed.add_argument("--message-id", required=True)
-    approval_claimed.add_argument("--claim-token", required=True)
+    approval_claimed.add_argument("--claim-token")
     approval_claimed.add_argument("--action-key", required=True)
     approval_claimed.add_argument("--estimate-id", required=True)
     approval_claimed.add_argument("--details", type=Path, required=True)
@@ -379,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     notify_claimed = sub.add_parser("notify-owner-claimed")
     notify_claimed.add_argument("--claim-root", type=Path, required=True)
     notify_claimed.add_argument("--message-id", required=True)
-    notify_claimed.add_argument("--claim-token", required=True)
+    notify_claimed.add_argument("--claim-token")
     notify_claimed.add_argument("--notification-key", required=True)
     notify_claimed.add_argument("--estimate-id", required=True)
     notify_claimed.add_argument(
@@ -388,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
     notify_monitor_claimed_parser = sub.add_parser("notify-monitor-claimed")
     notify_monitor_claimed_parser.add_argument("--claim-root", type=Path, required=True)
     notify_monitor_claimed_parser.add_argument("--message-id", required=True)
-    notify_monitor_claimed_parser.add_argument("--claim-token", required=True)
+    notify_monitor_claimed_parser.add_argument("--claim-token")
     notify_monitor_claimed_parser.add_argument("--notification-key", required=True)
     notify_monitor_claimed_parser.add_argument(
         "--event", choices=sorted(MONITOR_NOTIFICATION_MESSAGES), required=True
@@ -397,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
     manual_review_parser.add_argument("--monitor-root", type=Path, required=True)
     manual_review_parser.add_argument("--claim-root", type=Path, required=True)
     manual_review_parser.add_argument("--message-id", required=True)
-    manual_review_parser.add_argument("--claim-token", required=True)
+    manual_review_parser.add_argument("--claim-token")
     manual_review_parser.add_argument("--reason-code", required=True)
     stale_parser = sub.add_parser("reconcile-stale-claims")
     stale_parser.add_argument("--monitor-root", type=Path, required=True)
@@ -517,7 +535,12 @@ def main(argv: list[str] | None = None) -> int:
         if result.stdout:
             print(result.stdout, end="")
         return 0
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+    except (
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 

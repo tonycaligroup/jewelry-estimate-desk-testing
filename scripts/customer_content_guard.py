@@ -25,14 +25,20 @@ CONFIDENTIAL_PRICING_PATTERNS = (
     ),
     re.compile(r"\b(?:cogs|cost basis|our costs?|jeweler(?:['’]s)? costs?)\b", re.I),
     re.compile(r"\b(?:wholesale|trade)\s+cost\s+to\s+us\b", re.I),
-    re.compile(r"\b(?:the\s+)?(?:price|amount)\s+we\s+(?:pay|paid)\b|\bwhat\s+we\s+paid\b", re.I),
+    re.compile(
+        r"\b(?:the\s+)?(?:price|amount)\s+we\s+(?:pay|paid)\b|\bwhat\s+we\s+paid\b",
+        re.I,
+    ),
     re.compile(
         r"\bwe\s+(?:paid|purchased|bought)\b[^.\n]{0,50}\bfor\s+\$\s*[\d,.]+",
         re.I,
     ),
     re.compile(r"\b(?:scrap|melt)(?:\s*/\s*(?:scrap|melt))?\s+value\b", re.I),
     re.compile(r"\b(?:markup|margin)\b", re.I),
-    re.compile(r"\b(?:pricing|markup|price)\s+multiplier\b|\bmultiplier\b[^.\n]{0,30}\b(?:base|cost|price)\b", re.I),
+    re.compile(
+        r"\b(?:pricing|markup|price)\s+multiplier\b|\bmultiplier\b[^.\n]{0,30}\b(?:base|cost|price)\b",
+        re.I,
+    ),
     re.compile(r"\b(?:bench labor|labor rate|component costs?)\b", re.I),
     re.compile(
         r"\bper[- ]?(?:gram|carat|ounce|oz|pennyweight|dwt)\b|"
@@ -55,13 +61,34 @@ CONFIDENTIAL_PRICING_PATTERNS = (
     ),
 )
 
+DOLLAR_AMOUNT_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
+
 
 def validate_customer_text(text: str) -> str:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("customer-facing text must not be empty")
     for pattern in CONFIDENTIAL_PRICING_PATTERNS:
         if pattern.search(text):
-            raise ValueError("customer-facing text contains owner-only pricing information")
+            raise ValueError(
+                "customer-facing text contains owner-only pricing information"
+            )
+    return text
+
+
+def validate_approved_price(text: str, approved_price: float) -> str:
+    """Require every customer-visible dollar amount to equal the approved price."""
+    validate_customer_text(text)
+    if isinstance(approved_price, bool) or not isinstance(approved_price, (int, float)):
+        raise ValueError("approved price must be numeric")
+    amounts = [
+        float(match.replace(",", "")) for match in DOLLAR_AMOUNT_RE.findall(text)
+    ]
+    if not amounts:
+        raise ValueError("customer estimate must include the approved dollar price")
+    if any(abs(amount - float(approved_price)) > 0.01 for amount in amounts):
+        raise ValueError(
+            "customer estimate contains a dollar amount other than the approved price"
+        )
     return text
 
 
@@ -74,7 +101,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"safe": True}, sort_keys=True))
         return 0
     except (OSError, ValueError) as exc:
-        print(json.dumps({"error": str(exc), "safe": False}, sort_keys=True), file=sys.stderr)
+        print(
+            json.dumps({"error": str(exc), "safe": False}, sort_keys=True),
+            file=sys.stderr,
+        )
         return 2
 
 

@@ -7,10 +7,10 @@ checklist in ONE friendly email without making the customer feel quizzed.
 
 **CRITICAL: This must be a REPLY to the original customer inquiry thread.**
 
-Do NOT compose a new email with subject "Following up on your inquiry". Instead,
-use `scripts/gmail_reply.py` with the route from `scripts/gmail_route.py` to
-keep the conversation in the original thread. The subject line will automatically
-be "Re: <original subject>" from the reply headers.
+Do NOT compose a new email or subject. Send through
+`scripts/workflow_safe.py send-spec-followup`; it uses `gmail_reply.py` with
+the route from `gmail_route.py` to keep the conversation in the original
+thread. The reply headers preserve the original subject.
 
 **Email body:**
 
@@ -45,7 +45,9 @@ Warmly,
 
 ## Rules
 
-- **MUST use gmail_reply.py with route.json from gmail_route.py** — never compose a new email.
+- **MUST use workflow_safe.py with route.json from gmail_route.py** — never compose a new email.
+- Slot labels must come from a fresh `calendar_query.py` receipt validated by
+  `appointment_options.py`; never type or infer a weekday/date label.
 - Delete any cluster you already have answers for; confirm in a half-sentence instead of asking.
 - Never include a price, or a range, in this email.
 - Never send more than one follow-up ask, and only for what is still missing.

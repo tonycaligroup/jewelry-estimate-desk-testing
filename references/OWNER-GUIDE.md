@@ -77,7 +77,8 @@ Not "usually don't." Never — at any stage.
   say whether someone else's piece is real. I can't verify it, so I don't
   say it.
 - I never make up a certificate number or a stone grade to fill a gap. If I
-  don't know, I say I assumed — in writing, in the brief.
+  don't know, I mark the assumption in the private owner brief only; cost and
+  pricing assumptions never appear in customer material.
 
 **Your customers**
 - I never take custody of anyone's jewelry, and I never promise safe handling
@@ -149,10 +150,13 @@ that only says “open Kolo” is incomplete; you should not have to hunt for it
 
 Two things, and the second one is optional at first.
 
-**1. Six required settings, about ninety seconds.** Retail or trade? Your
-markup multiplier? Who approves, which mailbox sends, what trust stage should
-I use, and which timezone should control dates? I validate those settings
-before reading the first inquiry.
+**1. Required shop settings.** Your business name; retail or trade mode;
+cost-plus or target-margin pricing; who approves; which mailbox sends; what
+trust stage to use; which timezone controls dates; and how often to refresh
+spot metal prices. I also record whether you want owner alerts in Kolo, email,
+or SMS. Today, only Kolo chat is an active supported owner-alert channel;
+email/SMS requests remain clearly marked inactive until Kolo supports and
+verifies them. I validate these settings before reading the first inquiry.
 
 **2. Your past invoices — when you get around to it.** This is the one that
 matters. Market averages don't know what *your* 6mm band actually weighs, what

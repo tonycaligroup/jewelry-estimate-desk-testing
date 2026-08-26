@@ -42,6 +42,12 @@ and delivery commitment behind owner approval.
    Before claiming a meeting is already scheduled, query the calendar for
    events with that customer's email as an attendee. If no event is found, no
    meeting exists regardless of what any email says.
+10. Never use direct `curl`, raw Gmail/Maton send calls, `python -c`, direct
+   record/claim JSON edits, or a claim token copied from chat or prior context.
+   Customer sends and approval requests must use `scripts/workflow_safe.py`,
+   which resolves the token from the authoritative claim by Gmail message ID.
+11. A conversational "yes" is not approval. Only a structured Kolo approval
+   event that passes `approval_guard.py verify` authorizes a customer price.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, with no fallback. Monitoring crons must use
@@ -75,12 +81,24 @@ route to the pinned agent.
   ambiguity handling, and a durable same-thread provider receipt.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
   key from the exact inbound Gmail message rather than a display name.
+- `scripts/workflow_safe.py`: execute complete spec-follow-up, approval-request,
+  and approved-estimate actions without exposing claim tokens or partial state
+  transitions to the model.
+- `scripts/pricing_model.py`: calculate the customer price from the configured
+  cost-plus or target-margin model.
+- `scripts/spot_price.py`: fetch and privately cache precious-metal spot prices
+  at the configured per-estimate, daily, or weekly cadence.
+- `scripts/appointment_options.py`: validate recent live calendar availability
+  and derive correct localized weekday/date labels.
+- `scripts/calendar_query.py`: query Google Calendar free/busy through the
+  routed Maton gateway and persist provider request/hash evidence.
 - `templates/shop-profile.json`: runtime profile template.
 - `templates/customer-emails.md`: customer message templates.
 - `templates/spec-gate-email.md`: batched retail intake request.
 - `templates/approved-estimate-note.md`: required estimate disclaimer.
 - `references/rendering-standards.md`: read only when producing a rendering.
 - `references/nudge-workflow.md`: read only when scheduling follow-ups.
+- `references/spot-metal-pricing.md`: read only when spot metal pricing is enabled.
 - `references/OWNER-GUIDE.md`: owner-facing trust and safety explanation.
 
 Use `{baseDir}` as the installed skill directory in commands below.
@@ -94,17 +112,28 @@ in this skill and not in `SKILL.md` frontmatter. Do not store or trust a manual
 On first setup, copy `{baseDir}/templates/shop-profile.json` to the runtime
 location and collect:
 
-1. Shop name, owner name, approver email, outbound mailbox, and signature.
+1. Business/shop name, owner name, approver email, outbound mailbox, and signature.
 2. Business address (street, city, state, zip) — used for calendar invites and
    email communications.
 3. Business website (if available) — used for calendar invites and email
    signatures.
 4. Mode: `retailer`, `wholesale_middle_man`, or `both`.
-5. Markup multiplier. Convert `25%` to `1.25` and confirm with the example
-   `$1,000 cost → $1,250 quote` before saving.
-6. Trust stage. Default to Stage 1.
-7. Booking mode and IANA timezone.
-8. Optional inbox-monitoring hours and timezone.
+5. Pricing model: cost-plus multiplier or target margin. For cost-plus, convert
+   `25%` to `1.25` and confirm `$1,000 cost → $1,250 quote`. For target margin,
+   store the decimal margin and confirm the resulting example price.
+6. Whether spot metal pricing is enabled; provider (`stackerscan` or
+   `gold-api`), refresh frequency (`per_estimate`, `daily`, or `weekly`), and
+   unit. StackerScan is the default and supports grams; gold-api uses troy oz.
+7. Requested owner-notification channel: main Kolo chat, email, or SMS, plus
+   the destination for email/SMS. Store the request, but set `active_channel`
+   to `kolo_chat`: this Kolo release has no supported durable owner-email or
+   owner-SMS delivery mechanism. Never attempt or imply those channels are
+   active until a future supported integration is configured and tested. This
+   request never changes the customer's original-channel routing.
+8. Trust stage. Default to Stage 1.
+9. Booking mode, IANA timezone, and near-term meeting-offer window. Default the
+   window to 7 days so the first meeting is offered ASAP, never near delivery.
+10. Optional inbox-monitoring hours and timezone.
 
 Before reading or processing an inquiry, run:
 
@@ -362,7 +391,7 @@ For each returned message:
    python3 {baseDir}/scripts/gmail_route.py \
      "$WORK/gmail-message.json" '<profile-outbound-mailbox>' "$WORK/route.json"
    python3 {baseDir}/scripts/inbox_claim.py advance-phase \
-     --message-id '<gmail-id>' --claim-token '<claim-token>' --phase routed
+     --message-id '<gmail-id>' --phase routed
    ```
 
 4. A thread is Kolo-owned only when one schema-valid estimate record matches the
@@ -417,7 +446,7 @@ For each returned message:
    ```bash
    python3 {baseDir}/scripts/kolo_safe.py notify-owner-claimed \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --message-id '<gmail-id>' --claim-token '<claim-token>' \
+     --message-id '<gmail-id>' \
      --notification-key 'customer_replied:<jed-id>:<gmail-id>' \
      --event customer-replied --estimate-id '<jed-id>'
    ```
@@ -465,87 +494,33 @@ For each returned message:
    branch and persist its same-source send receipt. If it is empty, continue
    through internal pricing and the claimed owner-approval request in the same
    run. Notification alone is never a completed customer reply.
-7. Use only these combined terminal commands; do not call `inbox_claim.py
-   complete`, `inbox_claim.py fail`, or `reconcile-terminal` separately.
+7. Complete normal branches only through `workflow_safe.py`; do not split
+   delivery, persistence, mirroring, phase advancement, or finalization.
 
-   After successful authorized processing and all required durable record
-   writes:
+   For missing specifications, first write the price-free body to the returned
+   customer-reply path, then run:
 
    ```bash
-   python3 {baseDir}/scripts/inbox_claim.py advance-phase \
-     --message-id '<gmail-id>' --claim-token '<claim-token>' \
-     --phase work_persisted
-   python3 {baseDir}/scripts/inbox_claim.py advance-phase \
-     --message-id '<gmail-id>' --claim-token '<claim-token>' \
-     --phase ready_to_finalize
-   python3 {baseDir}/scripts/inbox_monitor.py finalize \
-     --message-id '<gmail-id>' \
+   python3 {baseDir}/scripts/workflow_safe.py send-spec-followup \
+     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --claim-token '<claim-token>' --outcome processed \
-     --record-root '<absolute-workspace>/estimate-desk/records'
-   ```
-
-   For an initiating inquiry that remains `awaiting_specs`, "processed" means
-   the price-free specification request was actually sent in the original
-   Gmail thread. After the Gmail API accepts that reply, persist its unmodified
-   provider response before finalizing:
-
-   ```bash
-   python3 {baseDir}/scripts/estimate_record.py record-spec-gate-sent \
-     --estimate-id '<jed-id>' --reply-body "$WORK/customer-reply.txt" \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --message-id '<gmail-id>' --estimate-id '<jed-id>' \
+     --route "$WORK/route.json" --body "$WORK/customer-reply.txt" \
+     --gmail-payload "$WORK/gmail-send.json" \
      --provider-response "$WORK/gmail-provider-response.json" \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --output "$WORK/current-record.json"
-   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
-     --record-type skill.jewelry_estimate --external-id '<jed-id>' \
-     --payload "$WORK/current-record.json" --status awaiting_specs
+     --record-output "$WORK/current-record.json" \
+     [--initiating]
    ```
 
-   `finalize --outcome processed` fails closed if an initiating
-   `awaiting_specs` record lacks same-thread provider send evidence. Never treat
-   record creation or `awaiting_specs` alone as completed customer handling. If
-   reply construction or sending fails, or provider acceptance is ambiguous,
-   use manual review instead of `processed`; never resend an ambiguous reply.
+   Use `--initiating` only when the claimed message created the estimate.
+   Otherwise the helper appends later follow-up evidence. Provider ambiguity
+   is never retried.
 
-   For a later customer reply that still lacks required specifications, persist
-   the accepted same-thread follow-up receipt separately before finalizing:
-
-   ```bash
-   python3 {baseDir}/scripts/estimate_record.py record-followup-sent \
-     --estimate-id '<jed-id>' --source-message-id '<gmail-id>' \
-     --reply-body "$WORK/customer-reply.txt" \
-     --provider-response "$WORK/gmail-provider-response.json" \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --output "$WORK/current-record.json"
-   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
-     --record-type skill.jewelry_estimate --external-id '<jed-id>' \
-     --payload "$WORK/current-record.json" --status awaiting_specs
-   ```
-
-   `record-spec-gate-sent` is only for the initiating inquiry. Never overwrite
-   its immutable evidence with a later follow-up receipt.
-
-   For a customer reply that completes the specification, calculate the
-   internal estimate, create and deliver the claimed approval request from
-   Phase 3, then persist its accepted binding before finalizing:
-
-   ```bash
-   python3 {baseDir}/scripts/estimate_record.py record-approval-requested \
-     --estimate-id '<jed-id>' --source-message-id '<gmail-id>' \
-     --approval-request "$WORK/approval-request.json" \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --output "$WORK/current-record.json"
-   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
-     --record-type skill.jewelry_estimate --external-id '<jed-id>' \
-     --payload "$WORK/current-record.json" --status pending_approval
-   ```
-
-   Run `record-approval-requested` only after
-   `request-approval-claimed` reports accepted or already sent. Never tell the
-   owner to calculate or send the estimate manually, and never send a customer
-   price before the returned approval event passes `approval_guard.py verify`.
-   Finalization fails unless the exact claimed Gmail ID has both a complete
-   full-thread review and a sent claimed approval request.
+   For complete specifications, build the exact current state and owner-only
+   cost sheet, then use the `workflow_safe.py request-approval` command in
+   Phase 3. It creates the binding, requests approval, persists `pending_approval`,
+   mirrors the record, and finalizes the inbound claim.
 
    For every manual-review decision, persist the terminal claim and queue state
    before attempting the one privacy-safe owner notification:
@@ -554,7 +529,7 @@ For each returned message:
    python3 {baseDir}/scripts/kolo_safe.py manual-review-claimed \
      --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --message-id '<gmail-id>' --claim-token '<claim-token>' \
+     --message-id '<gmail-id>' \
      --reason-code '<fixed_reason>'
    ```
 
@@ -630,20 +605,12 @@ experience.
    - `In-Reply-To` header (original Message-ID)
    - `References` header (includes original Message-ID)
 
-5. You send that JSON unchanged only through the claimed delivery wrapper:
-   ```bash
-   python3 {baseDir}/scripts/gmail_safe.py send-reply-claimed \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --message-id '<gmail-id>' --claim-token '<claim-token>' \
-     --delivery-key 'customer_reply:<jed-id>:<gmail-id>' \
-     --payload "$WORK/gmail-send.json" \
-     --provider-response "$WORK/gmail-provider-response.json"
-   ```
-
-   This wrapper writes `pending` before provider invocation and stores the
-   accepted provider message and thread IDs after success. Repeating a `sent`
-   action reconstructs the receipt without sending again. `pending` or
-   `uncertain` is never retried automatically.
+5. Send only through the applicable `workflow_safe.py` high-level action.
+   It rebuilds and validates the reply, writes `pending` before provider
+   invocation, stores accepted message/thread IDs, updates the authoritative
+   record, and mirrors it. Never invoke `gmail_safe.py` or the provider directly.
+   A repeated `sent` action reconstructs the receipt; `pending` or `uncertain`
+   is never retried automatically.
 
 **If you cannot complete all 5 steps, you cannot send the email. Stop and recover.**
 
@@ -697,8 +664,10 @@ later customer reply is known and must not be requested again.
 
 When fields are missing, use `templates/spec-gate-email.md`: one friendly,
 price-free, batched request; do not re-ask known facts; offer two real open
-slots with timezone. At Stage 1, draft it. At Stage 2 or 3, it must be sent
-before the initiating inquiry can be completed.
+slots with timezone only after `appointment_options.py` validates a fresh live
+calendar receipt created by `calendar_query.py`. At Stage 1, draft it. At Stage 2 or 3, send it automatically
+with `workflow_safe.py send-spec-followup`; never ask the owner whether to
+draft, send, or continue routing.
 For Gmail, send it only through the Email reply invariant above.
 After one partial reply, ask once more only for load-bearing gaps; then escalate
 the decision to the owner.
@@ -716,7 +685,14 @@ rate card and comparable jobs before any market default.
 | CAD, casting, setting, finishing, engraving | profile fees |
 | Bench labor | hours × profile $/hr; always separate internally |
 | COGS | sum of costs |
-| Proposed quote | COGS × `pricing.markup_multiplier` |
+| Proposed quote | `pricing_model.py` using the configured pricing model |
+
+When spot metal pricing is enabled, run `spot_price.py` before pricing. Its
+cache implements the configured per-estimate, daily, or weekly cadence. Keep
+the spot response, quantities, and derived metal cost owner-only. If the fetch
+or cache validation fails, stop pricing; never silently substitute a remembered
+or stale spot price. Read `references/spot-metal-pricing.md` before the first
+spot-priced estimate in a session.
 
 Estimate the high side deliberately. If finished weight is unknown, give the
 owner a bracket instead of false precision. On a first job without a rate card,
@@ -744,30 +720,33 @@ Write `current-state.json` with:
   `Message-ID`, original subject, and existing `References` message IDs
 - `specification`: the exact priced written specification
 - `proposed_price`
+- `internal_cost_sheet`, with metal grams and unit/total cost, stone costs,
+  labor hours/rate/total, other hard costs, hard-cost total, and customer price
 - internal pricing, jeweler cost assumptions, feasibility, appointment options,
   and draft. Keep the internal pricing and assumption fields separate from the
   customer-safe specification; they are owner-only and must never be copied or
   summarized into customer-facing content.
 
-Create the immutable approval request:
+Create and deliver the immutable approval request with the single high-level
+command documented in Inbox monitoring. Do not call approval, Kolo, record, or
+finalization helpers separately. The binding includes the exact proposed price
+and complete owner-only cost sheet as well as estimate ID, route, and
+specification.
 
 ```bash
-python3 {baseDir}/scripts/approval_guard.py create \
-  "$WORK/current-state.json" "$WORK/approval-request.json"
-python3 {baseDir}/scripts/kolo_safe.py request-approval-claimed \
+python3 {baseDir}/scripts/workflow_safe.py request-approval \
+  --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
   --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-  --message-id '<gmail-id>' --claim-token '<claim-token>' \
-  --action-key 'approval_request:<jed-id>:<gmail-id>' \
+  --record-root '<absolute-workspace>/estimate-desk/records' \
+  --message-id '<gmail-id>' \
   --estimate-id '<jed-id>' \
-  --details "$WORK/approval-request.json" \
-  --session-key '<session-key>'
+  --current-state "$WORK/current-state.json" \
+  --approval-request "$WORK/approval-request.json" \
+  --record-output "$WORK/current-record.json" --session-key '<session-key>'
 ```
 
-After Kolo accepts that exact claimed action, immediately run the
-`record-approval-requested` and record-mirror commands from Inbox monitoring
-step 7 before finalizing the claimed email. The approval request is not durable
-workflow completion until both the claim action and authoritative local record
-contain matching evidence.
+The command succeeds only when the claimed Kolo action, authoritative local
+record, Kolo mirror, claim phases, and queue finalization are complete.
 
 The claimed approval request is the owner-facing Kolo action. Do not add a
 second unjournaled `notify-owner` call for the same approval-ready event.
@@ -798,7 +777,32 @@ does not enforce this binding; this verification is mandatory.
 
 ## Phase 4: send through the customer route
 
-After successful verification:
+After successful verification, use only `workflow_safe.py
+send-approved-estimate`. It re-verifies approval, builds the same-thread reply,
+journals the provider action against the authoritative claim, requires every
+customer-visible dollar amount to equal the approved price, stores provider
+evidence, moves the record from `pending_approval` to `estimate_sent`, and
+mirrors it. Never call the raw Gmail gateway or edit the status yourself.
+
+```bash
+python3 {baseDir}/scripts/workflow_safe.py send-approved-estimate \
+  --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+  --record-root '<absolute-workspace>/estimate-desk/records' \
+  --estimate-id '<jed-id>' \
+  --approved "$WORK/approved.json" \
+  --body "$WORK/customer-reply.txt" --gmail-payload "$WORK/gmail-send.json" \
+  --provider-response "$WORK/gmail-provider-response.json" \
+  --record-output "$WORK/current-record.json"
+```
+
+Do not depend on the earlier per-claim `current-state.json`; normal inbound
+finalization deletes that work directory. The helper reconstructs the exact
+route, specification, price, and owner-only cost sheet from the authoritative
+record, resolves the approval-source Gmail claim from its stored provider ID,
+and verifies matching approval evidence before sending. The optional
+`--message-id` and `--current-state` flags are for controlled diagnostics only.
+
+Then:
 
 1. Fill `templates/customer-emails.md` using only the customer-safe written
    specification and the exact owner-approved price. Do not read from, copy, or
@@ -816,41 +820,38 @@ After successful verification:
      "$WORK/customer-reply.txt"
    ```
 
-4. Call `kolo integration-routing`. For Gmail through Maton, read the
-   api-gateway skill. Rebuild `$WORK/route.json` from the exact latest inbound
-   Gmail message and confirm it matches the approved route byte-for-byte before
-   building the send body with the command below. `gmail_reply.py` is also the
-   mandatory final confidentiality guard: it rejects customer text containing
-   jeweler cost assumptions or internal pricing language.
-
-   ```bash
-   python3 {baseDir}/scripts/gmail_reply.py \
-     "$WORK/route.json" "$WORK/customer-reply.txt" "$WORK/gmail-send.json"
-   ```
-
-   Send that JSON unchanged through
-   `gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send`. The top-level
-   `threadId` and the encoded RFC 5322 `In-Reply-To` and `References` headers
-   are all mandatory. Do not substitute a newly composed message if building
-   the reply fails.
+4. `workflow_safe.py` uses the immutable route in the approved state and runs
+   `gmail_reply.py` internally. That route is derived from the initiating
+   customer email, so the estimate replies to the original request while
+   remaining in its Gmail thread. The top-level `threadId` and encoded RFC 5322
+   `In-Reply-To` and `References` headers are mandatory. Never rebuild the
+   approved route from another message, substitute a new message, or compose a
+   new subject.
 5. Never use the Kolo `message` tool, `deliveryContext.to`, or `kolo:<uuid>` for
    the customer. Use those only for an owner-facing copy or notification.
-5. Store the provider's outbound message ID. If the response is uncertain or
+6. Store the provider's outbound message ID. If the response is uncertain or
    lacks a message ID, do not retry automatically; inspect the Gmail thread or
    escalate to the owner first.
 
 For scheduling, **always query the calendar first** before making any claims
-about existing meetings. Use `gws calendar events list` or the Maton gateway
-to search for events with the customer's email as an attendee. Never infer
+about existing meetings. Use the routed calendar integration to search for
+events with the customer's email as an attendee. Never infer
 meeting state from email content, subject lines, or scheduling language in
 messages.
 
-After confirming no conflicting meeting exists, query live free/busy, intersect
-with declared windows, offer specific times, then re-check immediately before
+After confirming no conflicting meeting exists, use `calendar_query.py` to
+query live free/busy into a private receipt. It validates Google response kind,
+query bounds, calendar ID, server date, and provider request ID, then hashes the
+response. Create a candidate-slots JSON array only from declared profile windows
+inside those query bounds, then run `appointment_options.py` with the receipt
+and candidates. It rejects stale, out-of-range, or busy-overlapping slots and
+derives the weekday/date labels. Offer those
+specific times, then re-check immediately before
 creating an event. Include the customer's email address (from `route.json`
 recipient field) as an attendee in the calendar event so they receive the
 invitation. Confirm to the customer only after the calendar write succeeds.
-Use the owner's IANA timezone, never the pod's UTC clock.
+Use the owner's IANA timezone, never the pod's UTC clock. Never select meeting
+times based on the desired delivery date.
 
 If a rendering is authorized, read `references/rendering-standards.md` first.
 
