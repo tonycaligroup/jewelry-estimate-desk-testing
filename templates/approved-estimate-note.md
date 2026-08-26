@@ -22,7 +22,9 @@ voice; never drop the substance.
 
 ## Must NOT appear
 
-- Line items, per-gram, per-carat, component costs, vendor names, margin.
+- Jeweler cost assumptions; line items; per-gram, per-carat, or labor rates;
+  internal costing quantities; component costs; vendor/manufacturer names;
+  markup; or margin. These remain owner-only for retail and wholesale.
 - A lead time framed as a guarantee.
 - Any number other than the one the owner approved.
 

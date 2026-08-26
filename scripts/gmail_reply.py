@@ -13,6 +13,7 @@ from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Any
 
+from customer_content_guard import validate_customer_text
 from gmail_route import email_identity_key
 
 
@@ -60,8 +61,7 @@ def build_reply(route: dict[str, Any], body: str) -> dict[str, str]:
     if identity_key != email_identity_key(recipient):
         raise ValueError("route.identity_key does not match route.recipient")
     subject = require_text(route, "original_subject")
-    if not body.strip():
-        raise ValueError("reply body must not be empty")
+    body = validate_customer_text(body)
 
     raw_references = route.get("references", [])
     if not isinstance(raw_references, list):

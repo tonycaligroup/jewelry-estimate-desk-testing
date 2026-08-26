@@ -2,6 +2,13 @@
   "schema_version": 1,
   "shop": {
     "name": "",
+    "address": {
+      "street": "",
+      "city": "",
+      "state": "",
+      "zip": ""
+    },
+    "website": "",
     "mode": "retailer",
     "approver_name": "",
     "approver_email": "",

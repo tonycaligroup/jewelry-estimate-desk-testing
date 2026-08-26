@@ -20,7 +20,8 @@ gemological report, or promise of the finished piece. Generate two 4:3 options.
 - `DO NOT CHANGE` constraints
 - The one requested variation for an iterative render
 
-Do not put the customer's name, email, price, vendor, cost, margin, certificate
+Do not put the customer's name, email, price, jeweler cost assumptions, vendor,
+cost, markup, margin, certificate
 number, or event details into an image prompt.
 
 ## Tool call
