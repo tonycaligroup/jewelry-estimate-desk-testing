@@ -13,26 +13,11 @@ from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Any
 
+from customer_content_guard import validate_customer_text
 from gmail_route import email_identity_key
 
 
 MESSAGE_ID_RE = re.compile(r"^<[^<>\s]+>$")
-
-# These phrases identify owner-only pricing logic, not ordinary customer-safe
-# product specifications. The final reply builder enforces the boundary so a
-# poor draft cannot disclose the jeweler's cost assumptions.
-CONFIDENTIAL_PRICING_PATTERNS = (
-    re.compile(r"\bassum(?:e|ed|ing|ption|ptions)\b", re.I),
-    re.compile(r"\b(?:cogs|cost basis|our costs?|jeweler(?:'s)? costs?)\b", re.I),
-    re.compile(r"\b(?:markup|margin|vendor|manufacturer)\b", re.I),
-    re.compile(r"\b(?:bench labor|labor rate|component costs?)\b", re.I),
-    re.compile(r"\b(?:per gram|per carat|\$/g|\$/ct)\b", re.I),
-    re.compile(
-        r"\b(?:metal|stone|diamond|casting|setting|finishing|engraving)\s+"
-        r"(?:cost|rate|price)\b",
-        re.I,
-    ),
-)
 
 
 def require_text(route: dict[str, Any], field: str) -> str:
@@ -62,15 +47,6 @@ def reply_subject(original_subject: str) -> str:
     return original_subject if re.match(r"^\s*re\s*:", original_subject, re.I) else f"Re: {original_subject}"
 
 
-def validate_customer_body(body: str) -> str:
-    if not isinstance(body, str) or not body.strip():
-        raise ValueError("reply body must not be empty")
-    for pattern in CONFIDENTIAL_PRICING_PATTERNS:
-        if pattern.search(body):
-            raise ValueError("reply body contains owner-only pricing information")
-    return body
-
-
 def build_reply(route: dict[str, Any], body: str) -> dict[str, str]:
     if route.get("channel") != "gmail":
         raise ValueError("route.channel must be gmail")
@@ -85,7 +61,7 @@ def build_reply(route: dict[str, Any], body: str) -> dict[str, str]:
     if identity_key != email_identity_key(recipient):
         raise ValueError("route.identity_key does not match route.recipient")
     subject = require_text(route, "original_subject")
-    body = validate_customer_body(body)
+    body = validate_customer_text(body)
 
     raw_references = route.get("references", [])
     if not isinstance(raw_references, list):

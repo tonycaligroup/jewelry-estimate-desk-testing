@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
+import customer_content_guard
 import inbox_claim
 import inbox_monitor
 import gmail_reply
@@ -620,6 +621,8 @@ class GmailReplyTests(unittest.TestCase):
         for body in forbidden:
             with self.subTest(body=body), self.assertRaises(ValueError):
                 gmail_reply.build_reply(self.route(), body)
+            with self.subTest(generic_guard=body), self.assertRaises(ValueError):
+                customer_content_guard.validate_customer_text(body)
 
     def test_customer_safe_specification_is_allowed(self) -> None:
         body = (

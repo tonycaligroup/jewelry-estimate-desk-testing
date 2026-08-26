@@ -61,6 +61,8 @@ route to the pinned agent.
   state, and a durable provider-ID-only discovery queue.
 - `scripts/gmail_classify.py`: conservatively identify delivery-status and
   automatic-reply messages from deterministic Gmail headers.
+- `scripts/customer_content_guard.py`: reject owner-only jeweler cost and
+  pricing assumptions from any customer-facing text before sending.
 - `scripts/route_ownership.py`: prove thread ownership from an exact route,
   one schema-valid estimate record, and its initiating inbox claim.
 - `scripts/gmail_reply.py`: construct a Gmail reply payload bound to the
@@ -496,7 +498,16 @@ After successful verification:
 2. Include the canonical high-end/pending-CAD substance from
    `templates/approved-estimate-note.md`, estimated—not guaranteed—lead time,
    validity date, and two or three live appointment options with timezone.
-3. Call `kolo integration-routing`. For Gmail through Maton, read the
+3. Before every customer send on every channel, run the reusable final
+   confidentiality guard. Exit 2 blocks the send; rewrite the customer text
+   without the confidential material and run it again. Never bypass a failure.
+
+   ```bash
+   python3 {baseDir}/scripts/customer_content_guard.py \
+     "$WORK/customer-reply.txt"
+   ```
+
+4. Call `kolo integration-routing`. For Gmail through Maton, read the
    api-gateway skill. Rebuild `$WORK/route.json` from the exact latest inbound
    Gmail message and confirm it matches the approved route byte-for-byte before
    building the send body with the command below. `gmail_reply.py` is also the
@@ -513,7 +524,7 @@ After successful verification:
    `threadId` and the encoded RFC 5322 `In-Reply-To` and `References` headers
    are all mandatory. Do not substitute a newly composed message if building
    the reply fails.
-4. Never use the Kolo `message` tool, `deliveryContext.to`, or `kolo:<uuid>` for
+5. Never use the Kolo `message` tool, `deliveryContext.to`, or `kolo:<uuid>` for
    the customer. Use those only for an owner-facing copy or notification.
 5. Store the provider's outbound message ID. If the response is uncertain or
    lacks a message ID, do not retry automatically; inspect the Gmail thread or
