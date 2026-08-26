@@ -24,6 +24,13 @@ CONFIDENTIAL_PRICING_PATTERNS = (
         re.I,
     ),
     re.compile(r"\b(?:cogs|cost basis|our costs?|jeweler(?:['’]s)? costs?)\b", re.I),
+    re.compile(r"\b(?:wholesale|trade)\s+cost\s+to\s+us\b", re.I),
+    re.compile(r"\b(?:the\s+)?(?:price|amount)\s+we\s+(?:pay|paid)\b|\bwhat\s+we\s+paid\b", re.I),
+    re.compile(
+        r"\bwe\s+(?:paid|purchased|bought)\b[^.\n]{0,50}\bfor\s+\$\s*[\d,.]+",
+        re.I,
+    ),
+    re.compile(r"\b(?:scrap|melt)(?:\s*/\s*(?:scrap|melt))?\s+value\b", re.I),
     re.compile(r"\b(?:markup|margin)\b", re.I),
     re.compile(r"\b(?:pricing|markup|price)\s+multiplier\b|\bmultiplier\b[^.\n]{0,30}\b(?:base|cost|price)\b", re.I),
     re.compile(r"\b(?:bench labor|labor rate|component costs?)\b", re.I),
