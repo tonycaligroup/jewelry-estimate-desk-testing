@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -162,6 +163,59 @@ def run_command(
     return runner(list(argv), check=True, capture_output=True, text=True, shell=False)
 
 
+def request_approval_claimed(
+    claim_root: Path,
+    message_id: str,
+    claim_token: str,
+    action_key: str,
+    estimate_id: str,
+    details: Path,
+    session_key: str,
+    agent_id: str = "main",
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    """Create one approval request with durable ambiguity tracking."""
+    command = build_request_approval(estimate_id, details, session_key, agent_id)
+    binding_material = json.dumps(
+        {
+            "agent_id": agent_id,
+            "details": json.loads(read_json_argument(details)),
+            "estimate_id": estimate_id,
+            "session_key": session_key,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    binding = "sha256:" + hashlib.sha256(binding_material).hexdigest()
+    acquired, state = inbox_claim.acquire_external_action(
+        claim_root,
+        message_id,
+        claim_token,
+        action_key,
+        "approval_request",
+        binding,
+    )
+    if not acquired:
+        status = state["external_actions"][action_key]["status"]
+        if status == "sent":
+            return subprocess.CompletedProcess(
+                command, 0, "approval request already sent\n", ""
+            )
+        raise ValueError(f"approval request is already {status}; refusing retry")
+    try:
+        result = run_command(command, runner=runner)
+    except (OSError, subprocess.CalledProcessError):
+        inbox_claim.finish_external_action(
+            claim_root, message_id, claim_token, action_key, "uncertain"
+        )
+        raise
+    inbox_claim.finish_external_action(
+        claim_root, message_id, claim_token, action_key, "sent"
+    )
+    return result
+
+
 def notify_owner_claimed(
     claim_root: Path,
     message_id: str,
@@ -249,6 +303,51 @@ def manual_review_claimed(
     return queue_item, result
 
 
+def reconcile_stale_claims(
+    monitor_root: Path,
+    claim_root: Path,
+    minimum_age_seconds: int,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, int]:
+    """Terminalize unsafe stale claims and leave safely resumable claims queued."""
+    stale = inbox_monitor.stale_processing_items(
+        monitor_root, claim_root, minimum_age_seconds
+    )
+    summary = {
+        "stale": len(stale),
+        "resumable": 0,
+        "manual_review": 0,
+        "notification_uncertain": 0,
+    }
+    for item in stale:
+        if item["recovery_action"] == "resume":
+            summary["resumable"] += 1
+            continue
+        inbox_monitor.finalize_item(
+            monitor_root,
+            item["gmail_message_id"],
+            claim_root,
+            item["claim_token"],
+            "manual_review",
+            "stale_processing_ambiguous",
+        )
+        summary["manual_review"] += 1
+        try:
+            notify_monitor_claimed(
+                claim_root,
+                item["gmail_message_id"],
+                item["claim_token"],
+                f"manual_review:stale_processing_ambiguous:{item['gmail_message_id']}",
+                "manual-review",
+                runner=runner,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            # Terminal state is already committed. An ambiguous notification
+            # is preserved and never retried automatically.
+            summary["notification_uncertain"] += 1
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -258,6 +357,15 @@ def main(argv: list[str] | None = None) -> int:
     approval.add_argument("--details", type=Path, required=True)
     approval.add_argument("--session-key", required=True)
     approval.add_argument("--agent-id", default="main")
+    approval_claimed = sub.add_parser("request-approval-claimed")
+    approval_claimed.add_argument("--claim-root", type=Path, required=True)
+    approval_claimed.add_argument("--message-id", required=True)
+    approval_claimed.add_argument("--claim-token", required=True)
+    approval_claimed.add_argument("--action-key", required=True)
+    approval_claimed.add_argument("--estimate-id", required=True)
+    approval_claimed.add_argument("--details", type=Path, required=True)
+    approval_claimed.add_argument("--session-key", required=True)
+    approval_claimed.add_argument("--agent-id", default="main")
 
     notify = sub.add_parser("notify-owner")
     notify.add_argument("--estimate-id", required=True)
@@ -291,6 +399,10 @@ def main(argv: list[str] | None = None) -> int:
     manual_review_parser.add_argument("--message-id", required=True)
     manual_review_parser.add_argument("--claim-token", required=True)
     manual_review_parser.add_argument("--reason-code", required=True)
+    stale_parser = sub.add_parser("reconcile-stale-claims")
+    stale_parser.add_argument("--monitor-root", type=Path, required=True)
+    stale_parser.add_argument("--claim-root", type=Path, required=True)
+    stale_parser.add_argument("--minimum-age-seconds", type=int, required=True)
 
     upsert = sub.add_parser("record-upsert")
     upsert.add_argument("--record-type", required=True)
@@ -312,6 +424,20 @@ def main(argv: list[str] | None = None) -> int:
             command = build_request_approval(
                 args.estimate_id, args.details, args.session_key, args.agent_id
             )
+        elif args.command == "request-approval-claimed":
+            result = request_approval_claimed(
+                args.claim_root,
+                args.message_id,
+                args.claim_token,
+                args.action_key,
+                args.estimate_id,
+                args.details,
+                args.session_key,
+                args.agent_id,
+            )
+            if result.stdout:
+                print(result.stdout, end="")
+            return 0
         elif args.command == "notify-owner":
             command = build_notify_owner(args.estimate_id, args.event)
         elif args.command == "notify-monitor":
@@ -358,6 +484,18 @@ def main(argv: list[str] | None = None) -> int:
                         "notification_status": notification["status"],
                         "delivery_receipt_available": False,
                     },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        elif args.command == "reconcile-stale-claims":
+            print(
+                json.dumps(
+                    reconcile_stale_claims(
+                        args.monitor_root,
+                        args.claim_root,
+                        args.minimum_age_seconds,
+                    ),
                     sort_keys=True,
                 )
             )

@@ -26,6 +26,7 @@ import estimate_record
 import gmail_reply
 import gmail_route
 import gmail_classify
+import gmail_safe
 import kolo_safe
 import route_ownership
 import validate_profile
@@ -127,6 +128,96 @@ class SafeCliTests(unittest.TestCase):
             details_value = argv[argv.index("--details") + 1]
             self.assertEqual(json.loads(details_value)["customer_text"], attack)
             self.assertNotIn("sh", argv[:1])
+
+    def test_claimed_approval_is_sent_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            details = Path(directory) / "brief.json"
+            details.write_text(json.dumps({"price": 4200}), encoding="utf-8")
+            _, claim = inbox_claim.acquire(root, "approval-message")
+            runner = Mock(
+                return_value=subprocess.CompletedProcess([], 0, "accepted\n", "")
+            )
+            arguments = (
+                root,
+                "approval-message",
+                claim["claim_token"],
+                "approval:jed-0123456789abcdef",
+                "jed-0123456789abcdef",
+                details,
+                "agent:main:kolo:test-session",
+            )
+            kolo_safe.request_approval_claimed(*arguments, runner=runner)
+            duplicate = kolo_safe.request_approval_claimed(
+                *arguments, runner=runner
+            )
+            self.assertEqual(runner.call_count, 1)
+            self.assertIn("already sent", duplicate.stdout)
+            state = inbox_claim.read_state(
+                inbox_claim.claim_path(root, "approval-message")
+            )
+            self.assertEqual(
+                state["external_actions"]["approval:jed-0123456789abcdef"]["status"],
+                "sent",
+            )
+
+    def test_claimed_approval_failure_is_uncertain_and_not_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            details = Path(directory) / "brief.json"
+            details.write_text(json.dumps({"price": 4200}), encoding="utf-8")
+            _, claim = inbox_claim.acquire(root, "approval-uncertain")
+            runner = Mock(
+                side_effect=subprocess.CalledProcessError(
+                    1, ["kolo", "request-approval"]
+                )
+            )
+            arguments = (
+                root,
+                "approval-uncertain",
+                claim["claim_token"],
+                "approval:jed-0123456789abcdef",
+                "jed-0123456789abcdef",
+                details,
+                "agent:main:kolo:test-session",
+            )
+            with self.assertRaises(subprocess.CalledProcessError):
+                kolo_safe.request_approval_claimed(*arguments, runner=runner)
+            with self.assertRaisesRegex(ValueError, "uncertain"):
+                kolo_safe.request_approval_claimed(*arguments, runner=runner)
+            self.assertEqual(runner.call_count, 1)
+
+    def test_claimed_approval_binding_rejects_changed_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            details = Path(directory) / "brief.json"
+            details.write_text(json.dumps({"price": 4200}), encoding="utf-8")
+            _, claim = inbox_claim.acquire(root, "approval-binding")
+            runner = Mock(
+                return_value=subprocess.CompletedProcess([], 0, "accepted\n", "")
+            )
+            kolo_safe.request_approval_claimed(
+                root,
+                "approval-binding",
+                claim["claim_token"],
+                "approval:jed-0123456789abcdef",
+                "jed-0123456789abcdef",
+                details,
+                "agent:main:kolo:first-session",
+                runner=runner,
+            )
+            with self.assertRaisesRegex(ValueError, "binding changed"):
+                kolo_safe.request_approval_claimed(
+                    root,
+                    "approval-binding",
+                    claim["claim_token"],
+                    "approval:jed-0123456789abcdef",
+                    "jed-0123456789abcdef",
+                    details,
+                    "agent:main:kolo:different-session",
+                    runner=runner,
+                )
+            self.assertEqual(runner.call_count, 1)
 
     def test_runner_disables_shell(self) -> None:
         runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
@@ -317,6 +408,65 @@ class SafeCliTests(unittest.TestCase):
                 stored_claim["owner_notification"]["status"], "uncertain"
             )
 
+    def test_stale_reconciler_resumes_only_journaled_safe_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            monitor_root = Path(directory) / "monitor"
+            claim_root = Path(directory) / "claims"
+            stale = "2020-01-01T00:00:00+00:00"
+            for message_id in ("safe-stale", "legacy-stale"):
+                inbox_monitor.atomic_write_json(
+                    inbox_monitor.queue_path(monitor_root, message_id),
+                    {
+                        "schema_version": 1,
+                        "gmail_message_id": message_id,
+                        "gmail_message_id_sha256": inbox_monitor.message_key(message_id),
+                        "thread_id": f"thread-{message_id}",
+                        "internal_date_ms": 1_100,
+                        "discovery_status": "complete",
+                        "processing_status": "processing",
+                        "processing_started_at": stale,
+                    },
+                )
+                _, claim = inbox_claim.acquire(claim_root, message_id)
+                path = inbox_claim.claim_path(claim_root, message_id)
+                claim["claimed_at"] = stale
+                claim["last_progress_at"] = stale
+                if message_id == "legacy-stale":
+                    claim.pop("processing_phase")
+                    claim.pop("last_progress_at")
+                    claim.pop("resume_count")
+                inbox_claim.write_state(path, claim)
+            runner = Mock(
+                return_value=subprocess.CompletedProcess([], 0, "accepted\n", "")
+            )
+
+            summary = kolo_safe.reconcile_stale_claims(
+                monitor_root, claim_root, 600, runner=runner
+            )
+
+            self.assertEqual(
+                summary,
+                {
+                    "stale": 2,
+                    "resumable": 1,
+                    "manual_review": 1,
+                    "notification_uncertain": 0,
+                },
+            )
+            self.assertEqual(
+                inbox_monitor.load_queue_item(monitor_root, "safe-stale")[
+                    "processing_status"
+                ],
+                "processing",
+            )
+            self.assertEqual(
+                inbox_monitor.load_queue_item(monitor_root, "legacy-stale")[
+                    "processing_status"
+                ],
+                "manual_review",
+            )
+            self.assertEqual(runner.call_count, 1)
+
     def test_invalid_session_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "brief.json"
@@ -346,6 +496,131 @@ class SafeCliTests(unittest.TestCase):
 
 
 class InboxClaimTests(unittest.TestCase):
+    def make_stale(self, root: Path, message_id: str, *, legacy: bool = False) -> dict:
+        path = inbox_claim.claim_path(root, message_id)
+        state = inbox_claim.read_state(path)
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+        state["claimed_at"] = stale
+        state["last_progress_at"] = stale
+        if legacy:
+            state.pop("processing_phase", None)
+            state.pop("last_progress_at", None)
+            state.pop("resume_count", None)
+        inbox_claim.write_state(path, state)
+        return state
+
+    def test_processed_requires_ready_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, state = inbox_claim.acquire(root, "unfinished")
+            with self.assertRaisesRegex(ValueError, "ready_to_finalize"):
+                inbox_claim.finish(
+                    root, "unfinished", state["claim_token"], "processed"
+                )
+            self.assertEqual(
+                inbox_claim.read_state(inbox_claim.claim_path(root, "unfinished"))[
+                    "status"
+                ],
+                "processing",
+            )
+
+    def test_legacy_resume_requires_explicit_evidence_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "legacy-stuck")
+            self.make_stale(root, "legacy-stuck", legacy=True)
+            with self.assertRaisesRegex(ValueError, "confirmation"):
+                inbox_claim.authorize_legacy_resume(
+                    root,
+                    "legacy-stuck",
+                    claim["claim_token"],
+                    600,
+                    False,
+                )
+            recovered = inbox_claim.authorize_legacy_resume(
+                root,
+                "legacy-stuck",
+                claim["claim_token"],
+                600,
+                True,
+            )
+            self.assertEqual(recovered["processing_phase"], "claimed")
+            self.assertEqual(recovered["resume_count"], 1)
+
+    def test_legacy_resume_rejects_any_action_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "legacy-action")
+            inbox_claim.begin_notification(
+                root, "legacy-action", claim["claim_token"], "notice:legacy-action"
+            )
+            path = inbox_claim.claim_path(root, "legacy-action")
+            state = self.make_stale(root, "legacy-action", legacy=True)
+            state["owner_notification"]["status"] = "sent"
+            inbox_claim.write_state(path, state)
+            with self.assertRaisesRegex(ValueError, "action evidence"):
+                inbox_claim.authorize_legacy_resume(
+                    root,
+                    "legacy-action",
+                    claim["claim_token"],
+                    600,
+                    True,
+                )
+
+    def test_stale_settled_claim_resumes_with_same_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, original = inbox_claim.acquire(root, "stale-safe")
+            self.make_stale(root, "stale-safe")
+            resumed, state = inbox_claim.resume_stale(root, "stale-safe", 600)
+            self.assertTrue(resumed)
+            self.assertEqual(state["claim_token"], original["claim_token"])
+            self.assertEqual(state["resume_count"], 1)
+
+    def test_stale_ambiguous_action_never_resumes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "stale-ambiguous")
+            inbox_claim.acquire_external_action(
+                root,
+                "stale-ambiguous",
+                claim["claim_token"],
+                "delivery:key",
+                "customer_delivery",
+                "sha256:" + "0" * 64,
+            )
+            self.make_stale(root, "stale-ambiguous")
+            resumed, state = inbox_claim.resume_stale(root, "stale-ambiguous", 600)
+            self.assertFalse(resumed)
+            self.assertEqual(
+                state["external_actions"]["delivery:key"]["status"], "pending"
+            )
+
+    def test_sent_action_is_resumable_but_pending_is_not(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "stale-sent")
+            inbox_claim.acquire_external_action(
+                root,
+                "stale-sent",
+                claim["claim_token"],
+                "delivery:key",
+                "customer_delivery",
+                "sha256:" + "1" * 64,
+            )
+            inbox_claim.finish_external_action(
+                root,
+                "stale-sent",
+                claim["claim_token"],
+                "delivery:key",
+                "sent",
+                "provider-id",
+                "thread-id",
+            )
+            self.make_stale(root, "stale-sent")
+            resumed, _ = inbox_claim.resume_stale(root, "stale-sent", 600)
+            self.assertTrue(resumed)
+
     def test_default_claim_root_is_absolute_workspace_path(self) -> None:
         with unittest.mock.patch.dict(os.environ, {"OPENCLAW_WORKSPACE": "/tmp/kolo-workspace"}):
             self.assertEqual(
@@ -378,6 +653,9 @@ class InboxClaimTests(unittest.TestCase):
             self.assertTrue(acquired)
             with self.assertRaises(ValueError):
                 inbox_claim.finish(root, "gmail-message-2", "wrong", "processed")
+            inbox_claim.advance_phase(
+                root, "gmail-message-2", state["claim_token"], "ready_to_finalize"
+            )
             finished = inbox_claim.finish(
                 root, "gmail-message-2", state["claim_token"], "processed"
             )
@@ -387,6 +665,12 @@ class InboxClaimTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
             _, state = inbox_claim.acquire(root, "gmail-message-idempotent")
+            inbox_claim.advance_phase(
+                root,
+                "gmail-message-idempotent",
+                state["claim_token"],
+                "ready_to_finalize",
+            )
             first = inbox_claim.finish(
                 root, "gmail-message-idempotent", state["claim_token"], "processed"
             )
@@ -399,6 +683,12 @@ class InboxClaimTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
             _, state = inbox_claim.acquire(root, "gmail-message-conflict")
+            inbox_claim.advance_phase(
+                root,
+                "gmail-message-conflict",
+                state["claim_token"],
+                "ready_to_finalize",
+            )
             inbox_claim.finish(
                 root, "gmail-message-conflict", state["claim_token"], "processed"
             )
@@ -415,6 +705,12 @@ class InboxClaimTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
             _, state = inbox_claim.acquire(root, "gmail-message-cli-complete")
+            inbox_claim.advance_phase(
+                root,
+                "gmail-message-cli-complete",
+                state["claim_token"],
+                "ready_to_finalize",
+            )
             argv = [
                 "--root",
                 str(root),
@@ -901,6 +1197,12 @@ class InboxMonitorTests(unittest.TestCase):
             record = estimate_record.create_initial_record(
                 record_root, initial_route, 1_100
             )
+            inbox_claim.advance_phase(
+                claim_root,
+                initial_id,
+                initial_claim["claim_token"],
+                "ready_to_finalize",
+            )
             inbox_monitor.finalize_item(
                 root,
                 initial_id,
@@ -1045,6 +1347,61 @@ class InboxMonitorTests(unittest.TestCase):
                     "missing_thread_ownership",
                 )
 
+    def test_assert_settled_rejects_stranded_processing_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": "stranded",
+                        "thread_id": "thread-stranded",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, "stranded")
+            inbox_monitor.sync_claim(root, "stranded", {"acquired": True, **claim})
+            with self.assertRaisesRegex(ValueError, "remain processing"):
+                inbox_monitor.assert_settled(root)
+
+    def test_next_returns_safely_resumable_stale_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": "resume-me",
+                        "thread_id": "thread-resume",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, "resume-me")
+            inbox_monitor.sync_claim(root, "resume-me", {"acquired": True, **claim})
+            state = inbox_claim.read_state(
+                inbox_claim.claim_path(claim_root, "resume-me")
+            )
+            stale = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+            state["last_progress_at"] = stale
+            inbox_claim.write_state(
+                inbox_claim.claim_path(claim_root, "resume-me"), state
+            )
+            item = inbox_monitor.next_eligible(root, claim_root, 600)
+            self.assertEqual(item["recovery_action"], "resume")
+            resumed, resumed_state = inbox_claim.resume_stale(
+                claim_root, "resume-me", 600
+            )
+            self.assertTrue(resumed)
+            self.assertEqual(resumed_state["claim_token"], claim["claim_token"])
+
     def test_finalize_requires_spec_gate_evidence_for_awaiting_specs_inquiry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.active_root(directory)
@@ -1078,6 +1435,12 @@ class InboxMonitorTests(unittest.TestCase):
                 "references": [],
             }
             record = estimate_record.create_initial_record(record_root, route, 1_100)
+            inbox_claim.advance_phase(
+                claim_root,
+                message_id,
+                claim["claim_token"],
+                "ready_to_finalize",
+            )
 
             with self.assertRaisesRegex(ValueError, "lacks durable spec-gate"):
                 inbox_monitor.finalize_item(
@@ -1236,6 +1599,97 @@ class InboxMonitorTests(unittest.TestCase):
                 inbox_monitor.load_monitor_state(root)["discovery_watermark_ms"],
                 3_000,
             )
+
+
+class GmailSafeTests(unittest.TestCase):
+    def payload(self, directory: str, thread_id: str = "thread-safe") -> Path:
+        path = Path(directory) / "gmail-payload.json"
+        path.write_text(
+            json.dumps({"threadId": thread_id, "raw": "c2FmZSByZXBseQ"}),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_successful_delivery_records_receipt_and_is_not_repeated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            payload = self.payload(directory)
+            response_path = Path(directory) / "private" / "response.json"
+            _, claim = inbox_claim.acquire(root, "delivery-message")
+            runner = Mock(
+                return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps({"id": "sent-id", "threadId": "thread-safe"}), ""
+                )
+            )
+            arguments = (
+                root,
+                "delivery-message",
+                claim["claim_token"],
+                "spec-gate:delivery-message",
+                payload,
+                response_path,
+                "secret-token",
+            )
+            first = gmail_safe.send_reply_claimed(*arguments, runner=runner)
+            second = gmail_safe.send_reply_claimed(*arguments, runner=runner)
+            self.assertEqual(first, {"id": "sent-id", "threadId": "thread-safe"})
+            self.assertEqual(second, first)
+            self.assertEqual(runner.call_count, 1)
+            self.assertEqual(json.loads(response_path.read_text()), first)
+            action = inbox_claim.read_state(
+                inbox_claim.claim_path(root, "delivery-message")
+            )["external_actions"]["spec-gate:delivery-message"]
+            self.assertEqual(action["status"], "sent")
+            self.assertEqual(action["provider_thread_id"], "thread-safe")
+
+    def test_ambiguous_delivery_failure_is_never_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            payload = self.payload(directory)
+            _, claim = inbox_claim.acquire(root, "delivery-uncertain")
+            runner = Mock(
+                side_effect=subprocess.CalledProcessError(1, ["curl"])
+            )
+            arguments = (
+                root,
+                "delivery-uncertain",
+                claim["claim_token"],
+                "spec-gate:delivery-uncertain",
+                payload,
+                Path(directory) / "response.json",
+                "secret-token",
+            )
+            with self.assertRaises(subprocess.CalledProcessError):
+                gmail_safe.send_reply_claimed(*arguments, runner=runner)
+            with self.assertRaisesRegex(ValueError, "uncertain"):
+                gmail_safe.send_reply_claimed(*arguments, runner=runner)
+            self.assertEqual(runner.call_count, 1)
+
+    def test_wrong_provider_thread_becomes_uncertain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            payload = self.payload(directory)
+            _, claim = inbox_claim.acquire(root, "delivery-wrong-thread")
+            runner = Mock(
+                return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps({"id": "sent-id", "threadId": "other-thread"}), ""
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                gmail_safe.send_reply_claimed(
+                    root,
+                    "delivery-wrong-thread",
+                    claim["claim_token"],
+                    "spec-gate:delivery-wrong-thread",
+                    payload,
+                    Path(directory) / "response.json",
+                    "secret-token",
+                    runner=runner,
+                )
+            action = inbox_claim.read_state(
+                inbox_claim.claim_path(root, "delivery-wrong-thread")
+            )["external_actions"]["spec-gate:delivery-wrong-thread"]
+            self.assertEqual(action["status"], "uncertain")
 
 
 class GmailReplyTests(unittest.TestCase):
@@ -1492,6 +1946,12 @@ class RouteOwnershipTests(unittest.TestCase):
 
     def processed_claim(self, root: Path) -> None:
         _, state = inbox_claim.acquire(root, "initiating-message")
+        inbox_claim.advance_phase(
+            root,
+            "initiating-message",
+            state["claim_token"],
+            "ready_to_finalize",
+        )
         inbox_claim.finish(
             root, "initiating-message", state["claim_token"], "processed"
         )

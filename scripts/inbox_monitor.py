@@ -506,12 +506,84 @@ def all_queue_items(root: Path) -> list[dict[str, Any]]:
     return [validate_queue_item(read_json(path)) for path in sorted(queue.glob("*.json"))]
 
 
-def next_eligible(root: Path) -> dict[str, Any] | None:
+def stale_processing_items(
+    root: Path,
+    claim_root: Path,
+    minimum_age_seconds: int,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    if type(minimum_age_seconds) is not int or minimum_age_seconds < 1:
+        raise ValueError("minimum_age_seconds must be a positive integer")
+    current = datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    stale: list[dict[str, Any]] = []
+    for item in all_queue_items(root):
+        if item["processing_status"] != "processing":
+            continue
+        claim = inbox_claim.read_state(
+            inbox_claim.claim_path(claim_root, item["gmail_message_id"])
+        )
+        if claim.get("status") != "processing":
+            continue
+        if (
+            current - inbox_claim.state_timestamp(claim)
+        ).total_seconds() < minimum_age_seconds:
+            continue
+        resumable = (
+            claim.get("processing_phase") in inbox_claim.PROCESSING_PHASES
+            and not inbox_claim.has_ambiguous_external_action(claim)
+        )
+        stale.append(
+            {
+                "gmail_message_id": item["gmail_message_id"],
+                "gmail_message_id_sha256": item["gmail_message_id_sha256"],
+                "claim_token": claim["claim_token"],
+                "recovery_action": "resume" if resumable else "manual_review",
+            }
+        )
+    return sorted(stale, key=lambda value: value["gmail_message_id_sha256"])
+
+
+def assert_settled(root: Path) -> dict[str, int]:
+    processing = [
+        item for item in all_queue_items(root) if item["processing_status"] == "processing"
+    ]
+    if processing:
+        raise ValueError(
+            f"{len(processing)} claimed queue item(s) remain processing; "
+            "refusing successful run completion"
+        )
+    return {
+        "processing": 0,
+        "unclaimed": sum(
+            item["processing_status"] == "unclaimed" for item in all_queue_items(root)
+        ),
+    }
+
+
+def next_eligible(
+    root: Path,
+    claim_root: Path | None = None,
+    stale_after_seconds: int = 600,
+) -> dict[str, Any] | None:
     state = load_monitor_state(root)
     if state["activation_state"] != "active":
         raise ValueError("monitor is not active")
     items = all_queue_items(root)
     ordered = sorted(items, key=lambda item: (item["internal_date_ms"], item["gmail_message_id"]))
+    if claim_root is not None:
+        stale_by_hash = {
+            item["gmail_message_id_sha256"]: item
+            for item in stale_processing_items(
+                root, claim_root, stale_after_seconds
+            )
+            if item["recovery_action"] == "resume"
+        }
+        for item in ordered:
+            stale = stale_by_hash.get(item["gmail_message_id_sha256"])
+            if stale is not None:
+                return {**item, "recovery_action": "resume"}
     for item in ordered:
         if item["processing_status"] != "unclaimed":
             continue
@@ -660,7 +732,10 @@ def main(argv: list[str] | None = None) -> int:
     discover_parser.add_argument("--batch", type=Path, required=True)
     discover_parser.add_argument("--window-start-ms", type=int, required=True)
     discover_parser.add_argument("--window-end-ms", type=int, required=True)
-    sub.add_parser("next")
+    next_parser = sub.add_parser("next")
+    next_parser.add_argument("--claim-root", type=Path, default=inbox_claim.default_claim_root())
+    next_parser.add_argument("--stale-after-seconds", type=int, default=600)
+    sub.add_parser("assert-settled")
     sub.add_parser("manual-reviews")
     resolve_review_parser = sub.add_parser("resolve-manual-review")
     resolve_review_parser.add_argument("--review-key", required=True)
@@ -711,7 +786,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.window_end_ms,
             )
         elif args.command == "next":
-            result = next_eligible(args.root)
+            result = next_eligible(
+                args.root, args.claim_root, args.stale_after_seconds
+            )
+        elif args.command == "assert-settled":
+            result = assert_settled(args.root)
         elif args.command == "manual-reviews":
             result = list_manual_reviews(args.root)
         elif args.command == "resolve-manual-review":
