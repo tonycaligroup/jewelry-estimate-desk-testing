@@ -59,6 +59,8 @@ route to the pinned agent.
   workspace and persist crash-safe owner-notification state.
 - `scripts/inbox_monitor.py`: manage two-phase activation, validated monitor
   state, and a durable provider-ID-only discovery queue.
+- `scripts/cron_config.py`: render the fixed cron message and bind durable
+  monitor state to the complete behavior-bearing live Kolo cron configuration.
 - `scripts/gmail_classify.py`: conservatively identify delivery-status and
   automatic-reply messages from deterministic Gmail headers.
 - `scripts/customer_content_guard.py`: reject owner-only jeweler cost and
@@ -155,48 +157,122 @@ every pre-activation inquiry manually.
 
    If any capability is unavailable, report an unsupported environment and
    leave monitoring inactive. Never weaken the activation boundary.
-2. Write the complete intended cron identity and configuration to private JSON.
-   It must specify exactly one `jed-inbox-monitor`, the configured business-hours
-   schedule in its IANA timezone, model `litellm-fireworks/qwen-3-7-plus`, no
-   fallbacks, isolated sessions, and the fixed runbook below.
-3. Prepare durable state under an atomic setup lock:
+2. Render the fixed cron message from the bundled template:
+
+   ```bash
+   python3 {baseDir}/scripts/cron_config.py render-message \
+     --workspace '<absolute-workspace>' --base-dir '{baseDir}' \
+     --output "$WORK/cron-message.txt"
+   ```
+
+3. Create exactly one disabled `jed-inbox-monitor` using that message, the
+   configured business-hours schedule and IANA timezone, model
+   `litellm-fireworks/qwen-3-7-plus`, no fallbacks, a 300-second timeout,
+   `lightContext: true`, an isolated session, and Kolo owner announcement
+   delivery. Never enable or manually run it yet. If a job with that name
+   already exists, stop and use the reconfiguration procedure below; never
+   create a second job.
+4. Re-read the disabled job from Kolo into private JSON and derive its stable
+   binding:
+
+   ```bash
+   python3 {baseDir}/scripts/cron_config.py bind-live \
+     --job "$WORK/live-cron.json" \
+     --workspace '<absolute-workspace>' --base-dir '{baseDir}' \
+     --output "$WORK/cron-binding.json"
+   ```
+
+   The binding includes job ID, agent, schedule, timezone, session, wake mode,
+   complete prompt, model, fallbacks, timeout, light-context setting, optional
+   thinking/tool allow-list fields, and delivery destination. Generated
+   timestamps and runtime counters are excluded. `enabled` is also excluded
+   because it is a lifecycle flag, but it must be false at this step and true
+   only after activation.
+5. Prepare durable state under an atomic setup lock:
 
    ```bash
    python3 {baseDir}/scripts/inbox_monitor.py prepare \
      --capabilities "$WORK/capabilities.json" \
-     --cron-config "$WORK/cron-config.json"
+     --cron-config "$WORK/cron-binding.json"
    ```
 
-4. Create or adopt one inert cron. An existing cron may be adopted only when its
-   identity and complete configuration exactly match the prepared JSON. A cron
-   must read monitor status first and exit silently unless it is `active`.
-   Concurrent or mismatched setup requires manual review; never create a second
-   cron.
-5. Re-read the live cron configuration, save it to JSON, and activate only when
-   its canonical hash matches the prepared configuration:
+6. Activate only against that exact verified binding, then enable the same job
+   ID. Re-read it once more and require `enabled: true` and a successful
+   `bind-live` result equal to `cron-binding.json`:
 
    ```bash
    python3 {baseDir}/scripts/inbox_monitor.py activate \
-     --cron-config "$WORK/verified-live-cron.json"
+     --cron-config "$WORK/cron-binding.json"
    ```
 
    The helper atomically records `activated_at_ms` and initializes the discovery
    watermark. Missing, corrupt, or unsupported-version active state fails closed
    and must never be silently recreated.
 
+### Updating an active monitor
+
+Never replace the cron or reset its activation timestamp or discovery watermark.
+Edit the existing job ID in place:
+
+1. Re-read the current live job. For legacy schema-1 state, reconstruct and
+   cryptographically verify the exact historical five-field binding:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py verify-legacy-binding \
+     --live-job "$WORK/current-live-cron.json" \
+     --output "$WORK/current-bound-config.json"
+   ```
+
+   The helper compares the reconstructed canonical hash with the durable bound
+   hash and makes no state change. For schema-2 state, use the previously
+   verified complete binding. Stop on any mismatch; never guess or overwrite it.
+2. Generate the intended complete target binding from the current job identity:
+
+   ```bash
+   python3 {baseDir}/scripts/cron_config.py target-binding \
+     --job "$WORK/current-live-cron.json" \
+     --workspace '<absolute-workspace>' --base-dir '{baseDir}' \
+     --output "$WORK/target-cron-binding.json"
+   python3 {baseDir}/scripts/inbox_monitor.py reconfigure-prepare \
+     --current-cron-config "$WORK/current-bound-config.json" \
+     --target-cron-config "$WORK/target-cron-binding.json"
+   ```
+
+   This atomically changes monitor state to `reconfiguring`; every cron run must
+   then exit successfully with `NO_REPLY` before Gmail access or side effects.
+3. Disable and edit the existing Kolo job in place with the rendered prompt and
+   every target runtime field. Re-read it and run `bind-live`; the resulting
+   binding must exactly equal `target-cron-binding.json`.
+4. Commit the target binding and enable the same job ID:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py reconfigure-activate \
+     --cron-config "$WORK/verified-target-binding.json"
+   ```
+
+   Re-read once more and require `enabled: true` plus the same verified binding.
+   If the edit fails, restore the complete former live config before using
+   `reconfigure-cancel`; never cancel while the live cron differs from the
+   formerly bound config.
+
 ### Cron discovery phase
 
 Discovery and processing are separate. A processing failure must not prevent a
 later discovery window from being durably recorded.
 
-1. Validate the shop profile, then read monitor status. Exit silently when the
-   monitor is not `active`.
-2. Capture `window_end_ms` before searching. Starting at the durable watermark,
+1. Validate the shop profile, then read monitor status. Exit successfully and
+   silently with `NO_REPLY` when state is `prepared` or `reconfiguring`. Missing,
+   corrupt, or unsupported state is an error and fails closed without Gmail or
+   customer side effects. Never call goal tools from the isolated cron.
+2. Run `inbox_claim.py notification-reconcile-stale
+   --minimum-age-seconds 600`. It may only convert stale `pending` owner alerts
+   to `uncertain`; it must never deliver or retry an alert.
+3. Capture `window_end_ms` before searching. Starting at the durable watermark,
    query Gmail with a one-second overlap using
    `in:inbox after:<epoch-seconds>`. Paginate within this run until
    `nextPageToken` is absent. Never persist a Gmail page token across runs and
    never impose a fixed ten-message limit.
-3. For every result, collect only immutable Gmail `id`, `threadId`, and integer
+4. For every result, collect only immutable Gmail `id`, `threadId`, and integer
    `internalDate`. Write no customer name, address, subject, or message content
    to the discovery batch. After complete enumeration, call:
 
@@ -282,20 +358,20 @@ For each returned message:
    that includes the event, estimate ID, and Gmail ID:
 
    ```bash
-   python3 {baseDir}/scripts/inbox_claim.py notification-begin \
-     --message-id '<gmail-id>' --token '<claim-token>' \
-     --notification-key 'customer_replied:<jed-id>:<gmail-id>'
-   python3 {baseDir}/scripts/kolo_safe.py notify-owner \
+   python3 {baseDir}/scripts/kolo_safe.py notify-owner-claimed \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --message-id '<gmail-id>' --claim-token '<claim-token>' \
+     --notification-key 'customer_replied:<jed-id>:<gmail-id>' \
      --event customer-replied --estimate-id '<jed-id>'
    ```
 
-   Write `pending` before invoking Kolo. Exit 0 means accepted by Kolo; finish as
-   `sent`. A confirmed non-zero pre-delivery rejection becomes
-   `failed_pre_delivery` and permits exactly one retry. If the process crashes
-   while pending or acceptance is ambiguous, run `notification-reconcile` next
-   time to mark `uncertain`; never resend independently. Generic mailbox alerts
-   use `kolo_safe.py notify-monitor --event system-actionable` and contain no
-   estimate or customer data.
+   The wrapper writes `pending` before invoking Kolo and immediately records
+   `sent` after success. Because Kolo has no delivery-receipt query, any command
+   failure after invocation is `uncertain`, never a retryable pre-delivery
+   failure. A process crash may leave `pending`; the stale reconciler marks it
+   `uncertain` after 600 seconds. Never resend `pending` or `uncertain` alerts.
+   Generic mailbox alerts use `kolo_safe.py notify-monitor --event
+   system-actionable` and contain no estimate or customer data.
 6. After authorized processing, finish the claim first, using `complete` or
    `fail --reason-code <fixed_reason>`. Then call `inbox_monitor.py
    reconcile-terminal`; the terminal claim is authoritative for processing side
