@@ -14,14 +14,36 @@ from pathlib import Path
 # product specifications. This is deliberately fail-closed: a rejected draft
 # must be rewritten without the confidential language before it can be sent.
 CONFIDENTIAL_PRICING_PATTERNS = (
-    re.compile(r"\bassum(?:e|ed|ing|ption|ptions)\b", re.I),
-    re.compile(r"\b(?:cogs|cost basis|our costs?|jeweler(?:'s)? costs?)\b", re.I),
-    re.compile(r"\b(?:markup|margin|vendor|manufacturer)\b", re.I),
+    # Do not reject ordinary customer language such as "I assume Friday works."
+    # Reject an assumptions section and assumptions explicitly tied to costing.
+    re.compile(r"(?:^|\n)\s*(?:pricing\s+|cost(?:ing)?\s+)?assumptions?\s*:", re.I),
+    re.compile(
+        r"\b(?:pricing|cost(?:ing)?|jeweler(?:['’]s)?)\s+assumptions?\b|"
+        r"\bassum(?:e|ed|ing)\b[^.\n]{0,40}\b(?:cost|rate|price|weight)\b|"
+        r"\b(?:cost|rate|price|weight)\b[^.\n]{0,40}\bassum(?:e|ed|ing)\b",
+        re.I,
+    ),
+    re.compile(r"\b(?:cogs|cost basis|our costs?|jeweler(?:['’]s)? costs?)\b", re.I),
+    re.compile(r"\b(?:markup|margin)\b", re.I),
+    re.compile(r"\b(?:pricing|markup|price)\s+multiplier\b|\bmultiplier\b[^.\n]{0,30}\b(?:base|cost|price)\b", re.I),
     re.compile(r"\b(?:bench labor|labor rate|component costs?)\b", re.I),
-    re.compile(r"\b(?:per gram|per carat|\$/g|\$/ct)\b", re.I),
+    re.compile(
+        r"\bper[- ]?(?:gram|carat|ounce|oz|pennyweight|dwt)\b|"
+        r"\$(?:\s*[\d,.]+)?\s*/\s*(?:g|ct|oz|dwt)\b",
+        re.I,
+    ),
+    # A generic mention of a manufacturer or supplier can be customer-safe
+    # (for example, a warranty). Block identities and internal relationships.
+    re.compile(
+        r"\b(?:our\s+)?(?:vendor|manufacturer|supplier)(?:\s+name)?\s*(?:is|:)|"
+        r"\bour\s+(?:vendor|manufacturer|supplier)\b|"
+        r"\b(?:vendor|manufacturer|supplier)\s+(?:identity|cost|rate|price|quote)\b",
+        re.I,
+    ),
+    re.compile(r"\b(?:jeweler(?:['’]s)?|bench)\s+(?:fee|charge)\b", re.I),
     re.compile(
         r"\b(?:metal|stone|diamond|casting|setting|finishing|engraving)\s+"
-        r"(?:cost|rate|price)\b",
+        r"(?:cost|rate|price|fee|charge)\b",
         re.I,
     ),
 )
