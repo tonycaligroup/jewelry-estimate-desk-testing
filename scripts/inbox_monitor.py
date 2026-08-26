@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
 import time
 from contextlib import contextmanager
@@ -37,6 +38,18 @@ REQUIRED_CAPABILITIES = (
     "gmail_internal_date_ms",
     "gmail_complete_pagination",
 )
+WORK_ARTIFACTS = {
+    "gmail_message": "gmail-message.json",
+    "route": "route.json",
+    "candidate_records": "candidate-records.json",
+    "inquiry_record": "inquiry-record.json",
+    "thread_review": "thread-review.json",
+    "current_record": "current-record.json",
+    "customer_reply": "customer-reply.txt",
+    "gmail_provider_response": "gmail-provider-response.json",
+    "current_state": "current-state.json",
+    "approval_request": "approval-request.json",
+}
 
 
 def default_root() -> Path:
@@ -506,6 +519,84 @@ def all_queue_items(root: Path) -> list[dict[str, Any]]:
     return [validate_queue_item(read_json(path)) for path in sorted(queue.glob("*.json"))]
 
 
+def prepare_run_work(root: Path) -> dict[str, str]:
+    """Create a private run-scoped path without relying on platform scratch space."""
+    load_monitor_state(root)
+    run_root = root.resolve().parent / "run-work"
+    if run_root.is_symlink() or (run_root.exists() and not run_root.is_dir()):
+        raise ValueError("run work root is not a private directory")
+    run_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(run_root, 0o700)
+    run_dir = run_root / secrets.token_hex(12)
+    run_dir.mkdir(mode=0o700)
+    return {
+        "run_dir": str(run_dir),
+        "discovery_batch": str(run_dir / "discovery-batch.json"),
+    }
+
+
+def cleanup_run_work(root: Path, discovery_batch: Path) -> None:
+    """Best-effort cleanup of a run path created by prepare_run_work."""
+    run_root = root.resolve().parent / "run-work"
+    if run_root.is_symlink() or not run_root.is_dir():
+        return
+    parent = discovery_batch.parent
+    if (
+        discovery_batch.name != "discovery-batch.json"
+        or parent.parent != run_root
+        or not re.fullmatch(r"[0-9a-f]{24}", parent.name)
+        or parent.is_symlink()
+    ):
+        return
+    try:
+        discovery_batch.unlink(missing_ok=True)
+        parent.rmdir()
+    except OSError:
+        # Cleanup is privacy hygiene after a durable commit, not workflow state.
+        pass
+
+
+def prepare_claim_work(
+    root: Path, claim_root: Path, message_id: str
+) -> dict[str, str]:
+    """Create and return the only supported persistent artifact paths for a claim."""
+    item = load_queue_item(root, message_id)
+    claim = inbox_claim.read_state(inbox_claim.claim_path(claim_root, message_id))
+    if claim.get("message_id_sha256") != item["gmail_message_id_sha256"]:
+        raise ValueError("queue/claim message hash mismatch")
+    if claim.get("status") != "processing":
+        raise ValueError("claim work requires a processing claim")
+    work_root = root.resolve().parent / "work"
+    if work_root.is_symlink() or (work_root.exists() and not work_root.is_dir()):
+        raise ValueError("claim work root is not a private directory")
+    work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(work_root, 0o700)
+    work_dir = work_root / item["gmail_message_id_sha256"]
+    if work_dir.is_symlink() or (work_dir.exists() and not work_dir.is_dir()):
+        raise ValueError("claim work path is not a private directory")
+    work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(work_dir, 0o700)
+    return {
+        "work_dir": str(work_dir),
+        **{name: str(work_dir / filename) for name, filename in WORK_ARTIFACTS.items()},
+    }
+
+
+def cleanup_claim_work(root: Path, message_id: str) -> None:
+    """Best-effort removal of customer-bearing artifacts after terminal state."""
+    work_root = root.resolve().parent / "work"
+    if work_root.is_symlink() or not work_root.is_dir():
+        return
+    work_dir = work_root / message_key(message_id)
+    if work_dir.is_symlink() or not work_dir.is_dir():
+        return
+    try:
+        shutil.rmtree(work_dir)
+    except OSError:
+        # The claim and queue are already terminal; cleanup cannot undo them.
+        pass
+
+
 def stale_processing_items(
     root: Path,
     claim_root: Path,
@@ -530,9 +621,22 @@ def stale_processing_items(
             current - inbox_claim.state_timestamp(claim)
         ).total_seconds() < minimum_age_seconds:
             continue
+        lease_active = inbox_claim.recovery_lease_active(claim, current)
+        if lease_active:
+            continue
         resumable = (
             claim.get("processing_phase") in inbox_claim.PROCESSING_PHASES
             and not inbox_claim.has_ambiguous_external_action(claim)
+            and claim.get("retry_count_at_phase", 0) < 1
+        )
+        reason_code = (
+            "stale_processing_retry_exhausted"
+            if (
+                claim.get("processing_phase") in inbox_claim.PROCESSING_PHASES
+                and not inbox_claim.has_ambiguous_external_action(claim)
+                and claim.get("retry_count_at_phase", 0) >= 1
+            )
+            else "stale_processing_ambiguous"
         )
         stale.append(
             {
@@ -540,6 +644,7 @@ def stale_processing_items(
                 "gmail_message_id_sha256": item["gmail_message_id_sha256"],
                 "claim_token": claim["claim_token"],
                 "recovery_action": "resume" if resumable else "manual_review",
+                "reason_code": reason_code,
             }
         )
     return sorted(stale, key=lambda value: value["gmail_message_id_sha256"])
@@ -624,6 +729,34 @@ def sync_claim(root: Path, message_id: str, claim: Any) -> dict[str, Any]:
         item["processing_started_at"] = claimed_at
     atomic_write_json(queue_path(root, message_id), item)
     return item
+
+
+def claim_next(
+    root: Path,
+    claim_root: Path,
+    stale_after_seconds: int,
+) -> dict[str, Any] | None:
+    """Select, claim, synchronize, and prepare paths in one deterministic call."""
+    item = next_eligible(root, claim_root, stale_after_seconds)
+    if item is None:
+        return None
+    message_id = item["gmail_message_id"]
+    acquired, claim = inbox_claim.acquire(claim_root, message_id)
+    resumed = False
+    if not acquired and claim.get("status") == "processing":
+        acquired, claim = inbox_claim.resume_stale(
+            claim_root, message_id, stale_after_seconds
+        )
+        resumed = acquired
+    claim_result = {"acquired": acquired, "resumed": resumed, **claim}
+    queue_item = sync_claim(root, message_id, claim_result)
+    result: dict[str, Any] = {
+        "queue_item": queue_item,
+        "claim": claim_result,
+    }
+    if acquired:
+        result["work_paths"] = prepare_claim_work(root, claim_root, message_id)
+    return result
 
 
 def reconcile_terminal(root: Path, message_id: str, claim_root: Path) -> dict[str, Any]:
@@ -713,7 +846,9 @@ def finalize_item(
         status,
         reason_code,
     )
-    return reconcile_terminal(root, message_id, claim_root)
+    result = reconcile_terminal(root, message_id, claim_root)
+    cleanup_claim_work(root, message_id)
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -737,6 +872,7 @@ def main(argv: list[str] | None = None) -> int:
     legacy_parser.add_argument("--live-job", type=Path, required=True)
     legacy_parser.add_argument("--output", type=Path, required=True)
     sub.add_parser("status")
+    sub.add_parser("prepare-run")
     discover_parser = sub.add_parser("discover-complete")
     discover_parser.add_argument("--batch", type=Path, required=True)
     discover_parser.add_argument("--window-start-ms", type=int, required=True)
@@ -744,6 +880,11 @@ def main(argv: list[str] | None = None) -> int:
     next_parser = sub.add_parser("next")
     next_parser.add_argument("--claim-root", type=Path, default=inbox_claim.default_claim_root())
     next_parser.add_argument("--stale-after-seconds", type=int, default=600)
+    claim_next_parser = sub.add_parser("claim-next")
+    claim_next_parser.add_argument(
+        "--claim-root", type=Path, default=inbox_claim.default_claim_root()
+    )
+    claim_next_parser.add_argument("--stale-after-seconds", type=int, default=600)
     sub.add_parser("assert-settled")
     sub.add_parser("manual-reviews")
     resolve_review_parser = sub.add_parser("resolve-manual-review")
@@ -787,17 +928,23 @@ def main(argv: list[str] | None = None) -> int:
             atomic_write_json(args.output, result)
         elif args.command == "status":
             result = load_monitor_state(args.root)
+        elif args.command == "prepare-run":
+            result = prepare_run_work(args.root)
         elif args.command == "discover-complete":
+            batch = read_json(args.batch)
             result = discover_complete(
                 args.root,
-                read_json(args.batch),
+                batch,
                 args.window_start_ms,
                 args.window_end_ms,
             )
+            cleanup_run_work(args.root, args.batch)
         elif args.command == "next":
             result = next_eligible(
                 args.root, args.claim_root, args.stale_after_seconds
             )
+        elif args.command == "claim-next":
+            result = claim_next(args.root, args.claim_root, args.stale_after_seconds)
         elif args.command == "assert-settled":
             result = assert_settled(args.root)
         elif args.command == "manual-reviews":

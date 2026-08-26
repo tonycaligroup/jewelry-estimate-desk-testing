@@ -329,7 +329,7 @@ def reconcile_stale_claims(
             claim_root,
             item["claim_token"],
             "manual_review",
-            "stale_processing_ambiguous",
+            item["reason_code"],
         )
         summary["manual_review"] += 1
         try:
@@ -337,7 +337,7 @@ def reconcile_stale_claims(
                 claim_root,
                 item["gmail_message_id"],
                 item["claim_token"],
-                f"manual_review:stale_processing_ambiguous:{item['gmail_message_id']}",
+                f"manual_review:{item['reason_code']}:{item['gmail_message_id']}",
                 "manual-review",
                 runner=runner,
             )

@@ -19,7 +19,7 @@ import secrets
 import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -35,6 +35,7 @@ PROCESSING_PHASES = {
     "ready_to_finalize": 4,
 }
 EXTERNAL_ACTION_STATUSES = NOTIFICATION_STATUSES
+RECOVERY_LEASE_SECONDS = 360
 
 
 def default_claim_root() -> Path:
@@ -89,8 +90,11 @@ def validate_state(state: Any) -> dict[str, Any]:
         "reason_code",
         "owner_notification",
         "processing_phase",
+        "phase_entered_at",
         "last_progress_at",
         "resume_count",
+        "retry_count_at_phase",
+        "recovery_lease_expires_at",
         "external_actions",
     }
     required = {"schema_version", "message_id_sha256", "claim_token", "status", "claimed_at"}
@@ -135,10 +139,34 @@ def validate_state(state: Any) -> dict[str, Any]:
         not isinstance(state["last_progress_at"], str) or not state["last_progress_at"]
     ):
         raise ValueError("invalid last_progress_at")
+    if "phase_entered_at" in state and (
+        not isinstance(state["phase_entered_at"], str) or not state["phase_entered_at"]
+    ):
+        raise ValueError("invalid phase_entered_at")
     if "resume_count" in state and (
         type(state["resume_count"]) is not int or state["resume_count"] < 0
     ):
         raise ValueError("invalid resume_count")
+    if "retry_count_at_phase" in state and (
+        type(state["retry_count_at_phase"]) is not int
+        or state["retry_count_at_phase"] < 0
+        or state["retry_count_at_phase"] > 1
+    ):
+        raise ValueError("invalid retry_count_at_phase")
+    for timestamp_field in (
+        "phase_entered_at",
+        "last_progress_at",
+        "recovery_lease_expires_at",
+    ):
+        raw_timestamp = state.get(timestamp_field)
+        if raw_timestamp is None:
+            continue
+        try:
+            parsed_timestamp = datetime.fromisoformat(raw_timestamp)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid {timestamp_field}") from exc
+        if parsed_timestamp.tzinfo is None:
+            raise ValueError(f"{timestamp_field} must include timezone")
     actions = state.get("external_actions")
     if actions is not None:
         if not isinstance(actions, dict):
@@ -198,6 +226,7 @@ def read_state(path: Path, attempts: int = 20) -> dict[str, Any]:
                 raise
             time.sleep(0.01)
     state = json.loads(raw)
+    migrated = False
     if isinstance(state, dict) and "schema_version" not in state:
         legacy_required = {"message_id_sha256", "claim_token", "status", "claimed_at"}
         if not legacy_required.issubset(state) or state.get("status") not in {
@@ -206,7 +235,39 @@ def read_state(path: Path, attempts: int = 20) -> dict[str, Any]:
         }:
             raise ValueError("unrecognized legacy claim state")
         state["schema_version"] = SCHEMA_VERSION
-        write_state(path, state)
+        migrated = True
+    if (
+        isinstance(state, dict)
+        and state.get("processing_phase") in PROCESSING_PHASES
+        and "retry_count_at_phase" not in state
+    ):
+        # Pre-bounded-recovery states cannot prove which phase an earlier
+        # resume attempted. Treat any prior resume as the one allowed retry;
+        # this is conservative and prevents an upgrade from retrying it again.
+        resume_count = state.get("resume_count", 0)
+        state["retry_count_at_phase"] = (
+            1
+            if (
+                state.get("status") == "processing"
+                and type(resume_count) is int
+                and resume_count > 0
+            )
+            else 0
+        )
+        migrated = True
+    if (
+        isinstance(state, dict)
+        and state.get("processing_phase") in PROCESSING_PHASES
+        and "phase_entered_at" not in state
+    ):
+        state["phase_entered_at"] = state.get(
+            "last_progress_at", state.get("claimed_at")
+        )
+        migrated = True
+    if migrated:
+        validated = validate_state(state)
+        write_state(path, validated)
+        return validated
     return validate_state(state)
 
 
@@ -215,15 +276,18 @@ def acquire(root: Path, message_id: str) -> tuple[bool, dict[str, Any]]:
     os.chmod(root, 0o700)
     path = claim_path(root, message_id)
     token = secrets.token_hex(16)
+    now = datetime.now(timezone.utc).isoformat()
     state = {
         "schema_version": SCHEMA_VERSION,
         "message_id_sha256": claim_key(message_id),
         "claim_token": token,
         "status": "processing",
-        "claimed_at": datetime.now(timezone.utc).isoformat(),
+        "claimed_at": now,
         "processing_phase": "claimed",
-        "last_progress_at": datetime.now(timezone.utc).isoformat(),
+        "phase_entered_at": now,
+        "last_progress_at": now,
         "resume_count": 0,
+        "retry_count_at_phase": 0,
     }
     try:
         path.mkdir(mode=0o700)
@@ -257,6 +321,24 @@ def has_ambiguous_external_action(state: dict[str, Any]) -> bool:
     )
 
 
+def recovery_lease_active(
+    state: dict[str, Any], now: datetime | None = None
+) -> bool:
+    raw = state.get("recovery_lease_expires_at")
+    if raw is None:
+        return False
+    current = datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    try:
+        expires = datetime.fromisoformat(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid recovery_lease_expires_at") from exc
+    if expires.tzinfo is None:
+        raise ValueError("recovery_lease_expires_at must include timezone")
+    return current < expires
+
+
 def resume_stale(
     root: Path,
     message_id: str,
@@ -282,8 +364,15 @@ def resume_stale(
             return False, state
         if has_ambiguous_external_action(state):
             return False, state
+        if recovery_lease_active(state, current):
+            return False, state
+        if state.get("retry_count_at_phase", 0) >= 1:
+            return False, state
         state["resume_count"] = state.get("resume_count", 0) + 1
-        state["last_progress_at"] = current.isoformat()
+        state["retry_count_at_phase"] = 1
+        state["recovery_lease_expires_at"] = (
+            current + timedelta(seconds=RECOVERY_LEASE_SECONDS)
+        ).isoformat()
         write_state(path, state)
         return True, state
 
@@ -325,8 +414,11 @@ def authorize_legacy_resume(
         ):
             raise ValueError("legacy claim contains action evidence; manual review required")
         state["processing_phase"] = "claimed"
+        state["phase_entered_at"] = current.isoformat()
         state["last_progress_at"] = current.isoformat()
         state["resume_count"] = state.get("resume_count", 0) + 1
+        state["retry_count_at_phase"] = 0
+        state.pop("recovery_lease_expires_at", None)
         write_state(path, state)
         return state
 
@@ -346,10 +438,14 @@ def advance_phase(
         current = state.get("processing_phase", "claimed")
         if current not in PROCESSING_PHASES:
             raise ValueError("legacy claim requires manual recovery")
-        if PROCESSING_PHASES[phase] < PROCESSING_PHASES[current]:
+        if PROCESSING_PHASES[phase] <= PROCESSING_PHASES[current]:
             return state
+        now = datetime.now(timezone.utc).isoformat()
         state["processing_phase"] = phase
-        state["last_progress_at"] = datetime.now(timezone.utc).isoformat()
+        state["phase_entered_at"] = now
+        state["last_progress_at"] = now
+        state["retry_count_at_phase"] = 0
+        state.pop("recovery_lease_expires_at", None)
         write_state(path, state)
         return state
 
