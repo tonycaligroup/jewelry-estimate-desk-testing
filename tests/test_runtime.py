@@ -618,6 +618,44 @@ class InboxMonitorTests(unittest.TestCase):
             )
             self.assertEqual(persisted["schema_version"], 2)
 
+    def test_legacy_binding_is_reconstructed_and_verified_from_live_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            root.mkdir(parents=True)
+            legacy_config = {
+                "name": "jed-inbox-monitor",
+                "schedule": "*/5 9-17 * * 1-5",
+                "timezone": "America/Los_Angeles",
+                "model": cron_config.MODEL,
+                "fallbacks": "",
+            }
+            inbox_monitor.atomic_write_json(
+                root / "monitor-state.json",
+                {
+                    "schema_version": 1,
+                    "activation_state": "active",
+                    "expected_cron_sha256": inbox_monitor.sha256_json(legacy_config),
+                    "capabilities": self.capabilities(),
+                    "activated_at_ms": 1_000,
+                    "discovery_watermark_ms": 2_000,
+                },
+            )
+            live_job = {
+                "name": "jed-inbox-monitor",
+                "schedule": {
+                    "kind": "cron",
+                    "expr": "*/5 9-17 * * 1-5",
+                    "tz": "America/Los_Angeles",
+                },
+                "payload": {"model": cron_config.MODEL, "fallbacks": []},
+            }
+            self.assertEqual(
+                inbox_monitor.verify_legacy_binding(root, live_job), legacy_config
+            )
+            live_job["schedule"]["expr"] = "*/10 9-17 * * 1-5"
+            with self.assertRaises(ValueError):
+                inbox_monitor.verify_legacy_binding(root, live_job)
+
     def test_missing_or_corrupt_active_state_never_reinitializes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "monitor"

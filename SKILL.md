@@ -214,10 +214,18 @@ every pre-activation inquiry manually.
 Never replace the cron or reset its activation timestamp or discovery watermark.
 Edit the existing job ID in place:
 
-1. Re-read the current live job. Reconstruct the currently bound JSON and prove
-   its canonical hash matches `bound_cron_sha256`. For legacy schema-1 state,
-   use the exact historical configuration originally bound to that state; do
-   not guess or overwrite a mismatch.
+1. Re-read the current live job. For legacy schema-1 state, reconstruct and
+   cryptographically verify the exact historical five-field binding:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py verify-legacy-binding \
+     --live-job "$WORK/current-live-cron.json" \
+     --output "$WORK/current-bound-config.json"
+   ```
+
+   The helper compares the reconstructed canonical hash with the durable bound
+   hash and makes no state change. For schema-2 state, use the previously
+   verified complete binding. Stop on any mismatch; never guess or overwrite it.
 2. Generate the intended complete target binding from the current job identity:
 
    ```bash

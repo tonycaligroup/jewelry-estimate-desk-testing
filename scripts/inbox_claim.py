@@ -121,6 +121,7 @@ def validate_state(state: Any) -> dict[str, Any]:
 
 def read_state(path: Path, attempts: int = 20) -> dict[str, Any]:
     state_path = path / "state.json"
+    # A newly created claim directory may briefly precede its first state file.
     for attempt in range(attempts):
         try:
             raw = state_path.read_text(encoding="utf-8")
@@ -207,6 +208,8 @@ def begin_notification(
         if prior is not None:
             if prior.get("key") != notification_key:
                 raise ValueError("a different notification is already bound to this message")
+            # Retained for explicit manual recovery; the normal Kolo wrapper
+            # classifies every post-invocation failure as uncertain.
             if prior.get("status") == "failed_pre_delivery" and prior.get("attempts") == 1:
                 attempts = 2
             else:

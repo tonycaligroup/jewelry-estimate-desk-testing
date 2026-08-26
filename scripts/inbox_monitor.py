@@ -212,6 +212,45 @@ def load_monitor_state(root: Path) -> dict[str, Any]:
     return validate_monitor_state(read_json(root / "monitor-state.json"))
 
 
+def verify_legacy_binding(root: Path, live_job: Any) -> dict[str, Any]:
+    """Reconstruct and prove the schema-1 five-field binding without mutation."""
+    raw_state = read_json(root / "monitor-state.json")
+    if not isinstance(raw_state, dict) or raw_state.get("schema_version") != 1:
+        raise ValueError("monitor state is not a legacy schema-1 binding")
+    state = validate_monitor_state(raw_state)
+    if not isinstance(live_job, dict):
+        raise ValueError("live cron job must be a JSON object")
+    schedule = live_job.get("schedule")
+    payload = live_job.get("payload")
+    if not isinstance(schedule, dict) or not isinstance(payload, dict):
+        raise ValueError("live cron schedule and payload must be objects")
+    if schedule.get("kind") != "cron":
+        raise ValueError("live cron schedule kind must be cron")
+    if payload.get("fallbacks") != []:
+        raise ValueError("legacy monitor requires no live cron fallbacks")
+    legacy = {
+        "name": cron_config_helper.require_string(live_job.get("name"), "name"),
+        "schedule": cron_config_helper.require_string(
+            schedule.get("expr"), "schedule.expr"
+        ),
+        "timezone": cron_config_helper.require_string(
+            schedule.get("tz"), "schedule.tz"
+        ),
+        "model": cron_config_helper.require_string(
+            payload.get("model"), "payload.model"
+        ),
+        # The schema-1 setup serialized the CLI's empty fallback argument.
+        "fallbacks": "",
+    }
+    if legacy["name"] != cron_config_helper.JOB_NAME:
+        raise ValueError("legacy cron job name does not match")
+    if legacy["model"] != cron_config_helper.MODEL:
+        raise ValueError("legacy cron model does not match")
+    if sha256_json(legacy) != state["bound_cron_sha256"]:
+        raise ValueError("reconstructed legacy cron config does not match bound hash")
+    return legacy
+
+
 def prepare(root: Path, capabilities: Any, cron_config: Any) -> dict[str, Any]:
     verified = validate_capabilities(capabilities)
     cron_config_helper.validate_binding(cron_config)
@@ -522,6 +561,9 @@ def main(argv: list[str] | None = None) -> int:
     reconfigure_activate_parser.add_argument("--cron-config", type=Path, required=True)
     reconfigure_cancel_parser = sub.add_parser("reconfigure-cancel")
     reconfigure_cancel_parser.add_argument("--current-cron-config", type=Path, required=True)
+    legacy_parser = sub.add_parser("verify-legacy-binding")
+    legacy_parser.add_argument("--live-job", type=Path, required=True)
+    legacy_parser.add_argument("--output", type=Path, required=True)
     sub.add_parser("status")
     discover_parser = sub.add_parser("discover-complete")
     discover_parser.add_argument("--batch", type=Path, required=True)
@@ -553,6 +595,9 @@ def main(argv: list[str] | None = None) -> int:
             result = cancel_reconfiguration(
                 args.root, read_json(args.current_cron_config)
             )
+        elif args.command == "verify-legacy-binding":
+            result = verify_legacy_binding(args.root, read_json(args.live_job))
+            atomic_write_json(args.output, result)
         elif args.command == "status":
             result = load_monitor_state(args.root)
         elif args.command == "discover-complete":
