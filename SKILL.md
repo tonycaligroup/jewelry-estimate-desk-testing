@@ -268,6 +268,9 @@ later discovery window from being durably recorded.
    silently with `NO_REPLY` when state is `prepared` or `reconfiguring`. Missing,
    corrupt, or unsupported state is an error and fails closed without Gmail or
    customer side effects. Never call goal tools from the isolated cron.
+   Then run `inbox_monitor.py prepare-run` and use its returned
+   `discovery_batch` path exactly. Never create a run directory yourself and
+   never substitute a platform `/tmp` or hidden workspace folder.
 2. Run `inbox_claim.py notification-reconcile-stale
    --minimum-age-seconds 600`. It may only convert stale `pending` owner alerts
    to `uncertain`; it must never deliver or retry an alert.
@@ -282,7 +285,7 @@ later discovery window from being durably recorded.
 
    ```bash
    python3 {baseDir}/scripts/inbox_monitor.py discover-complete \
-     --batch "$WORK/discovery-batch.json" \
+     --batch '<prepare-run discovery_batch path>' \
      --window-start-ms '<durable-watermark>' \
      --window-end-ms '<captured-window-end-ms>'
    ```
@@ -294,37 +297,46 @@ later discovery window from being durably recorded.
 
 ### Queue processing phase
 
-Repeatedly call `inbox_monitor.py next`. It returns the oldest eligible message,
-or `null`. The helper permits only the oldest unfinished item in each Gmail
-thread; a stuck thread does not block other threads.
+Repeatedly call `inbox_monitor.py claim-next`. It returns the oldest eligible
+message already claimed and synchronized, or `null`. The helper permits only
+the oldest unfinished item in each Gmail thread; a stuck thread does not block
+other threads.
 
 For each returned message:
 
-1. Claim the immutable Gmail message ID before fetching content, notifying,
-   drafting, sending, or mutating a Kolo estimate:
+1. Select and claim the immutable Gmail message ID before fetching content,
+   notifying, drafting, sending, or mutating a Kolo estimate:
 
    ```bash
-   python3 {baseDir}/scripts/inbox_claim.py claim \
-     --message-id '<gmail-id>' --resume-stale-after-seconds 600 \
-     > "$WORK/claim-result.json"
-   python3 {baseDir}/scripts/inbox_monitor.py sync-claim \
-     --message-id '<gmail-id>' --claim-result "$WORK/claim-result.json"
+   python3 {baseDir}/scripts/inbox_monitor.py claim-next \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --stale-after-seconds 600
    ```
 
-   `claim` returns exit 0 for both `acquired:true` and `acquired:false`.
+   This command selects, claims, synchronizes the queue, and creates the only
+   supported persistent per-claim work directory in one deterministic call.
+   Use the returned `work_paths.work_dir` as `$WORK` and each returned named
+   artifact path exactly. Never create `.jed-work`, `/tmp/jed-work`, or another
+   ad-hoc work directory. Never inspect `claim.json`, `state.json`, or queue
+   files, and never use a generic show/display/read-back tool for generated
+   artifacts; pass their returned paths directly between bundled scripts.
+   `claim-next` returns exit 0 for both `claim.acquired:true` and
+   `claim.acquired:false`.
    A duplicate `processed` or `manual_review` claim completes the queue item. A
    duplicate recent `processing` claim remains owned by the earlier run and
    receives no side effects. A stale claim is resumed with its original token
-   only when its phase journal proves every external action is settled.
-   Legacy or delivery-ambiguous stale claims become manual review; never steal
-   or automatically retry them.
+   only when its phase journal proves every external action is settled. A claim
+   receives at most one automatic retry at the same phase; a second stale
+   occurrence becomes manual review instead of refreshing its progress clock.
+   Legacy, retry-exhausted, or delivery-ambiguous stale claims become manual
+   review; never steal or automatically retry them.
    After an operator independently verifies that a legacy claim caused no
    external action, it may be journaled once with
    `inbox_claim.py authorize-legacy-resume --message-id '<gmail-id>'
    --claim-token '<token>' --minimum-age-seconds 600
    --confirmed-no-external-actions`. Never put this command in the cron runbook
    or infer the confirmation from an empty legacy state file.
-2. Only for `acquired:true`, fetch the full Gmail message and run the conservative
+2. Only for `claim.acquired:true`, fetch the full Gmail message and run the conservative
    deterministic header classifier before involving the LLM:
 
    ```bash
@@ -713,9 +725,12 @@ an estimate into an appraisal or replacement value.
 
 ## Phase 3: bind and request owner approval
 
-Create a private temporary directory with Python `tempfile.mkdtemp()` or
-`mktemp -d`; permissions must be `0700`, contained files `0600`, and the name
-must not contain customer data. Generate an opaque ID:
+For cron processing, use only the deterministic per-claim work directory and
+artifact paths returned by `inbox_monitor.py claim-next`. For an interactive
+non-cron estimate, create a private temporary directory with Python
+`tempfile.mkdtemp()` or `mktemp -d`. Directory permissions must be `0700`,
+contained files `0600`, and the name must not contain customer data. Generate
+an opaque ID:
 
 ```bash
 python3 {baseDir}/scripts/approval_guard.py new-id

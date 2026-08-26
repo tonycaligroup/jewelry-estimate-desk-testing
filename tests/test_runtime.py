@@ -577,6 +577,51 @@ class InboxClaimTests(unittest.TestCase):
             self.assertEqual(state["claim_token"], original["claim_token"])
             self.assertEqual(state["resume_count"], 1)
 
+    def test_same_phase_replay_does_not_refresh_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "same-phase")
+            before = claim["last_progress_at"]
+
+            replayed = inbox_claim.advance_phase(
+                root, "same-phase", claim["claim_token"], "claimed"
+            )
+
+            self.assertEqual(replayed["processing_phase"], "claimed")
+            self.assertEqual(replayed["last_progress_at"], before)
+
+    def test_recovery_lease_is_separate_and_one_retry_per_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "bounded-retry")
+            stale = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            path = inbox_claim.claim_path(root, "bounded-retry")
+            claim["last_progress_at"] = stale.isoformat()
+            inbox_claim.write_state(path, claim)
+            retry_at = stale + timedelta(minutes=20)
+
+            resumed, state = inbox_claim.resume_stale(
+                root, "bounded-retry", 600, now=retry_at
+            )
+
+            self.assertTrue(resumed)
+            self.assertEqual(state["last_progress_at"], stale.isoformat())
+            self.assertEqual(state["retry_count_at_phase"], 1)
+            self.assertTrue(inbox_claim.recovery_lease_active(state, retry_at))
+            resumed_again, _ = inbox_claim.resume_stale(
+                root,
+                "bounded-retry",
+                600,
+                now=retry_at + timedelta(seconds=inbox_claim.RECOVERY_LEASE_SECONDS + 1),
+            )
+            self.assertFalse(resumed_again)
+
+            advanced = inbox_claim.advance_phase(
+                root, "bounded-retry", state["claim_token"], "routed"
+            )
+            self.assertEqual(advanced["retry_count_at_phase"], 0)
+            self.assertNotIn("recovery_lease_expires_at", advanced)
+
     def test_stale_ambiguous_action_never_resumes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
@@ -1425,6 +1470,131 @@ class InboxMonitorTests(unittest.TestCase):
             )
             self.assertTrue(resumed)
             self.assertEqual(resumed_state["claim_token"], claim["claim_token"])
+
+    def test_retry_exhausted_stale_claim_requires_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": "retry-exhausted",
+                        "thread_id": "thread-retry-exhausted",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, "retry-exhausted")
+            inbox_monitor.sync_claim(
+                root, "retry-exhausted", {"acquired": True, **claim}
+            )
+            path = inbox_claim.claim_path(claim_root, "retry-exhausted")
+            state = inbox_claim.read_state(path)
+            stale = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+            state["last_progress_at"] = stale
+            state["retry_count_at_phase"] = 1
+            state["recovery_lease_expires_at"] = stale
+            inbox_claim.write_state(path, state)
+
+            items = inbox_monitor.stale_processing_items(
+                root,
+                claim_root,
+                600,
+                now=datetime(2020, 1, 1, 0, 20, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["recovery_action"], "manual_review")
+            self.assertEqual(
+                items[0]["reason_code"], "stale_processing_retry_exhausted"
+            )
+
+    def test_claim_next_returns_canonical_persistent_work_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            message_id = "claim-next-message"
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": message_id,
+                        "thread_id": "claim-next-thread",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+
+            result = inbox_monitor.claim_next(root, claim_root, 600)
+
+            self.assertTrue(result["claim"]["acquired"])
+            self.assertEqual(
+                result["queue_item"]["processing_status"], "processing"
+            )
+            expected = (
+                root.resolve().parent
+                / "work"
+                / inbox_monitor.message_key(message_id)
+            )
+            self.assertEqual(Path(result["work_paths"]["work_dir"]), expected)
+            self.assertEqual(expected.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(
+                Path(result["work_paths"]["candidate_records"]),
+                expected / "candidate-records.json",
+            )
+
+    def test_prepare_run_returns_private_workspace_discovery_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+
+            first = inbox_monitor.prepare_run_work(root)
+            second = inbox_monitor.prepare_run_work(root)
+
+            first_dir = Path(first["run_dir"])
+            self.assertNotEqual(first["run_dir"], second["run_dir"])
+            self.assertEqual(first_dir.parent, root.resolve().parent / "run-work")
+            self.assertEqual(first_dir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(
+                Path(first["discovery_batch"]), first_dir / "discovery-batch.json"
+            )
+
+    def test_terminal_finalize_removes_claim_work_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            message_id = "cleanup-terminal-work"
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": message_id,
+                        "thread_id": "cleanup-terminal-thread",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            claimed = inbox_monitor.claim_next(root, claim_root, 600)
+            work_dir = Path(claimed["work_paths"]["work_dir"])
+            artifact = Path(claimed["work_paths"]["customer_reply"])
+            artifact.write_text("private draft", encoding="utf-8")
+
+            inbox_monitor.finalize_item(
+                root,
+                message_id,
+                claim_root,
+                claimed["claim"]["claim_token"],
+                "manual_review",
+                "test_review",
+            )
+
+            self.assertFalse(work_dir.exists())
 
     def test_finalize_requires_spec_gate_evidence_for_awaiting_specs_inquiry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
