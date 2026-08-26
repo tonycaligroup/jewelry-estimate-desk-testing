@@ -56,7 +56,7 @@ route to the pinned agent.
 - `scripts/kolo_safe.py`: request approvals, notify the owner, upsert records,
   and write idempotent audit events without a shell.
 - `scripts/inbox_claim.py`: prevent overlapping processing in a shared Kolo
-  workspace and persist crash-safe owner-notification state.
+  workspace and persist crash-safe phases and external-action state.
 - `scripts/inbox_monitor.py`: manage two-phase activation, validated monitor
   state, and a durable provider-ID-only discovery queue.
 - `scripts/estimate_record.py`: create, update, and find the private local
@@ -71,6 +71,8 @@ route to the pinned agent.
   one schema-valid estimate record, and its initiating inbox claim.
 - `scripts/gmail_reply.py`: construct a Gmail reply payload bound to the
   original thread and RFC message headers.
+- `scripts/gmail_safe.py`: send a claimed Gmail reply with write-ahead,
+  ambiguity handling, and a durable same-thread provider receipt.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
   key from the exact inbound Gmail message rather than a display name.
 - `templates/shop-profile.json`: runtime profile template.
@@ -303,15 +305,25 @@ For each returned message:
 
    ```bash
    python3 {baseDir}/scripts/inbox_claim.py claim \
-     --message-id '<gmail-id>' > "$WORK/claim-result.json"
+     --message-id '<gmail-id>' --resume-stale-after-seconds 600 \
+     > "$WORK/claim-result.json"
    python3 {baseDir}/scripts/inbox_monitor.py sync-claim \
      --message-id '<gmail-id>' --claim-result "$WORK/claim-result.json"
    ```
 
    `claim` returns exit 0 for both `acquired:true` and `acquired:false`.
    A duplicate `processed` or `manual_review` claim completes the queue item. A
-   duplicate `processing` claim remains owned by the earlier run and receives no
-   side effects; reconcile it manually if stale. Never auto-steal a claim.
+   duplicate recent `processing` claim remains owned by the earlier run and
+   receives no side effects. A stale claim is resumed with its original token
+   only when its phase journal proves every external action is settled.
+   Legacy or delivery-ambiguous stale claims become manual review; never steal
+   or automatically retry them.
+   After an operator independently verifies that a legacy claim caused no
+   external action, it may be journaled once with
+   `inbox_claim.py authorize-legacy-resume --message-id '<gmail-id>'
+   --claim-token '<token>' --minimum-age-seconds 600
+   --confirmed-no-external-actions`. Never put this command in the cron runbook
+   or infer the confirmation from an empty legacy state file.
 2. Only for `acquired:true`, fetch the full Gmail message and run the conservative
    deterministic header classifier before involving the LLM:
 
@@ -337,6 +349,8 @@ For each returned message:
    ```bash
    python3 {baseDir}/scripts/gmail_route.py \
      "$WORK/gmail-message.json" '<profile-outbound-mailbox>' "$WORK/route.json"
+   python3 {baseDir}/scripts/inbox_claim.py advance-phase \
+     --message-id '<gmail-id>' --claim-token '<claim-token>' --phase routed
    ```
 
 4. A thread is Kolo-owned only when one schema-valid estimate record matches the
@@ -360,6 +374,8 @@ For each returned message:
    `owned_manual_review` must use the combined durable manual-review command in
    step 6 and must not send to the customer. `declined` and `dormant` records
    retain ownership but require manual review rather than a new estimate.
+   For every non-review decision, advance the claim to `ownership_confirmed`
+   after this helper succeeds.
 
    For `new_inquiry`, create the minimal ownership record before drafting or
    sending any customer response and before finishing the claim:
@@ -409,6 +425,12 @@ For each returned message:
    writes:
 
    ```bash
+   python3 {baseDir}/scripts/inbox_claim.py advance-phase \
+     --message-id '<gmail-id>' --claim-token '<claim-token>' \
+     --phase work_persisted
+   python3 {baseDir}/scripts/inbox_claim.py advance-phase \
+     --message-id '<gmail-id>' --claim-token '<claim-token>' \
+     --phase ready_to_finalize
    python3 {baseDir}/scripts/inbox_monitor.py finalize \
      --message-id '<gmail-id>' \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
@@ -455,6 +477,15 @@ For each returned message:
    only for discovery. Repeating the same terminal outcome with the same token
    is a successful no-op. A different token, outcome, or reason remains an
    error. Any impossible mismatch becomes manual review—never a customer send.
+
+   After the queue loop returns no item, run:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py assert-settled
+   ```
+
+   A nonzero result means the run is incomplete. Never return `ok` or
+   `NO_REPLY` while any queue item remains `processing`.
 
    When the owner asks to see those reviews, run:
 
@@ -512,13 +543,20 @@ experience.
    - `In-Reply-To` header (original Message-ID)
    - `References` header (includes original Message-ID)
 
-5. You send that JSON unchanged through the Maton gateway:
+5. You send that JSON unchanged only through the claimed delivery wrapper:
    ```bash
-   curl -X POST "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send" \
-     -H "Authorization: Bearer $MATON_API_KEY" \
-     -H "Content-Type: application/json" \
-     -d "@$WORK/gmail-send.json"
+   python3 {baseDir}/scripts/gmail_safe.py send-reply-claimed \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --message-id '<gmail-id>' --claim-token '<claim-token>' \
+     --delivery-key 'customer_reply:<jed-id>:<gmail-id>' \
+     --payload "$WORK/gmail-send.json" \
+     --provider-response "$WORK/gmail-provider-response.json"
    ```
+
+   This wrapper writes `pending` before provider invocation and stores the
+   accepted provider message and thread IDs after success. Repeating a `sent`
+   action reconstructs the receipt without sending again. `pending` or
+   `uncertain` is never retried automatically.
 
 **If you cannot complete all 5 steps, you cannot send the email. Stop and recover.**
 
@@ -622,12 +660,17 @@ Create the immutable approval request:
 ```bash
 python3 {baseDir}/scripts/approval_guard.py create \
   "$WORK/current-state.json" "$WORK/approval-request.json"
-python3 {baseDir}/scripts/kolo_safe.py request-approval \
+python3 {baseDir}/scripts/kolo_safe.py request-approval-claimed \
+  --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+  --message-id '<gmail-id>' --claim-token '<claim-token>' \
+  --action-key 'approval_request:<jed-id>:<gmail-id>' \
   --estimate-id '<jed-id>' \
   --details "$WORK/approval-request.json" \
   --session-key '<session-key>'
-python3 {baseDir}/scripts/kolo_safe.py notify-owner --estimate-id '<jed-id>'
 ```
+
+The claimed approval request is the owner-facing Kolo action. Do not add a
+second unjournaled `notify-owner` call for the same approval-ready event.
 
 Get the session key from `sessions_list`. The owner notification contains only
 the opaque estimate ID. Never insert customer text into CLI arguments.

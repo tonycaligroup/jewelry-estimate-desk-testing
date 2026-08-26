@@ -27,6 +27,14 @@ from typing import Any, Iterator
 SCHEMA_VERSION = 1
 TERMINAL_STATUSES = {"processed", "manual_review"}
 NOTIFICATION_STATUSES = {"pending", "sent", "failed_pre_delivery", "uncertain"}
+PROCESSING_PHASES = {
+    "claimed": 0,
+    "routed": 1,
+    "ownership_confirmed": 2,
+    "work_persisted": 3,
+    "ready_to_finalize": 4,
+}
+EXTERNAL_ACTION_STATUSES = NOTIFICATION_STATUSES
 
 
 def default_claim_root() -> Path:
@@ -80,6 +88,10 @@ def validate_state(state: Any) -> dict[str, Any]:
         "finished_at",
         "reason_code",
         "owner_notification",
+        "processing_phase",
+        "last_progress_at",
+        "resume_count",
+        "external_actions",
     }
     required = {"schema_version", "message_id_sha256", "claim_token", "status", "claimed_at"}
     if not required.issubset(state) or not set(state).issubset(allowed):
@@ -116,6 +128,61 @@ def validate_state(state: Any) -> dict[str, Any]:
             raise ValueError("invalid owner notification key")
         if type(notification.get("attempts")) is not int or notification["attempts"] < 1:
             raise ValueError("invalid owner notification attempts")
+    phase = state.get("processing_phase")
+    if phase is not None and phase not in PROCESSING_PHASES:
+        raise ValueError("invalid processing phase")
+    if "last_progress_at" in state and (
+        not isinstance(state["last_progress_at"], str) or not state["last_progress_at"]
+    ):
+        raise ValueError("invalid last_progress_at")
+    if "resume_count" in state and (
+        type(state["resume_count"]) is not int or state["resume_count"] < 0
+    ):
+        raise ValueError("invalid resume_count")
+    actions = state.get("external_actions")
+    if actions is not None:
+        if not isinstance(actions, dict):
+            raise ValueError("external_actions must be an object")
+        for key, action in actions.items():
+            if not re.fullmatch(r"[A-Za-z0-9_.:@-]{1,200}", key):
+                raise ValueError("invalid external action key")
+            required_action_fields = {
+                "category",
+                "binding_sha256",
+                "status",
+                "attempts",
+                "updated_at",
+            }
+            if (
+                not isinstance(action, dict)
+                or not required_action_fields.issubset(action)
+                or not set(action).issubset(
+                    required_action_fields | {"provider_message_id", "provider_thread_id"}
+                )
+            ):
+                raise ValueError("external action contains missing or unsupported fields")
+            if action.get("category") not in {
+                "customer_delivery",
+                "approval_request",
+            }:
+                raise ValueError("invalid external action category")
+            if not isinstance(action.get("binding_sha256"), str) or not re.fullmatch(
+                r"sha256:[0-9a-f]{64}", action["binding_sha256"]
+            ):
+                raise ValueError("invalid external action binding")
+            if action.get("status") not in EXTERNAL_ACTION_STATUSES:
+                raise ValueError("invalid external action status")
+            if type(action.get("attempts")) is not int or action["attempts"] < 1:
+                raise ValueError("invalid external action attempts")
+            if not isinstance(action.get("updated_at"), str) or not action["updated_at"]:
+                raise ValueError("invalid external action updated_at")
+            for receipt_field in ("provider_message_id", "provider_thread_id"):
+                if receipt_field in action and (
+                    not isinstance(action[receipt_field], str)
+                    or not action[receipt_field]
+                    or len(action[receipt_field]) > 512
+                ):
+                    raise ValueError(f"invalid external action {receipt_field}")
     return state
 
 
@@ -154,6 +221,9 @@ def acquire(root: Path, message_id: str) -> tuple[bool, dict[str, Any]]:
         "claim_token": token,
         "status": "processing",
         "claimed_at": datetime.now(timezone.utc).isoformat(),
+        "processing_phase": "claimed",
+        "last_progress_at": datetime.now(timezone.utc).isoformat(),
+        "resume_count": 0,
     }
     try:
         path.mkdir(mode=0o700)
@@ -161,6 +231,212 @@ def acquire(root: Path, message_id: str) -> tuple[bool, dict[str, Any]]:
         return False, read_state(path)
     write_state(path, state)
     return True, state
+
+
+def state_timestamp(state: dict[str, Any]) -> datetime:
+    raw = state.get("last_progress_at", state.get("claimed_at"))
+    try:
+        value = datetime.fromisoformat(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("claim progress timestamp is invalid") from exc
+    if value.tzinfo is None:
+        raise ValueError("claim progress timestamp must include timezone")
+    return value
+
+
+def has_ambiguous_external_action(state: dict[str, Any]) -> bool:
+    notification = state.get("owner_notification")
+    if isinstance(notification, dict) and notification.get("status") in {
+        "pending",
+        "uncertain",
+    }:
+        return True
+    return any(
+        action.get("status") in {"pending", "uncertain"}
+        for action in state.get("external_actions", {}).values()
+    )
+
+
+def resume_stale(
+    root: Path,
+    message_id: str,
+    minimum_age_seconds: int,
+    now: datetime | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """Resume one stale claim only when every external action is settled."""
+    if type(minimum_age_seconds) is not int or minimum_age_seconds < 1:
+        raise ValueError("minimum_age_seconds must be a positive integer")
+    current = datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("status") != "processing":
+            return False, state
+        if (current - state_timestamp(state)).total_seconds() < minimum_age_seconds:
+            return False, state
+        # Claims created before the phase journal cannot prove that an
+        # unrecorded external action did not happen.
+        if state.get("processing_phase") not in PROCESSING_PHASES:
+            return False, state
+        if has_ambiguous_external_action(state):
+            return False, state
+        state["resume_count"] = state.get("resume_count", 0) + 1
+        state["last_progress_at"] = current.isoformat()
+        write_state(path, state)
+        return True, state
+
+
+def authorize_legacy_resume(
+    root: Path,
+    message_id: str,
+    token: str,
+    minimum_age_seconds: int,
+    confirmed_no_external_actions: bool,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Journal one legacy claim after a human verifies that it caused no effects.
+
+    This is intentionally separate from automatic stale recovery. The cron must
+    never infer that a pre-journal claim is safe merely because its state file
+    lacks action records.
+    """
+    if confirmed_no_external_actions is not True:
+        raise ValueError("explicit no-external-actions confirmation is required")
+    if type(minimum_age_seconds) is not int or minimum_age_seconds < 1:
+        raise ValueError("minimum_age_seconds must be a positive integer")
+    current = datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        if state.get("status") != "processing":
+            raise ValueError("only a processing legacy claim can be authorized")
+        if state.get("processing_phase") in PROCESSING_PHASES:
+            raise ValueError("claim already has a phase journal")
+        if (current - state_timestamp(state)).total_seconds() < minimum_age_seconds:
+            raise ValueError("legacy claim is not stale enough for manual authorization")
+        if state.get("owner_notification") is not None or state.get(
+            "external_actions"
+        ):
+            raise ValueError("legacy claim contains action evidence; manual review required")
+        state["processing_phase"] = "claimed"
+        state["last_progress_at"] = current.isoformat()
+        state["resume_count"] = state.get("resume_count", 0) + 1
+        write_state(path, state)
+        return state
+
+
+def advance_phase(
+    root: Path, message_id: str, token: str, phase: str
+) -> dict[str, Any]:
+    if phase not in PROCESSING_PHASES:
+        raise ValueError("invalid processing phase")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        if state.get("status") != "processing":
+            raise ValueError("only processing claims can advance")
+        current = state.get("processing_phase", "claimed")
+        if current not in PROCESSING_PHASES:
+            raise ValueError("legacy claim requires manual recovery")
+        if PROCESSING_PHASES[phase] < PROCESSING_PHASES[current]:
+            return state
+        state["processing_phase"] = phase
+        state["last_progress_at"] = datetime.now(timezone.utc).isoformat()
+        write_state(path, state)
+        return state
+
+
+def acquire_external_action(
+    root: Path,
+    message_id: str,
+    token: str,
+    action_key: str,
+    category: str,
+    binding_sha256: str,
+) -> tuple[bool, dict[str, Any]]:
+    if not re.fullmatch(r"[A-Za-z0-9_.:@-]{1,200}", action_key):
+        raise ValueError("invalid external action key")
+    if category not in {"customer_delivery", "approval_request"}:
+        raise ValueError("invalid external action category")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", binding_sha256):
+        raise ValueError("invalid external action binding")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        if state.get("status") != "processing":
+            raise ValueError("external actions require a processing claim")
+        actions = state.setdefault("external_actions", {})
+        prior = actions.get(action_key)
+        attempts = 1
+        if prior is not None:
+            if (
+                prior.get("category") != category
+                or prior.get("binding_sha256") != binding_sha256
+            ):
+                raise ValueError("external action binding changed")
+            if prior.get("status") == "failed_pre_delivery" and prior.get("attempts") == 1:
+                attempts = 2
+            elif prior.get("status") in {"pending", "sent", "uncertain"}:
+                return False, state
+            else:
+                raise ValueError(f"external action is already {prior.get('status')}")
+        now = datetime.now(timezone.utc).isoformat()
+        actions[action_key] = {
+            "category": category,
+            "binding_sha256": binding_sha256,
+            "status": "pending",
+            "attempts": attempts,
+            "updated_at": now,
+        }
+        state["last_progress_at"] = now
+        write_state(path, state)
+        return True, state
+
+
+def finish_external_action(
+    root: Path,
+    message_id: str,
+    token: str,
+    action_key: str,
+    status: str,
+    provider_message_id: str | None = None,
+    provider_thread_id: str | None = None,
+) -> dict[str, Any]:
+    if status not in {"sent", "failed_pre_delivery", "uncertain"}:
+        raise ValueError("invalid terminal external action status")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        action = state.get("external_actions", {}).get(action_key)
+        if not isinstance(action, dict) or action.get("status") != "pending":
+            raise ValueError("external action is not pending")
+        now = datetime.now(timezone.utc).isoformat()
+        if action.get("category") == "customer_delivery" and status == "sent":
+            for value, field in (
+                (provider_message_id, "provider_message_id"),
+                (provider_thread_id, "provider_thread_id"),
+            ):
+                if not isinstance(value, str) or not value or len(value) > 512:
+                    raise ValueError(f"{field} is required for sent customer delivery")
+            action["provider_message_id"] = provider_message_id
+            action["provider_thread_id"] = provider_thread_id
+        action["status"] = status
+        action["updated_at"] = now
+        state["last_progress_at"] = now
+        write_state(path, state)
+        return state
 
 
 def finish(
@@ -198,10 +474,21 @@ def finish(
             raise ValueError(
                 f"claim already has conflicting terminal outcome {state.get('status')}"
             )
+        if status == "processed":
+            if state.get("processing_phase") != "ready_to_finalize":
+                raise ValueError(
+                    "processing claim is not ready_to_finalize; refusing processed outcome"
+                )
+            if has_ambiguous_external_action(state):
+                raise ValueError(
+                    "processing claim has an ambiguous external action; "
+                    "refusing processed outcome"
+                )
         state["status"] = status
         if reason_code is not None:
             state["reason_code"] = reason_code
         state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        state["last_progress_at"] = state["finished_at"]
         write_state(path, state)
         return state
 
@@ -231,12 +518,14 @@ def acquire_notification(
                 return False, state
             else:
                 raise ValueError(f"notification is already {prior.get('status')}")
+        now = datetime.now(timezone.utc).isoformat()
         state["owner_notification"] = {
             "key": notification_key,
             "status": "pending",
             "attempts": attempts,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": now,
         }
+        state["last_progress_at"] = now
         write_state(path, state)
         return True, state
 
@@ -267,8 +556,10 @@ def finish_notification(
         notification = state.get("owner_notification")
         if not isinstance(notification, dict) or notification.get("status") != "pending":
             raise ValueError("notification is not pending")
+        now = datetime.now(timezone.utc).isoformat()
         notification["status"] = status
-        notification["updated_at"] = datetime.now(timezone.utc).isoformat()
+        notification["updated_at"] = now
+        state["last_progress_at"] = now
         write_state(path, state)
         return state
 
@@ -281,6 +572,7 @@ def reconcile_notification(root: Path, message_id: str) -> dict[str, Any]:
         if isinstance(notification, dict) and notification.get("status") == "pending":
             notification["status"] = "uncertain"
             notification["updated_at"] = datetime.now(timezone.utc).isoformat()
+            state["last_progress_at"] = notification["updated_at"]
             write_state(path, state)
         return state
 
@@ -318,6 +610,7 @@ def reconcile_stale_notifications(
                 continue
             notification["status"] = "uncertain"
             notification["updated_at"] = current.isoformat()
+            state["last_progress_at"] = notification["updated_at"]
             write_state(path, state)
             summary["reconciled"] += 1
     return summary
@@ -329,6 +622,18 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     claim = sub.add_parser("claim")
     claim.add_argument("--message-id", required=True)
+    claim.add_argument("--resume-stale-after-seconds", type=int)
+    phase = sub.add_parser("advance-phase")
+    phase.add_argument("--message-id", required=True)
+    phase.add_argument("--claim-token", required=True)
+    phase.add_argument("--phase", choices=tuple(PROCESSING_PHASES), required=True)
+    authorize = sub.add_parser("authorize-legacy-resume")
+    authorize.add_argument("--message-id", required=True)
+    authorize.add_argument("--claim-token", required=True)
+    authorize.add_argument("--minimum-age-seconds", type=int, required=True)
+    authorize.add_argument(
+        "--confirmed-no-external-actions", action="store_true", required=True
+    )
     for name in ("complete", "fail"):
         command = sub.add_parser(name)
         command.add_argument("--message-id", required=True)
@@ -354,7 +659,38 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "claim":
             acquired, state = acquire(args.root, args.message_id)
-            print(json.dumps({"acquired": acquired, **state}, sort_keys=True))
+            resumed = False
+            if (
+                not acquired
+                and args.resume_stale_after_seconds is not None
+                and state.get("status") == "processing"
+            ):
+                acquired, state = resume_stale(
+                    args.root, args.message_id, args.resume_stale_after_seconds
+                )
+                resumed = acquired
+            print(
+                json.dumps(
+                    {"acquired": acquired, "resumed": resumed, **state},
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "advance-phase":
+            state = advance_phase(
+                args.root, args.message_id, args.claim_token, args.phase
+            )
+            print(json.dumps(state, sort_keys=True))
+            return 0
+        if args.command == "authorize-legacy-resume":
+            state = authorize_legacy_resume(
+                args.root,
+                args.message_id,
+                args.claim_token,
+                args.minimum_age_seconds,
+                args.confirmed_no_external_actions,
+            )
+            print(json.dumps(state, sort_keys=True))
             return 0
         if args.command == "notification-begin":
             state = begin_notification(
