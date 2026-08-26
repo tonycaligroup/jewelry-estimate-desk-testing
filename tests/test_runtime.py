@@ -2147,6 +2147,67 @@ class EstimateRecordTests(unittest.TestCase):
             updated = estimate_record.persist_record(root, stale_update)
             self.assertEqual(updated["spec_gate_reply"], first["spec_gate_reply"])
 
+    def test_followup_evidence_is_append_only_and_bound_to_source_and_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                estimate_record.record_followup_sent(
+                    root,
+                    record["estimate_id"],
+                    "customer-reply-1",
+                    "Please share the remaining details.",
+                    {"id": "followup-id", "threadId": "wrong-thread"},
+                )
+            first = estimate_record.record_followup_sent(
+                root,
+                record["estimate_id"],
+                "customer-reply-1",
+                "Please share the remaining details.",
+                {"id": "followup-id", "threadId": "gmail-thread"},
+            )
+            duplicate = estimate_record.record_followup_sent(
+                root,
+                record["estimate_id"],
+                "customer-reply-1",
+                "Please share the remaining details.",
+                {"id": "followup-id", "threadId": "gmail-thread"},
+            )
+            self.assertEqual(duplicate, first)
+            self.assertEqual(len(first["followup_replies"]), 1)
+            self.assertRegex(
+                first["followup_replies"][0]["source_message_id_sha256"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            with self.assertRaisesRegex(ValueError, "conflicting"):
+                estimate_record.record_followup_sent(
+                    root,
+                    record["estimate_id"],
+                    "customer-reply-1",
+                    "A changed body.",
+                    {"id": "different-id", "threadId": "gmail-thread"},
+                )
+            second = estimate_record.record_followup_sent(
+                root,
+                record["estimate_id"],
+                "customer-reply-2",
+                "One more detail is needed.",
+                {"id": "followup-id-2", "threadId": "gmail-thread"},
+            )
+            self.assertEqual(len(second["followup_replies"]), 2)
+
+            stale_update = dict(record)
+            stale_update["status"] = "pending_approval"
+            preserved = estimate_record.persist_record(root, stale_update)
+            self.assertEqual(preserved["followup_replies"], second["followup_replies"])
+
+            changed = json.loads(json.dumps(preserved))
+            changed["followup_replies"][0]["provider_message_id"] = "tampered"
+            with self.assertRaisesRegex(ValueError, "immutable"):
+                estimate_record.persist_record(root, changed)
+
     def test_second_record_cannot_claim_same_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "records"
