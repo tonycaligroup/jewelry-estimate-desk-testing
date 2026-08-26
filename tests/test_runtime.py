@@ -1045,6 +1045,74 @@ class InboxMonitorTests(unittest.TestCase):
                     "missing_thread_ownership",
                 )
 
+    def test_finalize_requires_spec_gate_evidence_for_awaiting_specs_inquiry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            record_root = Path(directory) / "records"
+            message_id = "new-inquiry-needing-specs"
+            thread_id = "new-inquiry-thread"
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": message_id,
+                        "thread_id": thread_id,
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, message_id)
+            inbox_monitor.sync_claim(root, message_id, {"acquired": True, **claim})
+            route = {
+                "channel": "gmail",
+                "mailbox": "sales@example.com",
+                "recipient": "customer@example.net",
+                "identity_key": gmail_route.email_identity_key("customer@example.net"),
+                "gmail_message_id": message_id,
+                "thread_id": thread_id,
+                "original_message_id": "<new-inquiry@example.net>",
+                "original_subject": "Custom inquiry",
+                "references": [],
+            }
+            record = estimate_record.create_initial_record(record_root, route, 1_100)
+
+            with self.assertRaisesRegex(ValueError, "lacks durable spec-gate"):
+                inbox_monitor.finalize_item(
+                    root,
+                    message_id,
+                    claim_root,
+                    claim["claim_token"],
+                    "processed",
+                    record_root=record_root,
+                )
+            self.assertEqual(
+                inbox_claim.read_state(inbox_claim.claim_path(claim_root, message_id))[
+                    "status"
+                ],
+                "processing",
+            )
+
+            persisted = estimate_record.record_spec_gate_sent(
+                record_root,
+                record["estimate_id"],
+                "Could you share the ring size?",
+                {"id": "provider-reply-id", "threadId": thread_id},
+            )
+            self.assertEqual(persisted["spec_gate_reply"]["status"], "sent")
+            self.assertNotIn("Could you share", json.dumps(persisted))
+            completed = inbox_monitor.finalize_item(
+                root,
+                message_id,
+                claim_root,
+                claim["claim_token"],
+                "processed",
+                record_root=record_root,
+            )
+            self.assertEqual(completed["processing_status"], "processed")
+
     def test_existing_schema_one_queue_item_remains_readable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.active_root(directory)
@@ -1552,6 +1620,48 @@ class EstimateRecordTests(unittest.TestCase):
             changed["route"]["recipient"] = "wrong@example.net"
             with self.assertRaises(ValueError):
                 estimate_record.persist_record(root, changed)
+
+    def test_spec_gate_evidence_is_same_thread_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                estimate_record.record_spec_gate_sent(
+                    root,
+                    record["estimate_id"],
+                    "Please share the missing details.",
+                    {"id": "provider-id", "threadId": "wrong-thread"},
+                )
+            first = estimate_record.record_spec_gate_sent(
+                root,
+                record["estimate_id"],
+                "Please share the missing details.",
+                {"id": "provider-id", "threadId": "gmail-thread"},
+            )
+            second = estimate_record.record_spec_gate_sent(
+                root,
+                record["estimate_id"],
+                "Please share the missing details.",
+                {"id": "provider-id", "threadId": "gmail-thread"},
+            )
+            self.assertEqual(second, first)
+            self.assertRegex(
+                first["spec_gate_reply"]["body_sha256"], r"^sha256:[0-9a-f]{64}$"
+            )
+            with self.assertRaisesRegex(ValueError, "conflicting"):
+                estimate_record.record_spec_gate_sent(
+                    root,
+                    record["estimate_id"],
+                    "Different reply body.",
+                    {"id": "provider-id-2", "threadId": "gmail-thread"},
+                )
+
+            stale_update = dict(record)
+            stale_update["status"] = "pending_approval"
+            updated = estimate_record.persist_record(root, stale_update)
+            self.assertEqual(updated["spec_gate_reply"], first["spec_gate_reply"])
 
     def test_second_record_cannot_claim_same_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

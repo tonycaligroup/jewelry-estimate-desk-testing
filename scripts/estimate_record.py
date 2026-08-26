@@ -11,6 +11,7 @@ import os
 import secrets
 import sys
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -120,6 +121,14 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
             route_ownership.validate_record(existing)
             if existing["route"] != record["route"]:
                 raise ValueError("estimate route is immutable")
+            existing_reply = existing.get("spec_gate_reply")
+            proposed_reply = record.get("spec_gate_reply")
+            if existing_reply is not None:
+                if proposed_reply is not None and proposed_reply != existing_reply:
+                    raise ValueError("spec-gate send evidence is immutable")
+                if proposed_reply is None:
+                    record = dict(record)
+                    record["spec_gate_reply"] = existing_reply
         write_object(path, record)
     return record
 
@@ -157,6 +166,84 @@ def lookup_thread(root: Path, route: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
+def record_spec_gate_sent(
+    root: Path,
+    estimate_id: str,
+    reply_body: str,
+    provider_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist privacy-minimal Gmail evidence for the initial specification reply."""
+    if not reply_body.strip():
+        raise ValueError("spec-gate reply body must not be empty")
+    provider_message_id = provider_response.get("id")
+    provider_thread_id = provider_response.get("threadId")
+    for value, field in (
+        (provider_message_id, "provider response id"),
+        (provider_thread_id, "provider response threadId"),
+    ):
+        if not isinstance(value, str) or not value or len(value) > 512:
+            raise ValueError(f"{field} must contain 1-512 characters")
+        if any(ord(character) < 33 or ord(character) == 127 for character in value):
+            raise ValueError(f"{field} contains invalid characters")
+
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record["status"] != "awaiting_specs":
+            raise ValueError("spec-gate evidence requires awaiting_specs status")
+        if provider_thread_id != record["route"]["thread_id"]:
+            raise ValueError("provider response threadId does not match the owned thread")
+        evidence = {
+            "status": "sent",
+            "provider_message_id": provider_message_id,
+            "thread_id": provider_thread_id,
+            "body_sha256": "sha256:"
+            + hashlib.sha256(reply_body.encode("utf-8")).hexdigest(),
+        }
+        existing = record.get("spec_gate_reply")
+        if existing is not None:
+            comparable = dict(existing) if isinstance(existing, dict) else existing
+            if isinstance(comparable, dict):
+                comparable.pop("sent_at", None)
+            if comparable == evidence:
+                return record
+            raise ValueError("conflicting spec-gate send evidence already exists")
+        evidence["sent_at"] = datetime.now(timezone.utc).isoformat()
+        record["spec_gate_reply"] = evidence
+        write_object(path, record)
+        return record
+
+
+def require_initial_reply_evidence(root: Path, message_id: str) -> None:
+    """Refuse completion of an awaiting-specs inquiry without same-thread send proof."""
+    matches: list[dict[str, Any]] = []
+    if root.exists():
+        with record_lock(root):
+            for path in sorted(root.glob("jed-*.json")):
+                record = read_object(path)
+                route_ownership.validate_record(record)
+                if record["route"]["gmail_message_id"] == message_id:
+                    matches.append(record)
+    if len(matches) > 1:
+        raise ValueError("multiple estimate records match the initiating Gmail message")
+    if not matches or matches[0]["status"] != "awaiting_specs":
+        return
+    record = matches[0]
+    evidence = record.get("spec_gate_reply")
+    if not isinstance(evidence, dict) or evidence.get("status") != "sent":
+        raise ValueError(
+            "awaiting_specs inquiry lacks durable spec-gate send evidence; "
+            "refusing processed outcome"
+        )
+    if evidence.get("thread_id") != record["route"]["thread_id"]:
+        raise ValueError("spec-gate send evidence is bound to the wrong Gmail thread")
+    if not isinstance(evidence.get("provider_message_id"), str) or not evidence[
+        "provider_message_id"
+    ]:
+        raise ValueError("spec-gate send evidence lacks a provider message ID")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -172,6 +259,12 @@ def main(argv: list[str] | None = None) -> int:
     lookup.add_argument("route", type=Path)
     lookup.add_argument("--record-root", type=Path, default=default_record_root())
     lookup.add_argument("--output", type=Path, required=True)
+    spec_gate = sub.add_parser("record-spec-gate-sent")
+    spec_gate.add_argument("--estimate-id", required=True)
+    spec_gate.add_argument("--reply-body", type=Path, required=True)
+    spec_gate.add_argument("--provider-response", type=Path, required=True)
+    spec_gate.add_argument("--record-root", type=Path, default=default_record_root())
+    spec_gate.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "create-inquiry":
@@ -183,10 +276,19 @@ def main(argv: list[str] | None = None) -> int:
             write_object(args.output, record)
         elif args.command == "upsert":
             record = persist_record(args.record_root, read_object(args.record))
-        else:
+        elif args.command == "lookup-thread":
             records = lookup_thread(args.record_root, read_object(args.route))
             write_object(args.output, records)
             record = {"candidates": len(records)}
+        else:
+            record = record_spec_gate_sent(
+                args.record_root,
+                args.estimate_id,
+                args.reply_body.read_text(encoding="utf-8"),
+                read_object(args.provider_response),
+            )
+            if args.output is not None:
+                write_object(args.output, record)
         print(json.dumps(record, ensure_ascii=False, sort_keys=True))
         return 0
     except (OSError, ValueError, json.JSONDecodeError) as exc:
