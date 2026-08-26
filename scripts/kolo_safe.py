@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import inbox_claim
+
 
 ESTIMATE_ID_RE = re.compile(r"^jed-[0-9a-f]{16}$")
 SESSION_KEY_RE = re.compile(r"^agent:[A-Za-z0-9_.:@/-]{1,255}$")
@@ -155,6 +157,33 @@ def run_command(
     return runner(list(argv), check=True, capture_output=True, text=True, shell=False)
 
 
+def notify_owner_claimed(
+    claim_root: Path,
+    message_id: str,
+    claim_token: str,
+    notification_key: str,
+    estimate_id: str,
+    event: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    """Send one claimed-message notification with durable ambiguity tracking."""
+    command = build_notify_owner(estimate_id, event)
+    inbox_claim.begin_notification(
+        claim_root, message_id, claim_token, notification_key
+    )
+    try:
+        result = run_command(command, runner=runner)
+    except (OSError, subprocess.CalledProcessError):
+        # Kolo provides no delivery receipt lookup. Once invocation begins, a
+        # failure is ambiguous and must never be retried automatically.
+        inbox_claim.finish_notification(
+            claim_root, message_id, claim_token, "uncertain"
+        )
+        raise
+    inbox_claim.finish_notification(claim_root, message_id, claim_token, "sent")
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -173,6 +202,15 @@ def main(argv: list[str] | None = None) -> int:
     notify_monitor = sub.add_parser("notify-monitor")
     notify_monitor.add_argument(
         "--event", choices=sorted(MONITOR_NOTIFICATION_MESSAGES), required=True
+    )
+    notify_claimed = sub.add_parser("notify-owner-claimed")
+    notify_claimed.add_argument("--claim-root", type=Path, required=True)
+    notify_claimed.add_argument("--message-id", required=True)
+    notify_claimed.add_argument("--claim-token", required=True)
+    notify_claimed.add_argument("--notification-key", required=True)
+    notify_claimed.add_argument("--estimate-id", required=True)
+    notify_claimed.add_argument(
+        "--event", choices=sorted(OWNER_NOTIFICATION_MESSAGES), required=True
     )
 
     upsert = sub.add_parser("record-upsert")
@@ -199,6 +237,18 @@ def main(argv: list[str] | None = None) -> int:
             command = build_notify_owner(args.estimate_id, args.event)
         elif args.command == "notify-monitor":
             command = build_notify_monitor(args.event)
+        elif args.command == "notify-owner-claimed":
+            result = notify_owner_claimed(
+                args.claim_root,
+                args.message_id,
+                args.claim_token,
+                args.notification_key,
+                args.estimate_id,
+                args.event,
+            )
+            if result.stdout:
+                print(result.stdout, end="")
+            return 0
         elif args.command == "record-upsert":
             command = build_record_upsert(
                 args.record_type, args.external_id, args.payload, args.status
