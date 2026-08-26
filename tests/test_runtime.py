@@ -616,7 +616,16 @@ class GmailReplyTests(unittest.TestCase):
             "Our metal cost is $42 per gram",
             "COGS is $2,100 with a 1.25 markup",
             "Bench labor rate is $125 per hour",
-            "The vendor is Example Stones and our margin is 20%",
+            "The vendor is Example Stones",
+            "Our margin is 20%",
+            "We use a 1.25 multiplier on the base price",
+            "The bench charge for setting is $150",
+            "The stone supplier is Example Gems",
+            "The casting fee is $200",
+            "The per-ounce price of gold is $1,800",
+            "Our jeweler's fee is $500",
+            "Gold is $1,800/oz",
+            "Our jeweler’s charge is $500",
         )
         for body in forbidden:
             with self.subTest(body=body), self.assertRaises(ValueError):
@@ -625,12 +634,18 @@ class GmailReplyTests(unittest.TestCase):
                 customer_content_guard.validate_customer_text(body)
 
     def test_customer_safe_specification_is_allowed(self) -> None:
-        body = (
-            "The design is an 18K white gold ring with a 1.5 carat oval center. "
-            "Your approved estimate is $4,200."
+        allowed = (
+            "The design is an 18K white gold ring with a 1.5 carat oval center. Your approved estimate is $4,200.",
+            "I assume you would like to proceed with the design.",
+            "We assume all measurements are in millimeters.",
+            "The manufacturer provides a warranty on this stone.",
+            "The vendor of this diamond is certified by GIA.",
         )
-        payload = gmail_reply.build_reply(self.route(), body)
-        self.assertEqual(payload["threadId"], self.route()["thread_id"])
+        for body in allowed:
+            with self.subTest(body=body):
+                customer_content_guard.validate_customer_text(body)
+                payload = gmail_reply.build_reply(self.route(), body)
+                self.assertEqual(payload["threadId"], self.route()["thread_id"])
 
 
 class GmailRouteTests(unittest.TestCase):
