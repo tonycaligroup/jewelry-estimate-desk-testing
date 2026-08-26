@@ -171,29 +171,44 @@ def finish(
     reason_code: str | None = None,
 ) -> dict[str, Any]:
     path = claim_path(root, message_id)
-    state = read_state(path)
-    if state.get("claim_token") != token:
-        raise ValueError("claim token does not match")
-    if state.get("status") != "processing":
-        raise ValueError(f"claim is already {state.get('status')}")
-    state["status"] = status
-    if reason_code is not None:
-        if status != "manual_review":
-            raise ValueError("reason_code is allowed only for manual_review")
-        if not reason_code or len(reason_code) > 80 or not all(
+    if status not in TERMINAL_STATUSES:
+        raise ValueError("invalid terminal claim status")
+    if status == "processed" and reason_code is not None:
+        raise ValueError("reason_code is allowed only for manual_review")
+    if status == "manual_review" and (
+        not reason_code
+        or len(reason_code) > 80
+        or not all(
             character.islower() or character.isdigit() or character == "_"
             for character in reason_code
-        ):
-            raise ValueError("reason_code must use 1-80 lowercase letters, digits, or underscores")
-        state["reason_code"] = reason_code
-    state["finished_at"] = datetime.now(timezone.utc).isoformat()
-    write_state(path, state)
-    return state
+        )
+    ):
+        raise ValueError("reason_code must use 1-80 lowercase letters, digits, or underscores")
+
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        if state.get("status") != "processing":
+            same_outcome = state.get("status") == status and (
+                status == "processed" or state.get("reason_code") == reason_code
+            )
+            if same_outcome:
+                return state
+            raise ValueError(
+                f"claim already has conflicting terminal outcome {state.get('status')}"
+            )
+        state["status"] = status
+        if reason_code is not None:
+            state["reason_code"] = reason_code
+        state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        write_state(path, state)
+        return state
 
 
-def begin_notification(
+def acquire_notification(
     root: Path, message_id: str, token: str, notification_key: str
-) -> dict[str, Any]:
+) -> tuple[bool, dict[str, Any]]:
     path = claim_path(root, message_id)
     with state_lock(path):
         state = read_state(path)
@@ -212,6 +227,8 @@ def begin_notification(
             # classifies every post-invocation failure as uncertain.
             if prior.get("status") == "failed_pre_delivery" and prior.get("attempts") == 1:
                 attempts = 2
+            elif prior.get("status") in {"pending", "sent", "uncertain"}:
+                return False, state
             else:
                 raise ValueError(f"notification is already {prior.get('status')}")
         state["owner_notification"] = {
@@ -221,7 +238,20 @@ def begin_notification(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         write_state(path, state)
-        return state
+        return True, state
+
+
+def begin_notification(
+    root: Path, message_id: str, token: str, notification_key: str
+) -> dict[str, Any]:
+    acquired, state = acquire_notification(
+        root, message_id, token, notification_key
+    )
+    if not acquired:
+        raise ValueError(
+            f"notification is already {state['owner_notification']['status']}"
+        )
+    return state
 
 
 def finish_notification(
@@ -302,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("complete", "fail"):
         command = sub.add_parser(name)
         command.add_argument("--message-id", required=True)
-        command.add_argument("--token", required=True)
+        command.add_argument("--claim-token", "--token", dest="claim_token", required=True)
         if name == "fail":
             command.add_argument("--reason-code", required=True)
     begin_notify = sub.add_parser("notification-begin")
@@ -348,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         status = "processed" if args.command == "complete" else "manual_review"
         reason_code = args.reason_code if args.command == "fail" else None
-        state = finish(args.root, args.message_id, args.token, status, reason_code)
+        state = finish(args.root, args.message_id, args.claim_token, status, reason_code)
         print(json.dumps(state, sort_keys=True))
         return 0
     except (OSError, ValueError, json.JSONDecodeError) as exc:

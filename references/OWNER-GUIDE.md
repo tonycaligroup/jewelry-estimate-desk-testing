@@ -138,6 +138,11 @@ Everything I do is written down, including my mistakes.
 - **I time myself** — how many minutes from their email to a decision in your
   hands. If I'm slow somewhere, you'll see where.
 
+If an inbox alert says something needs manual review, ask Kolo: **“Show my
+unresolved Jewelry Estimate Desk reviews.”** Kolo should show a privacy-safe
+review key, reason, and time before retrieving any customer message. An alert
+that only says “open Kolo” is incomplete; you should not have to hunt for it.
+
 ---
 
 ## What I need from you to be any good

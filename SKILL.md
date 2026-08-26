@@ -59,6 +59,8 @@ route to the pinned agent.
   workspace and persist crash-safe owner-notification state.
 - `scripts/inbox_monitor.py`: manage two-phase activation, validated monitor
   state, and a durable provider-ID-only discovery queue.
+- `scripts/estimate_record.py`: create, update, and find the private local
+  estimate records used as the authoritative inbox-routing index.
 - `scripts/cron_config.py`: render the fixed cron message and bind durable
   monitor state to the complete behavior-bearing live Kolo cron configuration.
 - `scripts/gmail_classify.py`: conservatively identify delivery-status and
@@ -340,19 +342,46 @@ For each returned message:
 4. A thread is Kolo-owned only when one schema-valid estimate record matches the
    exact `thread_id`, exact `identity_key`, and initiating Gmail ID, and that
    initiating ID has a valid local claim. A display-name match is irrelevant.
-   Save only the candidate structured records returned by the exact thread
-   lookup to a private JSON array, then run:
+   Build the candidate array only through the private local record store's exact
+   thread lookup, then run the ownership decision:
 
    ```bash
+   python3 {baseDir}/scripts/estimate_record.py lookup-thread \
+     "$WORK/route.json" \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --output "$WORK/candidate-records.json"
    python3 {baseDir}/scripts/route_ownership.py \
-     "$WORK/route.json" "$WORK/candidate-records.json"
+     "$WORK/route.json" "$WORK/candidate-records.json" \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --thread-message-count '<exact-Gmail-thread-message-count>'
    ```
 
-   If the thread contains an earlier message but has no valid ownership record,
-   or records disagree, stop as `manual_review` without sending. If this is the
-   first and only message in the thread, create a new inquiry. `declined` and
-   `dormant` records retain ownership but require manual review rather than a new
-   estimate.
+   Treat the helper decision as authoritative. `manual_review` and
+   `owned_manual_review` must use the combined durable manual-review command in
+   step 6 and must not send to the customer. `declined` and `dormant` records
+   retain ownership but require manual review rather than a new estimate.
+
+   For `new_inquiry`, create the minimal ownership record before drafting or
+   sending any customer response and before finishing the claim:
+
+   ```bash
+   python3 {baseDir}/scripts/estimate_record.py create-inquiry \
+     "$WORK/route.json" \
+     --inbound-timestamp-ms '<Gmail-internalDate-ms>' \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --output "$WORK/inquiry-record.json"
+   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
+     --record-type skill.jewelry_estimate \
+     --external-id '<estimate-id-from-inquiry-record>' \
+     --payload "$WORK/inquiry-record.json" --status awaiting_specs
+   ```
+
+   The local create happens before the Kolo mirror upsert and derives a
+   retry-stable opaque estimate ID from the initiating Gmail ID. Repeating both
+   operations targets the same record. If either persistence operation fails,
+   send nothing and finish as manual review with reason
+   `record_persistence_failed`. A successful initial record is updated through
+   later phases; never create a second estimate record for that thread.
 5. For a valid response on an active estimate, notify the owner at every trust
    stage before any customer response. Bind the alert to an event-specific key
    that includes the event, estimate ID, and Gmail ID:
@@ -365,19 +394,56 @@ For each returned message:
      --event customer-replied --estimate-id '<jed-id>'
    ```
 
-   The wrapper writes `pending` before invoking Kolo and immediately records
-   `sent` after success. Because Kolo has no delivery-receipt query, any command
+   The wrapper writes `pending` before invoking Kolo and records `sent` after
+   successful CLI acceptance; `sent` is not an independent user-visible
+   delivery receipt. Because Kolo has no delivery-receipt query, any command
    failure after invocation is `uncertain`, never a retryable pre-delivery
    failure. A process crash may leave `pending`; the stale reconciler marks it
    `uncertain` after 600 seconds. Never resend `pending` or `uncertain` alerts.
-   Generic mailbox alerts use `kolo_safe.py notify-monitor --event
-   system-actionable` and contain no estimate or customer data.
-6. After authorized processing, finish the claim first, using `complete` or
-   `fail --reason-code <fixed_reason>`. Then call `inbox_monitor.py
-   reconcile-terminal`; the terminal claim is authoritative for processing side
-   effects and the queue is authoritative only for discovery. Any impossible
-   mismatch becomes manual review plus a fixed privacy-safe monitor alert—never
-   a customer send.
+   Generic mailbox alerts tied to a claimed message must never call
+   `notify-monitor` directly.
+6. Use only these combined terminal commands; do not call `inbox_claim.py
+   complete`, `inbox_claim.py fail`, or `reconcile-terminal` separately.
+
+   After successful authorized processing and all required durable record
+   writes:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py finalize \
+     --message-id '<gmail-id>' \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --claim-token '<claim-token>' --outcome processed
+   ```
+
+   For every manual-review decision, persist the terminal claim and queue state
+   before attempting the one privacy-safe owner notification:
+
+   ```bash
+   python3 {baseDir}/scripts/kolo_safe.py manual-review-claimed \
+     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --message-id '<gmail-id>' --claim-token '<claim-token>' \
+     --reason-code '<fixed_reason>'
+   ```
+
+   That notification tells the owner to ask Kolo for unresolved Jewelry
+   Estimate Desk reviews; it contains no customer data. The terminal claim is
+   authoritative for processing side effects and the queue is authoritative
+   only for discovery. Repeating the same terminal outcome with the same token
+   is a successful no-op. A different token, outcome, or reason remains an
+   error. Any impossible mismatch becomes manual review—never a customer send.
+
+   When the owner asks to see those reviews, run:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py manual-reviews
+   ```
+
+   Present the privacy-safe review key, fixed reason, and time. Retrieve message
+   content only after the owner selects an item to review. Only after the owner
+   explicitly resolves it, run `inbox_monitor.py resolve-manual-review
+   --review-key '<review-key>'`; never resolve it from silence or merely because
+   cron announce metadata contains a fallback delivery field.
 
 Kolo records do not provide compare-and-swap. These helpers protect one shared
 workspace but cannot guarantee exclusion across independent hosts. Keep claim
@@ -623,15 +689,20 @@ If a rendering is authorized, read `references/rendering-standards.md` first.
 
 ## Phase 5: records, follow-up, and cleanup
 
-Record the estimate under the opaque estimate ID, never a customer name. The
-record must use `schema_version: 1` and retain the complete validated `route`,
+Update the estimate under the opaque estimate ID created with the initial
+ownership record; never create a replacement ID or use a customer name. The
+private local record is the authoritative routing source and the Kolo record is
+its owner-visible mirror. The record must use `schema_version: 1` and retain the
+complete validated `route`,
 including its email-derived identity key, initiating inbound Gmail message ID,
 thread ID, and original RFC Message-ID. It should also retain the inbound
 timestamp; approval binding hash and approved price; specification and
 assumptions; internal cost sheet; outbound provider message ID; trust stage;
-appointment data; and next action date. Use
-`scripts/kolo_safe.py record-upsert` with JSON files rather than generated shell
-commands.
+appointment data; and next action date. First run
+`scripts/estimate_record.py upsert` with the complete record JSON, then
+mirror that exact JSON through `scripts/kolo_safe.py record-upsert` using record
+type `skill.jewelry_estimate`, the estimate ID as `external-id`, and the same
+status. Never update the Kolo mirror if the authoritative local upsert fails.
 
 After the record is durable, write the corresponding audit event through
 `scripts/kolo_safe.py log-action`. Use an idempotency key composed only of the

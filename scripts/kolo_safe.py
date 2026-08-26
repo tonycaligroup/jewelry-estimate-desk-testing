@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import inbox_claim
+import inbox_monitor
 
 
 ESTIMATE_ID_RE = re.compile(r"^jed-[0-9a-f]{16}$")
@@ -21,6 +22,10 @@ OWNER_NOTIFICATION_MESSAGES = {
     "customer-replied": "Customer replied on estimate {estimate_id}. Open Kolo to review.",
 }
 MONITOR_NOTIFICATION_MESSAGES = {
+    "manual-review": (
+        "Jewelry Estimate Desk has an unresolved manual-review item. "
+        "Ask Kolo to show unresolved Jewelry Estimate Desk reviews."
+    ),
     "system-actionable": "Jewelry Estimate Desk inbox monitor needs attention. Open Kolo to review.",
     "state-error": "Jewelry Estimate Desk inbox monitor state needs attention. Open Kolo to review.",
 }
@@ -168,9 +173,12 @@ def notify_owner_claimed(
 ) -> subprocess.CompletedProcess[str]:
     """Send one claimed-message notification with durable ambiguity tracking."""
     command = build_notify_owner(estimate_id, event)
-    inbox_claim.begin_notification(
+    acquired, state = inbox_claim.acquire_notification(
         claim_root, message_id, claim_token, notification_key
     )
+    if not acquired:
+        status = state["owner_notification"]["status"]
+        return subprocess.CompletedProcess(command, 0, f"notification already {status}\n", "")
     try:
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):
@@ -182,6 +190,63 @@ def notify_owner_claimed(
         raise
     inbox_claim.finish_notification(claim_root, message_id, claim_token, "sent")
     return result
+
+
+def notify_monitor_claimed(
+    claim_root: Path,
+    message_id: str,
+    claim_token: str,
+    notification_key: str,
+    event: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    """Send one generic monitor notification with durable ambiguity tracking."""
+    command = build_notify_monitor(event)
+    acquired, state = inbox_claim.acquire_notification(
+        claim_root, message_id, claim_token, notification_key
+    )
+    if not acquired:
+        status = state["owner_notification"]["status"]
+        return subprocess.CompletedProcess(command, 0, f"notification already {status}\n", "")
+    try:
+        result = run_command(command, runner=runner)
+    except (OSError, subprocess.CalledProcessError):
+        inbox_claim.finish_notification(
+            claim_root, message_id, claim_token, "uncertain"
+        )
+        raise
+    # `sent` records successful CLI acceptance. Kolo exposes no independent
+    # user-visible delivery receipt for this command.
+    inbox_claim.finish_notification(claim_root, message_id, claim_token, "sent")
+    return result
+
+
+def manual_review_claimed(
+    monitor_root: Path,
+    claim_root: Path,
+    message_id: str,
+    claim_token: str,
+    reason_code: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> tuple[dict[str, Any], subprocess.CompletedProcess[str]]:
+    """Persist manual review before attempting its one owner notification."""
+    queue_item = inbox_monitor.finalize_item(
+        monitor_root,
+        message_id,
+        claim_root,
+        claim_token,
+        "manual_review",
+        reason_code,
+    )
+    result = notify_monitor_claimed(
+        claim_root,
+        message_id,
+        claim_token,
+        f"manual_review:{reason_code}:{message_id}",
+        "manual-review",
+        runner=runner,
+    )
+    return queue_item, result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -212,6 +277,20 @@ def main(argv: list[str] | None = None) -> int:
     notify_claimed.add_argument(
         "--event", choices=sorted(OWNER_NOTIFICATION_MESSAGES), required=True
     )
+    notify_monitor_claimed_parser = sub.add_parser("notify-monitor-claimed")
+    notify_monitor_claimed_parser.add_argument("--claim-root", type=Path, required=True)
+    notify_monitor_claimed_parser.add_argument("--message-id", required=True)
+    notify_monitor_claimed_parser.add_argument("--claim-token", required=True)
+    notify_monitor_claimed_parser.add_argument("--notification-key", required=True)
+    notify_monitor_claimed_parser.add_argument(
+        "--event", choices=sorted(MONITOR_NOTIFICATION_MESSAGES), required=True
+    )
+    manual_review_parser = sub.add_parser("manual-review-claimed")
+    manual_review_parser.add_argument("--monitor-root", type=Path, required=True)
+    manual_review_parser.add_argument("--claim-root", type=Path, required=True)
+    manual_review_parser.add_argument("--message-id", required=True)
+    manual_review_parser.add_argument("--claim-token", required=True)
+    manual_review_parser.add_argument("--reason-code", required=True)
 
     upsert = sub.add_parser("record-upsert")
     upsert.add_argument("--record-type", required=True)
@@ -248,6 +327,40 @@ def main(argv: list[str] | None = None) -> int:
             )
             if result.stdout:
                 print(result.stdout, end="")
+            return 0
+        elif args.command == "notify-monitor-claimed":
+            result = notify_monitor_claimed(
+                args.claim_root,
+                args.message_id,
+                args.claim_token,
+                args.notification_key,
+                args.event,
+            )
+            if result.stdout:
+                print(result.stdout, end="")
+            return 0
+        elif args.command == "manual-review-claimed":
+            queue_item, _result = manual_review_claimed(
+                args.monitor_root,
+                args.claim_root,
+                args.message_id,
+                args.claim_token,
+                args.reason_code,
+            )
+            notification = inbox_claim.read_state(
+                inbox_claim.claim_path(args.claim_root, args.message_id)
+            )["owner_notification"]
+            print(
+                json.dumps(
+                    {
+                        "processing_status": queue_item["processing_status"],
+                        "reason_code": queue_item.get("reason_code"),
+                        "notification_status": notification["status"],
+                        "delivery_receipt_available": False,
+                    },
+                    sort_keys=True,
+                )
+            )
             return 0
         elif args.command == "record-upsert":
             command = build_record_upsert(
