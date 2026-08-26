@@ -367,6 +367,17 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertEqual(active["activation_state"], "active")
             self.assertEqual(active["discovery_watermark_ms"], 1_000)
 
+    def test_prepare_is_idempotent_only_for_the_exact_cron(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            first = inbox_monitor.prepare(root, self.capabilities(), self.cron())
+            second = inbox_monitor.prepare(root, self.capabilities(), self.cron())
+            self.assertEqual(second, first)
+            changed = self.cron()
+            changed["schedule"] = "*/10 9-17 * * 1-5"
+            with self.assertRaises(ValueError):
+                inbox_monitor.prepare(root, self.capabilities(), changed)
+
     def test_missing_or_corrupt_active_state_never_reinitializes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "monitor"
@@ -447,6 +458,34 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertEqual(item["discovery_status"], "complete")
             self.assertEqual(item["processing_status"], "manual_review")
             self.assertEqual(item["reason_code"], "uncertain_classification")
+
+    def test_duplicate_processing_claim_keeps_queue_in_processing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": "still-processing",
+                        "thread_id": "thread-processing",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            duplicate = {
+                "acquired": False,
+                "schema_version": 1,
+                "message_id_sha256": inbox_monitor.message_key("still-processing"),
+                "claim_token": "token",
+                "status": "processing",
+                "claimed_at": "2026-08-25T00:00:00+00:00",
+            }
+            item = inbox_monitor.sync_claim(root, "still-processing", duplicate)
+            self.assertEqual(item["discovery_status"], "pending")
+            self.assertEqual(item["processing_status"], "processing")
+            self.assertIsNone(inbox_monitor.next_eligible(root))
 
     def test_failed_enumeration_does_not_advance_watermark(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -723,6 +762,19 @@ class GmailClassificationTests(unittest.TestCase):
         )
         self.assertEqual(result["classification"], "customer_or_uncertain")
 
+    def test_multiple_from_addresses_are_rejected(self) -> None:
+        message = self.message(
+            [
+                {
+                    "name": "From",
+                    "value": "first@example.net, second@example.net",
+                },
+                {"name": "Subject", "value": "Quote request"},
+            ]
+        )
+        with self.assertRaises(ValueError):
+            gmail_classify.classify(message)
+
 
 class RouteOwnershipTests(unittest.TestCase):
     def route(self) -> dict:
@@ -768,6 +820,18 @@ class RouteOwnershipTests(unittest.TestCase):
             result = route_ownership.decide(route, [self.record()], root)
             self.assertEqual(result["decision"], "manual_review")
             self.assertEqual(result["reason_code"], "identity_mismatch")
+
+    def test_two_records_for_one_thread_are_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            self.processed_claim(root)
+            second = self.record()
+            second["estimate_id"] = "jed-fedcba9876543210"
+            result = route_ownership.decide(
+                self.route(), [self.record(), second], root
+            )
+            self.assertEqual(result["decision"], "manual_review")
+            self.assertEqual(result["reason_code"], "ambiguous_thread_ownership")
 
     def test_missing_initiating_claim_never_proves_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
