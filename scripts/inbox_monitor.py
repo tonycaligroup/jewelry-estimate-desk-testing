@@ -523,6 +523,8 @@ def prepare_run_work(root: Path) -> dict[str, str]:
     """Create a private run-scoped path without relying on platform scratch space."""
     load_monitor_state(root)
     run_root = root.resolve().parent / "run-work"
+    if run_root.is_symlink() or (run_root.exists() and not run_root.is_dir()):
+        raise ValueError("run work root is not a private directory")
     run_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(run_root, 0o700)
     run_dir = run_root / secrets.token_hex(12)
@@ -536,6 +538,8 @@ def prepare_run_work(root: Path) -> dict[str, str]:
 def cleanup_run_work(root: Path, discovery_batch: Path) -> None:
     """Best-effort cleanup of a run path created by prepare_run_work."""
     run_root = root.resolve().parent / "run-work"
+    if run_root.is_symlink() or not run_root.is_dir():
+        return
     parent = discovery_batch.parent
     if (
         discovery_batch.name != "discovery-batch.json"
@@ -562,7 +566,12 @@ def prepare_claim_work(
         raise ValueError("queue/claim message hash mismatch")
     if claim.get("status") != "processing":
         raise ValueError("claim work requires a processing claim")
-    work_dir = root.resolve().parent / "work" / item["gmail_message_id_sha256"]
+    work_root = root.resolve().parent / "work"
+    if work_root.is_symlink() or (work_root.exists() and not work_root.is_dir()):
+        raise ValueError("claim work root is not a private directory")
+    work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(work_root, 0o700)
+    work_dir = work_root / item["gmail_message_id_sha256"]
     if work_dir.is_symlink() or (work_dir.exists() and not work_dir.is_dir()):
         raise ValueError("claim work path is not a private directory")
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -575,7 +584,10 @@ def prepare_claim_work(
 
 def cleanup_claim_work(root: Path, message_id: str) -> None:
     """Best-effort removal of customer-bearing artifacts after terminal state."""
-    work_dir = root.resolve().parent / "work" / message_key(message_id)
+    work_root = root.resolve().parent / "work"
+    if work_root.is_symlink() or not work_root.is_dir():
+        return
+    work_dir = work_root / message_key(message_id)
     if work_dir.is_symlink() or not work_dir.is_dir():
         return
     try:

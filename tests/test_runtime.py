@@ -836,6 +836,24 @@ class InboxClaimTests(unittest.TestCase):
             )
             self.assertFalse(resumed)
 
+    def test_migration_does_not_persist_corrupt_resume_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, state = inbox_claim.acquire(root, "corrupt-prebounded")
+            path = inbox_claim.claim_path(root, "corrupt-prebounded")
+            state.pop("phase_entered_at")
+            state.pop("retry_count_at_phase")
+            state["resume_count"] = "one"
+            inbox_claim.write_state(path, state)
+            before = (path / "state.json").read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "resume_count"):
+                inbox_claim.read_state(path)
+
+            self.assertEqual(
+                (path / "state.json").read_text(encoding="utf-8"), before
+            )
+
     def test_notification_write_ahead_crash_becomes_uncertain(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
@@ -1587,6 +1605,36 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertEqual(
                 Path(first["discovery_batch"]), first_dir / "discovery-batch.json"
             )
+
+    def test_claim_work_rejects_symlinked_work_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            message_id = "symlink-work-root"
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": message_id,
+                        "thread_id": "symlink-work-thread",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, message_id)
+            inbox_monitor.sync_claim(
+                root, message_id, {"acquired": True, **claim}
+            )
+            target = Path(directory) / "outside-work"
+            target.mkdir()
+            (root.resolve().parent / "work").symlink_to(
+                target, target_is_directory=True
+            )
+
+            with self.assertRaisesRegex(ValueError, "work root"):
+                inbox_monitor.prepare_claim_work(root, claim_root, message_id)
 
     def test_terminal_finalize_removes_claim_work_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

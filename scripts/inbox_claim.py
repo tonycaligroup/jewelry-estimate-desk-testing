@@ -244,9 +244,14 @@ def read_state(path: Path, attempts: int = 20) -> dict[str, Any]:
         # Pre-bounded-recovery states cannot prove which phase an earlier
         # resume attempted. Treat any prior resume as the one allowed retry;
         # this is conservative and prevents an upgrade from retrying it again.
+        resume_count = state.get("resume_count", 0)
         state["retry_count_at_phase"] = (
             1
-            if state.get("status") == "processing" and state.get("resume_count", 0) > 0
+            if (
+                state.get("status") == "processing"
+                and type(resume_count) is int
+                and resume_count > 0
+            )
             else 0
         )
         migrated = True
@@ -260,7 +265,9 @@ def read_state(path: Path, attempts: int = 20) -> dict[str, Any]:
         )
         migrated = True
     if migrated:
-        write_state(path, state)
+        validated = validate_state(state)
+        write_state(path, validated)
+        return validated
     return validate_state(state)
 
 
