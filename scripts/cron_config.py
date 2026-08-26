@@ -215,7 +215,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "render-message":
-            write_text(args.output, render_message(args.workspace, args.base_dir) + "\n")
+            # This file is consumed verbatim as payload.message. A trailing
+            # newline changes the binding hash and fails canonical validation.
+            write_text(args.output, render_message(args.workspace, args.base_dir))
         elif args.command == "bind-live":
             job = json.loads(args.job.read_text(encoding="utf-8"))
             binding = build_binding(job, args.workspace, args.base_dir)
