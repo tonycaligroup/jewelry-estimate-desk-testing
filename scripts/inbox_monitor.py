@@ -12,14 +12,17 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 import cron_config as cron_config_helper
+import inbox_claim
 
 
 SCHEMA_VERSION = 2
@@ -370,8 +373,15 @@ def validate_queue_item(value: Any) -> dict[str, Any]:
         "processing_status",
         "processing_started_at",
         "reason_code",
+        "review_status",
+        "review_resolved_at",
     }
-    required = allowed - {"processing_started_at", "reason_code"}
+    required = allowed - {
+        "processing_started_at",
+        "reason_code",
+        "review_status",
+        "review_resolved_at",
+    }
     if not required.issubset(value) or not set(value).issubset(allowed):
         raise ValueError("queue item contains missing or unsupported fields")
     message_id = require_provider_id(value.get("gmail_message_id"), "gmail_message_id")
@@ -393,6 +403,18 @@ def validate_queue_item(value: Any) -> dict[str, Any]:
         )
     ):
         raise ValueError("invalid queue reason_code")
+    if "review_status" in value:
+        if value["processing_status"] != "manual_review" or value["review_status"] not in {
+            "open",
+            "resolved",
+        }:
+            raise ValueError("invalid manual-review status")
+    if "review_resolved_at" in value and (
+        value.get("review_status") != "resolved"
+        or not isinstance(value["review_resolved_at"], str)
+        or not value["review_resolved_at"]
+    ):
+        raise ValueError("review_resolved_at requires a resolved manual review")
     if value["processing_status"] in TERMINAL_STATES and value["discovery_status"] != "complete":
         raise ValueError("terminal queue item must have complete discovery_status")
     return value
@@ -520,6 +542,8 @@ def sync_claim(root: Path, message_id: str, claim: Any) -> dict[str, Any]:
         item["discovery_status"] = "complete"
         if isinstance(claim.get("reason_code"), str):
             item["reason_code"] = claim["reason_code"]
+        if status == "manual_review":
+            item.setdefault("review_status", "open")
     else:
         claimed_at = claim.get("claimed_at")
         if not isinstance(claimed_at, str) or not claimed_at:
@@ -540,8 +564,71 @@ def reconcile_terminal(root: Path, message_id: str, claim_root: Path) -> dict[st
     item["discovery_status"] = "complete"
     if isinstance(claim.get("reason_code"), str):
         item["reason_code"] = claim["reason_code"]
+    if status == "manual_review":
+        item.setdefault("review_status", "open")
     atomic_write_json(queue_path(root, message_id), item)
     return item
+
+
+def list_manual_reviews(root: Path) -> list[dict[str, Any]]:
+    reviews: list[dict[str, Any]] = []
+    for item in all_queue_items(root):
+        if item["processing_status"] != "manual_review":
+            continue
+        if item.get("review_status", "open") != "open":
+            continue
+        reviews.append(
+            {
+                "review_key": item["gmail_message_id_sha256"],
+                "reason_code": item.get("reason_code", "unspecified"),
+                "internal_date_ms": item["internal_date_ms"],
+                "review_status": item.get("review_status", "open"),
+            }
+        )
+    return sorted(reviews, key=lambda item: (item["internal_date_ms"], item["review_key"]))
+
+
+def resolve_manual_review(root: Path, review_key: str) -> dict[str, Any]:
+    if not isinstance(review_key, str) or not re.fullmatch(r"[0-9a-f]{64}", review_key):
+        raise ValueError("review_key must be a lowercase SHA-256 value")
+    path = root / "queue" / f"{review_key}.json"
+    with state_lock(root):
+        item = validate_queue_item(read_json(path))
+        if item["processing_status"] != "manual_review":
+            raise ValueError("review item is not manual_review")
+        item["review_status"] = "resolved"
+        item["review_resolved_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_write_json(path, item)
+        return item
+
+
+def finalize_item(
+    root: Path,
+    message_id: str,
+    claim_root: Path,
+    claim_token: str,
+    outcome: str,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    """Idempotently finish one claim and reconcile its durable queue item."""
+    if outcome == "processed":
+        if reason_code is not None:
+            raise ValueError("processed outcome must not include reason_code")
+        status = "processed"
+    elif outcome == "manual_review":
+        if reason_code is None:
+            raise ValueError("manual_review outcome requires reason_code")
+        status = "manual_review"
+    else:
+        raise ValueError("outcome must be processed or manual_review")
+    inbox_claim.finish(
+        claim_root,
+        message_id,
+        claim_token,
+        status,
+        reason_code,
+    )
+    return reconcile_terminal(root, message_id, claim_root)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -570,12 +657,23 @@ def main(argv: list[str] | None = None) -> int:
     discover_parser.add_argument("--window-start-ms", type=int, required=True)
     discover_parser.add_argument("--window-end-ms", type=int, required=True)
     sub.add_parser("next")
+    sub.add_parser("manual-reviews")
+    resolve_review_parser = sub.add_parser("resolve-manual-review")
+    resolve_review_parser.add_argument("--review-key", required=True)
     sync_parser = sub.add_parser("sync-claim")
     sync_parser.add_argument("--message-id", required=True)
     sync_parser.add_argument("--claim-result", type=Path, required=True)
     reconcile_parser = sub.add_parser("reconcile-terminal")
     reconcile_parser.add_argument("--message-id", required=True)
     reconcile_parser.add_argument("--claim-root", type=Path, required=True)
+    finalize_parser = sub.add_parser("finalize")
+    finalize_parser.add_argument("--message-id", required=True)
+    finalize_parser.add_argument("--claim-root", type=Path, required=True)
+    finalize_parser.add_argument("--claim-token", required=True)
+    finalize_parser.add_argument(
+        "--outcome", choices=("processed", "manual_review"), required=True
+    )
+    finalize_parser.add_argument("--reason-code")
 
     args = parser.parse_args(argv)
     try:
@@ -609,10 +707,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "next":
             result = next_eligible(args.root)
+        elif args.command == "manual-reviews":
+            result = list_manual_reviews(args.root)
+        elif args.command == "resolve-manual-review":
+            result = resolve_manual_review(args.root, args.review_key)
         elif args.command == "sync-claim":
             result = sync_claim(args.root, args.message_id, read_json(args.claim_result))
-        else:
+        elif args.command == "reconcile-terminal":
             result = reconcile_terminal(args.root, args.message_id, args.claim_root)
+        else:
+            result = finalize_item(
+                args.root,
+                args.message_id,
+                args.claim_root,
+                args.claim_token,
+                args.outcome,
+                args.reason_code,
+            )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     except (OSError, ValueError, json.JSONDecodeError) as exc:

@@ -49,13 +49,22 @@ def validate_record(record: Any) -> dict[str, Any]:
     return record
 
 
-def decide(route: Any, records: Any, claim_root: Path) -> dict[str, str]:
+def decide(
+    route: Any,
+    records: Any,
+    claim_root: Path,
+    thread_message_count: int | None = None,
+) -> dict[str, str]:
     if not isinstance(route, dict):
         raise ValueError("route must be a JSON object")
     thread_id = require_text(route.get("thread_id"), "route.thread_id")
     identity_key = require_text(route.get("identity_key"), "route.identity_key")
     if not isinstance(records, list):
         raise ValueError("records must be a JSON array")
+    if thread_message_count is not None and (
+        type(thread_message_count) is not int or thread_message_count < 1
+    ):
+        raise ValueError("thread_message_count must be a positive integer")
     try:
         valid_records = [validate_record(record) for record in records]
     except ValueError as exc:
@@ -63,6 +72,13 @@ def decide(route: Any, records: Any, claim_root: Path) -> dict[str, str]:
 
     matches = [record for record in valid_records if record["route"]["thread_id"] == thread_id]
     if not matches:
+        if thread_message_count == 1:
+            return {"decision": "new_inquiry", "reason_code": "first_thread_message"}
+        if thread_message_count is not None:
+            return {
+                "decision": "manual_review",
+                "reason_code": "missing_thread_ownership",
+            }
         return {"decision": "unowned", "reason_code": "no_thread_record"}
     if len(matches) != 1:
         return {"decision": "manual_review", "reason_code": "ambiguous_thread_ownership"}
@@ -101,11 +117,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("route", type=Path)
     parser.add_argument("records", type=Path)
     parser.add_argument("--claim-root", type=Path, default=inbox_claim.default_claim_root())
+    parser.add_argument("--thread-message-count", type=int, required=True)
     args = parser.parse_args(argv)
     try:
         print(
             json.dumps(
-                decide(read_json(args.route), read_json(args.records), args.claim_root),
+                decide(
+                    read_json(args.route),
+                    read_json(args.records),
+                    args.claim_root,
+                    args.thread_message_count,
+                ),
                 sort_keys=True,
             )
         )
