@@ -1500,6 +1500,274 @@ class InboxMonitorTests(unittest.TestCase):
             )
             self.assertEqual(completed["processing_status"], "processed")
 
+    def test_initial_thread_review_still_requires_initial_spec_gate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            record_root = Path(directory) / "records"
+            message_id = "reviewed-initial-inquiry"
+            thread_id = "reviewed-initial-thread"
+            inbox_monitor.discover_complete(
+                root,
+                [{"gmail_message_id": message_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, message_id)
+            inbox_monitor.sync_claim(root, message_id, {"acquired": True, **claim})
+            route = {
+                "channel": "gmail",
+                "mailbox": "sales@example.com",
+                "recipient": "customer@example.net",
+                "identity_key": gmail_route.email_identity_key("customer@example.net"),
+                "gmail_message_id": message_id,
+                "thread_id": thread_id,
+                "original_message_id": "<initial@example.net>",
+                "original_subject": "Custom inquiry",
+                "references": [],
+            }
+            record = estimate_record.create_initial_record(record_root, route, 1_100)
+            estimate_record.record_thread_review(
+                record_root,
+                record["estimate_id"],
+                {
+                    "thread_id": thread_id,
+                    "source_message_id": message_id,
+                    "message_ids": [message_id],
+                    "specification": {"piece_type": "ring"},
+                    "missing_required_fields": ["metal"],
+                },
+            )
+            inbox_claim.advance_phase(
+                claim_root, message_id, claim["claim_token"], "ready_to_finalize"
+            )
+            with self.assertRaisesRegex(ValueError, "spec-gate"):
+                inbox_monitor.finalize_item(
+                    root,
+                    message_id,
+                    claim_root,
+                    claim["claim_token"],
+                    "processed",
+                    record_root=record_root,
+                )
+            estimate_record.record_spec_gate_sent(
+                record_root,
+                record["estimate_id"],
+                "Which metal would you like?",
+                {"id": "initial-provider-id", "threadId": thread_id},
+            )
+            completed = inbox_monitor.finalize_item(
+                root,
+                message_id,
+                claim_root,
+                claim["claim_token"],
+                "processed",
+                record_root=record_root,
+            )
+            self.assertEqual(completed["processing_status"], "processed")
+
+    def test_later_customer_reply_cannot_finalize_after_notification_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            record_root = Path(directory) / "records"
+            reply_id = "customer-reply-final-specs"
+            thread_id = "owned-estimate-thread"
+            inbox_monitor.discover_complete(
+                root,
+                [{"gmail_message_id": reply_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, reply_id)
+            inbox_monitor.sync_claim(root, reply_id, {"acquired": True, **claim})
+            route = {
+                "channel": "gmail",
+                "mailbox": "sales@example.com",
+                "recipient": "customer@example.net",
+                "identity_key": gmail_route.email_identity_key("customer@example.net"),
+                "gmail_message_id": "initiating-message",
+                "thread_id": thread_id,
+                "original_message_id": "<initial@example.net>",
+                "original_subject": "Custom inquiry",
+                "references": [],
+            }
+            estimate_record.create_initial_record(record_root, route, 900)
+            inbox_claim.advance_phase(
+                claim_root, reply_id, claim["claim_token"], "ready_to_finalize"
+            )
+            with self.assertRaisesRegex(ValueError, "full-thread review"):
+                inbox_monitor.finalize_item(
+                    root,
+                    reply_id,
+                    claim_root,
+                    claim["claim_token"],
+                    "processed",
+                    record_root=record_root,
+                )
+            self.assertEqual(
+                inbox_claim.read_state(inbox_claim.claim_path(claim_root, reply_id))[
+                    "status"
+                ],
+                "processing",
+            )
+
+    def test_incomplete_later_reply_requires_same_source_followup_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            record_root = Path(directory) / "records"
+            reply_id = "customer-reply-incomplete"
+            thread_id = "incomplete-thread"
+            inbox_monitor.discover_complete(
+                root,
+                [{"gmail_message_id": reply_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, reply_id)
+            inbox_monitor.sync_claim(root, reply_id, {"acquired": True, **claim})
+            route = {
+                "channel": "gmail",
+                "mailbox": "sales@example.com",
+                "recipient": "customer@example.net",
+                "identity_key": gmail_route.email_identity_key("customer@example.net"),
+                "gmail_message_id": "initial-incomplete",
+                "thread_id": thread_id,
+                "original_message_id": "<initial@example.net>",
+                "original_subject": "Custom inquiry",
+                "references": [],
+            }
+            record = estimate_record.create_initial_record(record_root, route, 900)
+            estimate_record.record_thread_review(
+                record_root,
+                record["estimate_id"],
+                {
+                    "thread_id": thread_id,
+                    "source_message_id": reply_id,
+                    "message_ids": ["initial-incomplete", "shop-question", reply_id],
+                    "specification": {"piece_type": "ring", "metal": "14k yellow gold"},
+                    "missing_required_fields": ["setting_style"],
+                },
+            )
+            inbox_claim.advance_phase(
+                claim_root, reply_id, claim["claim_token"], "ready_to_finalize"
+            )
+            with self.assertRaisesRegex(ValueError, "follow-up send evidence"):
+                inbox_monitor.finalize_item(
+                    root,
+                    reply_id,
+                    claim_root,
+                    claim["claim_token"],
+                    "processed",
+                    record_root=record_root,
+                )
+            estimate_record.record_followup_sent(
+                record_root,
+                record["estimate_id"],
+                reply_id,
+                "Which setting style would you like?",
+                {"id": "followup-provider-id", "threadId": thread_id},
+            )
+            completed = inbox_monitor.finalize_item(
+                root,
+                reply_id,
+                claim_root,
+                claim["claim_token"],
+                "processed",
+                record_root=record_root,
+            )
+            self.assertEqual(completed["processing_status"], "processed")
+
+    def test_complete_later_reply_requires_recorded_claimed_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            record_root = Path(directory) / "records"
+            reply_id = "customer-reply-complete"
+            thread_id = "complete-thread"
+            inbox_monitor.discover_complete(
+                root,
+                [{"gmail_message_id": reply_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                1_000,
+                2_000,
+            )
+            _, claim = inbox_claim.acquire(claim_root, reply_id)
+            inbox_monitor.sync_claim(root, reply_id, {"acquired": True, **claim})
+            route = {
+                "channel": "gmail",
+                "mailbox": "sales@example.com",
+                "recipient": "customer@example.net",
+                "identity_key": gmail_route.email_identity_key("customer@example.net"),
+                "gmail_message_id": "initial-complete",
+                "thread_id": thread_id,
+                "original_message_id": "<initial@example.net>",
+                "original_subject": "Custom inquiry",
+                "references": [],
+            }
+            record = estimate_record.create_initial_record(record_root, route, 900)
+            specification = {
+                "piece_type": "ring",
+                "metal": "14k yellow gold",
+                "finger_size": "6",
+                "setting_style": "prong",
+            }
+            estimate_record.record_thread_review(
+                record_root,
+                record["estimate_id"],
+                {
+                    "thread_id": thread_id,
+                    "source_message_id": reply_id,
+                    "message_ids": ["initial-complete", "shop-question", reply_id],
+                    "specification": specification,
+                    "missing_required_fields": [],
+                },
+            )
+            approval = approval_guard.build_request(
+                {
+                    "estimate_id": record["estimate_id"],
+                    "route": route,
+                    "specification": specification,
+                    "proposed_price": 2_500,
+                }
+            )
+            estimate_record.record_approval_requested(
+                record_root, record["estimate_id"], reply_id, approval
+            )
+            inbox_claim.advance_phase(
+                claim_root, reply_id, claim["claim_token"], "ready_to_finalize"
+            )
+            with self.assertRaisesRegex(ValueError, "sent claimed approval"):
+                inbox_monitor.finalize_item(
+                    root,
+                    reply_id,
+                    claim_root,
+                    claim["claim_token"],
+                    "processed",
+                    record_root=record_root,
+                )
+            action_key = f"approval_request:{record['estimate_id']}:{reply_id}"
+            inbox_claim.acquire_external_action(
+                claim_root,
+                reply_id,
+                claim["claim_token"],
+                action_key,
+                "approval_request",
+                "sha256:" + "a" * 64,
+            )
+            inbox_claim.finish_external_action(
+                claim_root, reply_id, claim["claim_token"], action_key, "sent"
+            )
+            completed = inbox_monitor.finalize_item(
+                root,
+                reply_id,
+                claim_root,
+                claim["claim_token"],
+                "processed",
+                record_root=record_root,
+            )
+            self.assertEqual(completed["processing_status"], "processed")
+
     def test_existing_schema_one_queue_item_remains_readable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.active_root(directory)
@@ -2207,6 +2475,99 @@ class EstimateRecordTests(unittest.TestCase):
             changed["followup_replies"][0]["provider_message_id"] = "tampered"
             with self.assertRaisesRegex(ValueError, "immutable"):
                 estimate_record.persist_record(root, changed)
+
+    def test_thread_review_requires_and_hashes_the_complete_thread_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            snapshot = {
+                "thread_id": "gmail-thread",
+                "source_message_id": "latest-customer-reply",
+                "message_ids": [
+                    "gmail-initial-message",
+                    "shop-spec-request",
+                    "latest-customer-reply",
+                ],
+                "specification": {
+                    "piece_type": "ring",
+                    "metal": "14k yellow gold",
+                    "finger_size": "6",
+                },
+                "missing_required_fields": ["setting_style"],
+            }
+            first = estimate_record.record_thread_review(
+                root, record["estimate_id"], snapshot
+            )
+            second = estimate_record.record_thread_review(
+                root, record["estimate_id"], snapshot
+            )
+            self.assertEqual(second, first)
+            self.assertEqual(first["status"], "awaiting_specs")
+            self.assertEqual(first["missing_required_fields"], ["setting_style"])
+            review = first["thread_reviews"][0]
+            self.assertEqual(review["thread_message_count"], 3)
+            self.assertRegex(review["thread_context_sha256"], r"^sha256:[0-9a-f]{64}$")
+            serialized = json.dumps(review)
+            self.assertNotIn("latest-customer-reply", serialized)
+            self.assertNotIn("shop-spec-request", serialized)
+
+            missing_initial = json.loads(json.dumps(snapshot))
+            missing_initial["source_message_id"] = "another-reply"
+            missing_initial["message_ids"] = ["another-reply"]
+            with self.assertRaisesRegex(ValueError, "initiating"):
+                estimate_record.record_thread_review(
+                    root, record["estimate_id"], missing_initial
+                )
+
+    def test_complete_thread_review_and_approval_evidence_are_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            specification = {
+                "piece_type": "ring",
+                "metal": "14k yellow gold",
+                "finger_size": "6",
+                "setting_style": "prong",
+            }
+            snapshot = {
+                "thread_id": "gmail-thread",
+                "source_message_id": "complete-reply",
+                "message_ids": ["gmail-initial-message", "complete-reply"],
+                "specification": specification,
+                "missing_required_fields": [],
+            }
+            reviewed = estimate_record.record_thread_review(
+                root, record["estimate_id"], snapshot
+            )
+            repeated_review = estimate_record.record_thread_review(
+                root, record["estimate_id"], snapshot
+            )
+            self.assertEqual(repeated_review, reviewed)
+            self.assertEqual(reviewed["status"], "awaiting_specs")
+            self.assertEqual(reviewed["thread_reviews"][0]["outcome"], "specs_complete")
+            approval = approval_guard.build_request(
+                {
+                    "estimate_id": record["estimate_id"],
+                    "route": self.route(),
+                    "specification": specification,
+                    "proposed_price": 2_500,
+                }
+            )
+            first = estimate_record.record_approval_requested(
+                root, record["estimate_id"], "complete-reply", approval
+            )
+            second = estimate_record.record_approval_requested(
+                root, record["estimate_id"], "complete-reply", approval
+            )
+            self.assertEqual(second, first)
+            self.assertEqual(first["status"], "pending_approval")
+            self.assertEqual(first["proposed_price"], 2_500)
+            self.assertEqual(first["approval_binding_hash"], approval["binding_hash"])
+            self.assertNotIn("complete-reply", json.dumps(first["approval_requests"]))
 
     def test_second_record_cannot_claim_same_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
