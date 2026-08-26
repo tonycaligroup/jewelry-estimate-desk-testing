@@ -626,6 +626,11 @@ class GmailReplyTests(unittest.TestCase):
             "Our jeweler's fee is $500",
             "Gold is $1,800/oz",
             "Our jeweler’s charge is $500",
+            "The wholesale cost to us is $1,500",
+            "The price we pay for the stone is $1,200",
+            "What we paid for the diamond was $2,000",
+            "We purchased the stone for $1,200",
+            "The scrap/melt value is $350",
         )
         for body in forbidden:
             with self.subTest(body=body), self.assertRaises(ValueError):
