@@ -58,6 +58,19 @@ def claim_path(root: Path, message_id: str) -> Path:
     return root / claim_key(message_id)
 
 
+def authoritative_claim_token(
+    root: Path, message_id: str, *, allow_processed: bool = False
+) -> str:
+    """Resolve a processing claim token from durable state, never model context."""
+    state = read_state(claim_path(root, message_id))
+    if state.get("message_id_sha256") != claim_key(message_id):
+        raise ValueError("claim state does not match the Gmail message ID")
+    allowed = {"processing", "processed"} if allow_processed else {"processing"}
+    if state.get("status") not in allowed:
+        raise ValueError("claim is not in an allowed state")
+    return state["claim_token"]
+
+
 def write_state(path: Path, state: dict[str, Any]) -> None:
     temporary = path / f"state.{secrets.token_hex(4)}.tmp"
     temporary.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
@@ -97,7 +110,13 @@ def validate_state(state: Any) -> dict[str, Any]:
         "recovery_lease_expires_at",
         "external_actions",
     }
-    required = {"schema_version", "message_id_sha256", "claim_token", "status", "claimed_at"}
+    required = {
+        "schema_version",
+        "message_id_sha256",
+        "claim_token",
+        "status",
+        "claimed_at",
+    }
     if not required.issubset(state) or not set(state).issubset(allowed):
         raise ValueError("claim state contains missing or unsupported fields")
     if state.get("schema_version") != SCHEMA_VERSION:
@@ -125,12 +144,17 @@ def validate_state(state: Any) -> dict[str, Any]:
         if not isinstance(notification, dict):
             raise ValueError("owner_notification must be an object")
         if set(notification) != {"key", "status", "attempts", "updated_at"}:
-            raise ValueError("owner_notification contains missing or unsupported fields")
+            raise ValueError(
+                "owner_notification contains missing or unsupported fields"
+            )
         if notification.get("status") not in NOTIFICATION_STATUSES:
             raise ValueError("invalid owner notification status")
         if not isinstance(notification.get("key"), str):
             raise ValueError("invalid owner notification key")
-        if type(notification.get("attempts")) is not int or notification["attempts"] < 1:
+        if (
+            type(notification.get("attempts")) is not int
+            or notification["attempts"] < 1
+        ):
             raise ValueError("invalid owner notification attempts")
     phase = state.get("processing_phase")
     if phase is not None and phase not in PROCESSING_PHASES:
@@ -185,10 +209,13 @@ def validate_state(state: Any) -> dict[str, Any]:
                 not isinstance(action, dict)
                 or not required_action_fields.issubset(action)
                 or not set(action).issubset(
-                    required_action_fields | {"provider_message_id", "provider_thread_id"}
+                    required_action_fields
+                    | {"provider_message_id", "provider_thread_id"}
                 )
             ):
-                raise ValueError("external action contains missing or unsupported fields")
+                raise ValueError(
+                    "external action contains missing or unsupported fields"
+                )
             if action.get("category") not in {
                 "customer_delivery",
                 "approval_request",
@@ -202,7 +229,10 @@ def validate_state(state: Any) -> dict[str, Any]:
                 raise ValueError("invalid external action status")
             if type(action.get("attempts")) is not int or action["attempts"] < 1:
                 raise ValueError("invalid external action attempts")
-            if not isinstance(action.get("updated_at"), str) or not action["updated_at"]:
+            if (
+                not isinstance(action.get("updated_at"), str)
+                or not action["updated_at"]
+            ):
                 raise ValueError("invalid external action updated_at")
             for receipt_field in ("provider_message_id", "provider_thread_id"):
                 if receipt_field in action and (
@@ -321,9 +351,7 @@ def has_ambiguous_external_action(state: dict[str, Any]) -> bool:
     )
 
 
-def recovery_lease_active(
-    state: dict[str, Any], now: datetime | None = None
-) -> bool:
+def recovery_lease_active(state: dict[str, Any], now: datetime | None = None) -> bool:
     raw = state.get("recovery_lease_expires_at")
     if raw is None:
         return False
@@ -408,11 +436,13 @@ def authorize_legacy_resume(
         if state.get("processing_phase") in PROCESSING_PHASES:
             raise ValueError("claim already has a phase journal")
         if (current - state_timestamp(state)).total_seconds() < minimum_age_seconds:
-            raise ValueError("legacy claim is not stale enough for manual authorization")
-        if state.get("owner_notification") is not None or state.get(
-            "external_actions"
-        ):
-            raise ValueError("legacy claim contains action evidence; manual review required")
+            raise ValueError(
+                "legacy claim is not stale enough for manual authorization"
+            )
+        if state.get("owner_notification") is not None or state.get("external_actions"):
+            raise ValueError(
+                "legacy claim contains action evidence; manual review required"
+            )
         state["processing_phase"] = "claimed"
         state["phase_entered_at"] = current.isoformat()
         state["last_progress_at"] = current.isoformat()
@@ -457,6 +487,7 @@ def acquire_external_action(
     action_key: str,
     category: str,
     binding_sha256: str,
+    allow_processed: bool = False,
 ) -> tuple[bool, dict[str, Any]]:
     if not re.fullmatch(r"[A-Za-z0-9_.:@-]{1,200}", action_key):
         raise ValueError("invalid external action key")
@@ -469,8 +500,9 @@ def acquire_external_action(
         state = read_state(path)
         if state.get("claim_token") != token:
             raise ValueError("claim token does not match")
-        if state.get("status") != "processing":
-            raise ValueError("external actions require a processing claim")
+        allowed = {"processing", "processed"} if allow_processed else {"processing"}
+        if state.get("status") not in allowed:
+            raise ValueError("external action requires an allowed claim state")
         actions = state.setdefault("external_actions", {})
         prior = actions.get(action_key)
         attempts = 1
@@ -480,7 +512,10 @@ def acquire_external_action(
                 or prior.get("binding_sha256") != binding_sha256
             ):
                 raise ValueError("external action binding changed")
-            if prior.get("status") == "failed_pre_delivery" and prior.get("attempts") == 1:
+            if (
+                prior.get("status") == "failed_pre_delivery"
+                and prior.get("attempts") == 1
+            ):
                 attempts = 2
             elif prior.get("status") in {"pending", "sent", "uncertain"}:
                 return False, state
@@ -555,7 +590,9 @@ def finish(
             for character in reason_code
         )
     ):
-        raise ValueError("reason_code must use 1-80 lowercase letters, digits, or underscores")
+        raise ValueError(
+            "reason_code must use 1-80 lowercase letters, digits, or underscores"
+        )
 
     with state_lock(path):
         state = read_state(path)
@@ -597,18 +634,28 @@ def acquire_notification(
         state = read_state(path)
         if state.get("claim_token") != token:
             raise ValueError("claim token does not match")
-        if not notification_key or len(notification_key) > 200 or not all(
-            character.isalnum() or character in "_.:@-" for character in notification_key
+        if (
+            not notification_key
+            or len(notification_key) > 200
+            or not all(
+                character.isalnum() or character in "_.:@-"
+                for character in notification_key
+            )
         ):
             raise ValueError("invalid notification key")
         prior = state.get("owner_notification")
         attempts = 1
         if prior is not None:
             if prior.get("key") != notification_key:
-                raise ValueError("a different notification is already bound to this message")
+                raise ValueError(
+                    "a different notification is already bound to this message"
+                )
             # Retained for explicit manual recovery; the normal Kolo wrapper
             # classifies every post-invocation failure as uncertain.
-            if prior.get("status") == "failed_pre_delivery" and prior.get("attempts") == 1:
+            if (
+                prior.get("status") == "failed_pre_delivery"
+                and prior.get("attempts") == 1
+            ):
                 attempts = 2
             elif prior.get("status") in {"pending", "sent", "uncertain"}:
                 return False, state
@@ -629,9 +676,7 @@ def acquire_notification(
 def begin_notification(
     root: Path, message_id: str, token: str, notification_key: str
 ) -> dict[str, Any]:
-    acquired, state = acquire_notification(
-        root, message_id, token, notification_key
-    )
+    acquired, state = acquire_notification(root, message_id, token, notification_key)
     if not acquired:
         raise ValueError(
             f"notification is already {state['owner_notification']['status']}"
@@ -650,7 +695,10 @@ def finish_notification(
         if state.get("claim_token") != token:
             raise ValueError("claim token does not match")
         notification = state.get("owner_notification")
-        if not isinstance(notification, dict) or notification.get("status") != "pending":
+        if (
+            not isinstance(notification, dict)
+            or notification.get("status") != "pending"
+        ):
             raise ValueError("notification is not pending")
         now = datetime.now(timezone.utc).isoformat()
         notification["status"] = status
@@ -693,7 +741,10 @@ def reconcile_stale_notifications(
             state = read_state(path)
             summary["claims_scanned"] += 1
             notification = state.get("owner_notification")
-            if not isinstance(notification, dict) or notification.get("status") != "pending":
+            if (
+                not isinstance(notification, dict)
+                or notification.get("status") != "pending"
+            ):
                 continue
             summary["pending"] += 1
             try:
@@ -721,7 +772,7 @@ def main(argv: list[str] | None = None) -> int:
     claim.add_argument("--resume-stale-after-seconds", type=int)
     phase = sub.add_parser("advance-phase")
     phase.add_argument("--message-id", required=True)
-    phase.add_argument("--claim-token", required=True)
+    phase.add_argument("--claim-token")
     phase.add_argument("--phase", choices=tuple(PROCESSING_PHASES), required=True)
     authorize = sub.add_parser("authorize-legacy-resume")
     authorize.add_argument("--message-id", required=True)
@@ -733,7 +784,9 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("complete", "fail"):
         command = sub.add_parser(name)
         command.add_argument("--message-id", required=True)
-        command.add_argument("--claim-token", "--token", dest="claim_token", required=True)
+        command.add_argument(
+            "--claim-token", "--token", dest="claim_token", required=True
+        )
         if name == "fail":
             command.add_argument("--reason-code", required=True)
     begin_notify = sub.add_parser("notification-begin")
@@ -773,9 +826,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "advance-phase":
-            state = advance_phase(
-                args.root, args.message_id, args.claim_token, args.phase
+            token = args.claim_token or authoritative_claim_token(
+                args.root, args.message_id
             )
+            state = advance_phase(args.root, args.message_id, token, args.phase)
             print(json.dumps(state, sort_keys=True))
             return 0
         if args.command == "authorize-legacy-resume":
@@ -805,12 +859,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(state, sort_keys=True))
             return 0
         if args.command == "notification-reconcile-stale":
-            result = reconcile_stale_notifications(root=args.root, minimum_age_seconds=args.minimum_age_seconds)
+            result = reconcile_stale_notifications(
+                root=args.root, minimum_age_seconds=args.minimum_age_seconds
+            )
             print(json.dumps(result, sort_keys=True))
             return 0
         status = "processed" if args.command == "complete" else "manual_review"
         reason_code = args.reason_code if args.command == "fail" else None
-        state = finish(args.root, args.message_id, args.claim_token, status, reason_code)
+        state = finish(
+            args.root, args.message_id, args.claim_token, status, reason_code
+        )
         print(json.dumps(state, sort_keys=True))
         return 0
     except (OSError, ValueError, json.JSONDecodeError) as exc:

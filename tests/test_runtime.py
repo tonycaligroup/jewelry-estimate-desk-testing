@@ -30,12 +30,44 @@ import gmail_safe
 import kolo_safe
 import route_ownership
 import validate_profile
+import appointment_options
+import calendar_query
+import pricing_model
+import spot_price
+
+
+def internal_cost_sheet(customer_price: float = 4200) -> dict:
+    return {
+        "metal_lines": [
+            {
+                "metal": "18k yellow gold",
+                "quantity_grams": 10,
+                "unit_cost": 60,
+                "total_cost": 600,
+            }
+        ],
+        "stone_lines": [
+            {
+                "stone": "oval diamond",
+                "quantity": 1,
+                "unit_cost": 2000,
+                "total_cost": 2000,
+            }
+        ],
+        "labor_lines": [
+            {"task": "bench labor", "hours": 5, "rate": 100, "total_cost": 500}
+        ],
+        "other_hard_cost_lines": [],
+        "hard_cost_total": 3100,
+        "customer_price": customer_price,
+    }
 
 
 def valid_profile() -> dict:
     return {
         "schema_version": 1,
         "shop": {
+            "name": "Example Jewelers",
             "mode": "retailer",
             "approver_email": "owner@example.com",
             "outbound_mailbox": "sales@example.com",
@@ -43,13 +75,27 @@ def valid_profile() -> dict:
                 "street": "123 Main St",
                 "city": "Los Angeles",
                 "state": "CA",
-                "zip": "90001"
+                "zip": "90001",
             },
-            "website": "https://example.com"
+            "website": "https://example.com",
         },
         "autonomy": {"trust_stage": 1},
-        "pricing": {"markup_multiplier": 1.25},
-        "scheduling": {"timezone": "America/Los_Angeles"},
+        "owner_notifications": {
+            "requested_channel": "kolo_chat",
+            "active_channel": "kolo_chat",
+            "inactive_reason": None,
+            "email_verified": False,
+            "sms_verified": False,
+        },
+        "pricing": {
+            "model": "cost_plus_multiplier",
+            "markup_multiplier": 1.25,
+            "spot_metal": {"enabled": False},
+        },
+        "scheduling": {
+            "timezone": "America/Los_Angeles",
+            "meeting_offer_window_days": 7,
+        },
     }
 
 
@@ -73,6 +119,22 @@ class ProfileTests(unittest.TestCase):
         self.assertTrue(result["errors"])
         self.assertFalse(result["ready"])
 
+    def test_requested_email_remains_explicitly_inactive(self) -> None:
+        profile = valid_profile()
+        profile["owner_notifications"].update(
+            {
+                "requested_channel": "email",
+                "active_channel": "kolo_chat",
+                "inactive_reason": "email_not_supported",
+                "email": "owner@example.com",
+            }
+        )
+        result = validate_profile.validate_profile(profile)
+        self.assertTrue(result["ready"], result["errors"])
+        profile["owner_notifications"]["active_channel"] = "email"
+        result = validate_profile.validate_profile(profile)
+        self.assertFalse(result["ready"])
+
 
 class ApprovalTests(unittest.TestCase):
     def state(self) -> dict:
@@ -86,6 +148,7 @@ class ApprovalTests(unittest.TestCase):
             },
             "specification": {"piece": "ring", "metal": "18k yellow gold"},
             "proposed_price": 4200,
+            "internal_cost_sheet": internal_cost_sheet(),
         }
 
     def test_changed_recipient_invalidates_approval(self) -> None:
@@ -98,13 +161,24 @@ class ApprovalTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertTrue(any("changed" in error for error in errors))
 
-    def test_owner_price_may_differ_without_changing_route_or_spec(self) -> None:
+    def test_customer_estimate_price_must_match_approval(self) -> None:
+        safe = "Your approved estimate is $4,200."
+        self.assertEqual(
+            customer_content_guard.validate_approved_price(safe, 4200), safe
+        )
+        with self.assertRaisesRegex(ValueError, "other than the approved price"):
+            customer_content_guard.validate_approved_price(
+                "Your approved estimate is $5,400.", 4200
+            )
+
+    def test_owner_price_must_match_bound_proposed_price(self) -> None:
         current = self.state()
         approved = approval_guard.build_request(current)
         approved["approval_status"] = "approved"
         approved["owner_approved_price"] = 4500
         valid, errors = approval_guard.verify_execution(approved, current)
-        self.assertTrue(valid, errors)
+        self.assertFalse(valid)
+        self.assertTrue(any("bound proposed_price" in error for error in errors))
 
     def test_malformed_estimate_id_is_rejected_during_verification(self) -> None:
         current = self.state()
@@ -114,6 +188,251 @@ class ApprovalTests(unittest.TestCase):
         current["estimate_id"] = approved["estimate_id"] = "customer-ring"
         with self.assertRaises(ValueError):
             approval_guard.verify_execution(approved, current)
+
+    def test_cost_sheet_and_price_are_approval_bound(self) -> None:
+        current = self.state()
+        approved = approval_guard.build_request(current)
+        current["internal_cost_sheet"]["labor_lines"][0]["hours"] = 6
+        current["internal_cost_sheet"]["labor_lines"][0]["total_cost"] = 600
+        current["internal_cost_sheet"]["hard_cost_total"] = 3200
+        approved["approval_status"] = "approved"
+        approved["owner_approved_price"] = 4200
+        valid, errors = approval_guard.verify_execution(approved, current)
+        self.assertFalse(valid)
+        self.assertTrue(any("changed" in error for error in errors))
+
+
+class PricingAndSchedulingTests(unittest.TestCase):
+    def test_pricing_models_are_deterministic(self) -> None:
+        self.assertEqual(
+            pricing_model.quote_price(
+                1000, {"model": "cost_plus_multiplier", "markup_multiplier": 1.25}
+            ),
+            1250.0,
+        )
+        self.assertEqual(
+            pricing_model.quote_price(
+                750, {"model": "target_margin", "target_margin": 0.25}
+            ),
+            1000.0,
+        )
+
+    def test_calendar_labels_are_derived_and_near_term(self) -> None:
+        now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+        response_body = {
+            "kind": "calendar#freeBusy",
+            "timeMin": "2026-08-26T12:00:00+00:00",
+            "timeMax": "2026-09-02T12:00:00+00:00",
+            "calendars": {"primary": {"busy": []}},
+        }
+        receipt = {
+            "schema_version": 1,
+            "provider": "google_calendar_freebusy",
+            "provider_request_id": "a0e07f06b462404d8861020bb82caad3",
+            "response_date": "Wed, 26 Aug 2026 12:00:00 +0000",
+            "query": {
+                "timeMin": "2026-08-26T12:00:00+00:00",
+                "timeMax": "2026-09-02T12:00:00+00:00",
+                "timeZone": "America/Los_Angeles",
+                "items": [{"id": "primary"}],
+            },
+            "response_body_sha256": calendar_query.canonical_hash(response_body),
+            "response_body": response_body,
+        }
+        result = appointment_options.build_options(
+            receipt,
+            [
+                {
+                    "start": "2026-08-28T17:00:00+00:00",
+                    "end": "2026-08-28T17:30:00+00:00",
+                },
+                {
+                    "start": "2026-08-29T18:00:00+00:00",
+                    "end": "2026-08-29T18:30:00+00:00",
+                },
+            ],
+            "America/Los_Angeles",
+            7,
+            now=now,
+        )
+        self.assertTrue(result["options"][0]["label"].startswith("Friday, August 28"))
+        self.assertTrue(result["options"][1]["label"].startswith("Saturday, August 29"))
+        blocked = json.loads(json.dumps(receipt))
+        blocked["response_body"]["calendars"]["primary"]["busy"] = [
+            {
+                "start": "2026-08-28T16:45:00+00:00",
+                "end": "2026-08-28T17:15:00+00:00",
+            }
+        ]
+        blocked["response_body_sha256"] = calendar_query.canonical_hash(
+            blocked["response_body"]
+        )
+        with self.assertRaisesRegex(ValueError, "overlaps live calendar busy time"):
+            appointment_options.build_options(
+                blocked,
+                [
+                    {
+                        "start": "2026-08-28T17:00:00+00:00",
+                        "end": "2026-08-28T17:30:00+00:00",
+                    },
+                    {
+                        "start": "2026-08-29T18:00:00+00:00",
+                        "end": "2026-08-29T18:30:00+00:00",
+                    },
+                ],
+                "America/Los_Angeles",
+                7,
+                now=now,
+            )
+
+    def test_calendar_query_captures_provider_evidence(self) -> None:
+        class Headers(dict):
+            def get(self, key, default=None):
+                return super().get(key.lower(), default)
+
+        class Response:
+            headers = Headers(
+                {
+                    "x-request-id": "a0e07f06b462404d8861020bb82caad3",
+                    "date": "Wed, 26 Aug 2026 12:00:00 +0000",
+                }
+            )
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "kind": "calendar#freeBusy",
+                        "timeMin": "2026-08-26T12:00:00.000Z",
+                        "timeMax": "2026-09-02T12:00:00.000Z",
+                        "calendars": {"primary": {"busy": []}},
+                    }
+                ).encode()
+
+        receipt = calendar_query.query_freebusy(
+            "2026-08-26T12:00:00+00:00",
+            "2026-09-02T12:00:00+00:00",
+            "America/Los_Angeles",
+            "primary",
+            "token",
+            opener=lambda *_args, **_kwargs: Response(),
+        )
+        self.assertEqual(receipt["provider"], "google_calendar_freebusy")
+        self.assertEqual(
+            receipt["provider_request_id"], "a0e07f06b462404d8861020bb82caad3"
+        )
+
+    def test_spot_cache_respects_daily_frequency(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "success": True,
+                        "base": "USD",
+                        "unit": "gram",
+                        "timestamp": 1,
+                        "metals": {"xau": {"close": 100.0}},
+                    }
+                ).encode()
+
+        calls = []
+
+        def opener(*args, **kwargs):
+            calls.append((args, kwargs))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "spot.json"
+            first = spot_price.get_prices(
+                cache, "stackerscan", "daily", ["gold"], now_epoch=1000, opener=opener
+            )
+            second = spot_price.get_prices(
+                cache, "stackerscan", "daily", ["gold"], now_epoch=2000, opener=opener
+            )
+            self.assertEqual(first, second)
+            self.assertEqual(len(calls), 1)
+
+
+class EstimateDeliveryTransitionTests(unittest.TestCase):
+    def test_estimate_sent_requires_and_records_exact_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            route = {
+                "channel": "gmail",
+                "mailbox": "sales@example.com",
+                "recipient": "customer@example.net",
+                "identity_key": gmail_route.email_identity_key("customer@example.net"),
+                "gmail_message_id": "initial-message",
+                "thread_id": "thread-1",
+                "original_message_id": "<initial@example.net>",
+                "original_subject": "Custom ring",
+                "references": [],
+            }
+            record = estimate_record.create_initial_record(root, route, 1)
+            specification = {"piece_type": "ring", "metal": "18k yellow gold"}
+            estimate_record.record_thread_review(
+                root,
+                record["estimate_id"],
+                {
+                    "thread_id": "thread-1",
+                    "source_message_id": "reply-message",
+                    "message_ids": ["initial-message", "reply-message"],
+                    "specification": specification,
+                    "missing_required_fields": [],
+                },
+            )
+            current = {
+                "estimate_id": record["estimate_id"],
+                "route": route,
+                "specification": specification,
+                "proposed_price": 4200,
+                "internal_cost_sheet": internal_cost_sheet(),
+            }
+            request = approval_guard.build_request(current)
+            estimate_record.record_approval_requested(
+                root, record["estimate_id"], "reply-message", request
+            )
+            approved = dict(request)
+            approved["approval_status"] = "approved"
+            approved["owner_approved_price"] = 4200
+            sent = estimate_record.record_estimate_sent(
+                root,
+                record["estimate_id"],
+                "reply-message",
+                approved,
+                current,
+                {"id": "provider-message", "threadId": "thread-1"},
+            )
+            self.assertEqual(sent["status"], "estimate_sent")
+            self.assertEqual(sent["approved_price"], 4200)
+            self.assertEqual(
+                estimate_record.current_approval_state(root, record["estimate_id"]),
+                current,
+            )
+            self.assertEqual(
+                estimate_record.approval_source_message_id(
+                    root, record["estimate_id"]
+                ),
+                "reply-message",
+            )
+            self.assertEqual(
+                sent["estimate_delivery"]["provider_message_id"], "provider-message"
+            )
+            tampered = json.loads(json.dumps(sent))
+            tampered["proposed_price"] = 5400
+            with self.assertRaisesRegex(ValueError, "approval-bound estimate state"):
+                estimate_record.persist_record(root, tampered)
 
 
 class SafeCliTests(unittest.TestCase):
@@ -148,9 +467,7 @@ class SafeCliTests(unittest.TestCase):
                 "agent:main:kolo:test-session",
             )
             kolo_safe.request_approval_claimed(*arguments, runner=runner)
-            duplicate = kolo_safe.request_approval_claimed(
-                *arguments, runner=runner
-            )
+            duplicate = kolo_safe.request_approval_claimed(*arguments, runner=runner)
             self.assertEqual(runner.call_count, 1)
             self.assertIn("already sent", duplicate.stdout)
             state = inbox_claim.read_state(
@@ -230,9 +547,7 @@ class SafeCliTests(unittest.TestCase):
         self.assertNotIn("ring", argv[-1].lower())
 
     def test_customer_reply_notifies_owner_without_customer_data(self) -> None:
-        argv = kolo_safe.build_notify_owner(
-            "jed-0123456789abcdef", "customer-replied"
-        )
+        argv = kolo_safe.build_notify_owner("jed-0123456789abcdef", "customer-replied")
         self.assertEqual(argv[:2], ["kolo", "notify-owner"])
         self.assertEqual(
             argv[-1],
@@ -246,7 +561,9 @@ class SafeCliTests(unittest.TestCase):
                 "jed-0123456789abcdef", "customer-name-from-inbox"
             )
 
-    def test_generic_monitor_notification_contains_no_customer_or_estimate_data(self) -> None:
+    def test_generic_monitor_notification_contains_no_customer_or_estimate_data(
+        self,
+    ) -> None:
         argv = kolo_safe.build_notify_monitor("system-actionable")
         self.assertEqual(argv[:2], ["kolo", "notify-owner"])
         self.assertNotIn("@", argv[-1])
@@ -404,9 +721,7 @@ class SafeCliTests(unittest.TestCase):
             self.assertEqual(queue["processing_status"], "manual_review")
             self.assertEqual(queue["reason_code"], "missing_thread_ownership")
             self.assertEqual(stored_claim["status"], "manual_review")
-            self.assertEqual(
-                stored_claim["owner_notification"]["status"], "uncertain"
-            )
+            self.assertEqual(stored_claim["owner_notification"]["status"], "uncertain")
 
     def test_stale_reconciler_resumes_only_journaled_safe_claims(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -419,7 +734,9 @@ class SafeCliTests(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "gmail_message_id": message_id,
-                        "gmail_message_id_sha256": inbox_monitor.message_key(message_id),
+                        "gmail_message_id_sha256": inbox_monitor.message_key(
+                            message_id
+                        ),
                         "thread_id": f"thread-{message_id}",
                         "internal_date_ms": 1_100,
                         "discovery_status": "complete",
@@ -479,7 +796,7 @@ class SafeCliTests(unittest.TestCase):
     def test_log_action_has_idempotency_and_safe_json_argument(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "event.json"
-            attack = '$(touch /tmp/should-not-run) `whoami`'
+            attack = "$(touch /tmp/should-not-run) `whoami`"
             path.write_text(json.dumps({"note": attack}), encoding="utf-8")
             argv = kolo_safe.build_log_action(
                 "Estimate sent",
@@ -492,7 +809,9 @@ class SafeCliTests(unittest.TestCase):
                 argv[argv.index("--idempotency-key") + 1],
                 "jed-0123456789abcdef:estimate_sent",
             )
-            self.assertEqual(json.loads(argv[argv.index("--details") + 1])["note"], attack)
+            self.assertEqual(
+                json.loads(argv[argv.index("--details") + 1])["note"], attack
+            )
 
 
 class InboxClaimTests(unittest.TestCase):
@@ -523,6 +842,36 @@ class InboxClaimTests(unittest.TestCase):
                 ],
                 "processing",
             )
+
+    def test_only_high_level_path_can_journal_post_approval_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "approved-source")
+            inbox_claim.advance_phase(
+                root, "approved-source", claim["claim_token"], "ready_to_finalize"
+            )
+            inbox_claim.finish(
+                root, "approved-source", claim["claim_token"], "processed"
+            )
+            with self.assertRaisesRegex(ValueError, "allowed claim state"):
+                inbox_claim.acquire_external_action(
+                    root,
+                    "approved-source",
+                    claim["claim_token"],
+                    "approved_estimate:jed-0123456789abcdef:approved-source",
+                    "customer_delivery",
+                    "sha256:" + "a" * 64,
+                )
+            acquired, _ = inbox_claim.acquire_external_action(
+                root,
+                "approved-source",
+                claim["claim_token"],
+                "approved_estimate:jed-0123456789abcdef:approved-source",
+                "customer_delivery",
+                "sha256:" + "a" * 64,
+                allow_processed=True,
+            )
+            self.assertTrue(acquired)
 
     def test_legacy_resume_requires_explicit_evidence_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -612,7 +961,8 @@ class InboxClaimTests(unittest.TestCase):
                 root,
                 "bounded-retry",
                 600,
-                now=retry_at + timedelta(seconds=inbox_claim.RECOVERY_LEASE_SECONDS + 1),
+                now=retry_at
+                + timedelta(seconds=inbox_claim.RECOVERY_LEASE_SECONDS + 1),
             )
             self.assertFalse(resumed_again)
 
@@ -667,7 +1017,9 @@ class InboxClaimTests(unittest.TestCase):
             self.assertTrue(resumed)
 
     def test_default_claim_root_is_absolute_workspace_path(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"OPENCLAW_WORKSPACE": "/tmp/kolo-workspace"}):
+        with unittest.mock.patch.dict(
+            os.environ, {"OPENCLAW_WORKSPACE": "/tmp/kolo-workspace"}
+        ):
             self.assertEqual(
                 inbox_claim.default_claim_root(),
                 Path("/tmp/kolo-workspace/estimate-desk/inbox-claims").resolve(),
@@ -831,9 +1183,7 @@ class InboxClaimTests(unittest.TestCase):
             )
 
             self.assertEqual(migrated["retry_count_at_phase"], 1)
-            self.assertEqual(
-                migrated["phase_entered_at"], "2020-01-01T00:00:00+00:00"
-            )
+            self.assertEqual(migrated["phase_entered_at"], "2020-01-01T00:00:00+00:00")
             self.assertFalse(resumed)
 
     def test_migration_does_not_persist_corrupt_resume_count(self) -> None:
@@ -850,9 +1200,7 @@ class InboxClaimTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "resume_count"):
                 inbox_claim.read_state(path)
 
-            self.assertEqual(
-                (path / "state.json").read_text(encoding="utf-8"), before
-            )
+            self.assertEqual((path / "state.json").read_text(encoding="utf-8"), before)
 
     def test_notification_write_ahead_crash_becomes_uncertain(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -935,7 +1283,9 @@ class InboxClaimTests(unittest.TestCase):
 
             result = inbox_claim.reconcile_stale_notifications(root, 600, now)
 
-            self.assertEqual(result, {"claims_scanned": 3, "pending": 2, "reconciled": 1})
+            self.assertEqual(
+                result, {"claims_scanned": 3, "pending": 2, "reconciled": 1}
+            )
             self.assertEqual(
                 inbox_claim.read_state(stale_path)["owner_notification"]["status"],
                 "uncertain",
@@ -1255,7 +1605,9 @@ class InboxMonitorTests(unittest.TestCase):
             result = inbox_monitor.discover_complete(root, batch, 1_000, 2_000)
             self.assertEqual(result["inserted"], 3)
             self.assertEqual(result["ignored_before_activation"], 1)
-            self.assertEqual(inbox_monitor.next_eligible(root)["gmail_message_id"], "first")
+            self.assertEqual(
+                inbox_monitor.next_eligible(root)["gmail_message_id"], "first"
+            )
 
             claim = {
                 "acquired": True,
@@ -1266,7 +1618,9 @@ class InboxMonitorTests(unittest.TestCase):
                 "claimed_at": "2026-08-25T00:00:00+00:00",
             }
             inbox_monitor.sync_claim(root, "first", claim)
-            self.assertEqual(inbox_monitor.next_eligible(root)["gmail_message_id"], "other")
+            self.assertEqual(
+                inbox_monitor.next_eligible(root)["gmail_message_id"], "other"
+            )
 
     def test_scheduled_initial_inquiry_record_owns_later_reply(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1344,17 +1698,13 @@ class InboxMonitorTests(unittest.TestCase):
                 3_000,
             )
             _, reply_claim = inbox_claim.acquire(claim_root, reply_id)
-            inbox_monitor.sync_claim(
-                root, reply_id, {"acquired": True, **reply_claim}
-            )
+            inbox_monitor.sync_claim(root, reply_id, {"acquired": True, **reply_claim})
             reply_route = dict(initial_route)
             reply_route["gmail_message_id"] = reply_id
             reply_route["original_message_id"] = "<reply@example.net>"
             candidates = estimate_record.lookup_thread(record_root, reply_route)
             self.assertEqual(candidates, [record])
-            ownership = route_ownership.decide(
-                reply_route, candidates, claim_root, 2
-            )
+            ownership = route_ownership.decide(reply_route, candidates, claim_root, 2)
             self.assertEqual(ownership["decision"], "owned")
             self.assertEqual(ownership["estimate_id"], record["estimate_id"])
 
@@ -1405,9 +1755,7 @@ class InboxMonitorTests(unittest.TestCase):
                 2_000,
             )
             _, claim = inbox_claim.acquire(claim_root, "needs-review")
-            inbox_monitor.sync_claim(
-                root, "needs-review", {"acquired": True, **claim}
-            )
+            inbox_monitor.sync_claim(root, "needs-review", {"acquired": True, **claim})
             first = inbox_monitor.finalize_item(
                 root,
                 "needs-review",
@@ -1576,13 +1924,9 @@ class InboxMonitorTests(unittest.TestCase):
             result = inbox_monitor.claim_next(root, claim_root, 600)
 
             self.assertTrue(result["claim"]["acquired"])
-            self.assertEqual(
-                result["queue_item"]["processing_status"], "processing"
-            )
+            self.assertEqual(result["queue_item"]["processing_status"], "processing")
             expected = (
-                root.resolve().parent
-                / "work"
-                / inbox_monitor.message_key(message_id)
+                root.resolve().parent / "work" / inbox_monitor.message_key(message_id)
             )
             self.assertEqual(Path(result["work_paths"]["work_dir"]), expected)
             self.assertEqual(expected.stat().st_mode & 0o777, 0o700)
@@ -1624,9 +1968,7 @@ class InboxMonitorTests(unittest.TestCase):
                 2_000,
             )
             _, claim = inbox_claim.acquire(claim_root, message_id)
-            inbox_monitor.sync_claim(
-                root, message_id, {"acquired": True, **claim}
-            )
+            inbox_monitor.sync_claim(root, message_id, {"acquired": True, **claim})
             target = Path(directory) / "outside-work"
             target.mkdir()
             (root.resolve().parent / "work").symlink_to(
@@ -1669,7 +2011,9 @@ class InboxMonitorTests(unittest.TestCase):
 
             self.assertFalse(work_dir.exists())
 
-    def test_finalize_requires_spec_gate_evidence_for_awaiting_specs_inquiry(self) -> None:
+    def test_finalize_requires_spec_gate_evidence_for_awaiting_specs_inquiry(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.active_root(directory)
             claim_root = Path(directory) / "claims"
@@ -1743,7 +2087,9 @@ class InboxMonitorTests(unittest.TestCase):
             )
             self.assertEqual(completed["processing_status"], "processed")
 
-    def test_initial_thread_review_still_requires_initial_spec_gate_evidence(self) -> None:
+    def test_initial_thread_review_still_requires_initial_spec_gate_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.active_root(directory)
             claim_root = Path(directory) / "claims"
@@ -1752,7 +2098,13 @@ class InboxMonitorTests(unittest.TestCase):
             thread_id = "reviewed-initial-thread"
             inbox_monitor.discover_complete(
                 root,
-                [{"gmail_message_id": message_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                [
+                    {
+                        "gmail_message_id": message_id,
+                        "thread_id": thread_id,
+                        "internal_date_ms": 1_100,
+                    }
+                ],
                 1_000,
                 2_000,
             )
@@ -1818,7 +2170,13 @@ class InboxMonitorTests(unittest.TestCase):
             thread_id = "owned-estimate-thread"
             inbox_monitor.discover_complete(
                 root,
-                [{"gmail_message_id": reply_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                [
+                    {
+                        "gmail_message_id": reply_id,
+                        "thread_id": thread_id,
+                        "internal_date_ms": 1_100,
+                    }
+                ],
                 1_000,
                 2_000,
             )
@@ -1855,7 +2213,9 @@ class InboxMonitorTests(unittest.TestCase):
                 "processing",
             )
 
-    def test_incomplete_later_reply_requires_same_source_followup_evidence(self) -> None:
+    def test_incomplete_later_reply_requires_same_source_followup_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.active_root(directory)
             claim_root = Path(directory) / "claims"
@@ -1864,7 +2224,13 @@ class InboxMonitorTests(unittest.TestCase):
             thread_id = "incomplete-thread"
             inbox_monitor.discover_complete(
                 root,
-                [{"gmail_message_id": reply_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                [
+                    {
+                        "gmail_message_id": reply_id,
+                        "thread_id": thread_id,
+                        "internal_date_ms": 1_100,
+                    }
+                ],
                 1_000,
                 2_000,
             )
@@ -1931,7 +2297,13 @@ class InboxMonitorTests(unittest.TestCase):
             thread_id = "complete-thread"
             inbox_monitor.discover_complete(
                 root,
-                [{"gmail_message_id": reply_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+                [
+                    {
+                        "gmail_message_id": reply_id,
+                        "thread_id": thread_id,
+                        "internal_date_ms": 1_100,
+                    }
+                ],
                 1_000,
                 2_000,
             )
@@ -1972,6 +2344,7 @@ class InboxMonitorTests(unittest.TestCase):
                     "route": route,
                     "specification": specification,
                     "proposed_price": 2_500,
+                    "internal_cost_sheet": internal_cost_sheet(2_500),
                 }
             )
             estimate_record.record_approval_requested(
@@ -2026,9 +2399,7 @@ class InboxMonitorTests(unittest.TestCase):
             inbox_monitor.atomic_write_json(
                 inbox_monitor.queue_path(root, "existing-item"), item
             )
-            self.assertEqual(
-                inbox_monitor.load_queue_item(root, "existing-item"), item
-            )
+            self.assertEqual(inbox_monitor.load_queue_item(root, "existing-item"), item)
 
     def test_duplicate_processing_claim_keeps_queue_in_processing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2182,9 +2553,7 @@ class GmailSafeTests(unittest.TestCase):
             root = Path(directory) / "claims"
             payload = self.payload(directory)
             _, claim = inbox_claim.acquire(root, "delivery-uncertain")
-            runner = Mock(
-                side_effect=subprocess.CalledProcessError(1, ["curl"])
-            )
+            runner = Mock(side_effect=subprocess.CalledProcessError(1, ["curl"]))
             arguments = (
                 root,
                 "delivery-uncertain",
@@ -2251,7 +2620,9 @@ class GmailReplyTests(unittest.TestCase):
         self.assertEqual(payload["threadId"], "18d0thread1234567")
         self.assertIn("Subject: Re: Custom ring estimate", message)
         self.assertIn("In-Reply-To: <original@example.net>", message)
-        self.assertIn("References: <earlier@example.net> <original@example.net>", message)
+        self.assertIn(
+            "References: <earlier@example.net> <original@example.net>", message
+        )
 
     def test_missing_original_thread_is_rejected(self) -> None:
         route = self.route()
@@ -2414,10 +2785,19 @@ class GmailClassificationTests(unittest.TestCase):
         result = gmail_classify.classify(
             self.message(
                 [
-                    {"name": "From", "value": "Mail Delivery Subsystem <mailer-daemon@googlemail.com>"},
-                    {"name": "Subject", "value": "Delivery Status Notification (Failure)"},
+                    {
+                        "name": "From",
+                        "value": "Mail Delivery Subsystem <mailer-daemon@googlemail.com>",
+                    },
+                    {
+                        "name": "Subject",
+                        "value": "Delivery Status Notification (Failure)",
+                    },
                     {"name": "Auto-Submitted", "value": "auto-generated"},
-                    {"name": "Content-Type", "value": "multipart/report; report-type=delivery-status"},
+                    {
+                        "name": "Content-Type",
+                        "value": "multipart/report; report-type=delivery-status",
+                    },
                 ]
             )
         )
@@ -2474,7 +2854,9 @@ class RouteOwnershipTests(unittest.TestCase):
             "status": status,
             "route": {
                 "thread_id": "thread-1",
-                "identity_key": gmail_route.email_identity_key("customer+one@example.net"),
+                "identity_key": gmail_route.email_identity_key(
+                    "customer+one@example.net"
+                ),
                 "gmail_message_id": "initiating-message",
             },
         }
@@ -2532,9 +2914,7 @@ class RouteOwnershipTests(unittest.TestCase):
             self.processed_claim(root)
             second = self.record()
             second["estimate_id"] = "jed-fedcba9876543210"
-            result = route_ownership.decide(
-                self.route(), [self.record(), second], root
-            )
+            result = route_ownership.decide(self.route(), [self.record(), second], root)
             self.assertEqual(result["decision"], "manual_review")
             self.assertEqual(result["reason_code"], "ambiguous_thread_ownership")
 
@@ -2603,7 +2983,9 @@ class EstimateRecordTests(unittest.TestCase):
                 root, self.route(), 1_787_760_000_000
             )
             self.assertEqual(duplicate, created)
-            self.assertEqual(estimate_record.lookup_thread(root, self.route()), [created])
+            self.assertEqual(
+                estimate_record.lookup_thread(root, self.route()), [created]
+            )
 
     def test_record_route_cannot_change_on_upsert(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2658,7 +3040,9 @@ class EstimateRecordTests(unittest.TestCase):
             updated = estimate_record.persist_record(root, stale_update)
             self.assertEqual(updated["spec_gate_reply"], first["spec_gate_reply"])
 
-    def test_followup_evidence_is_append_only_and_bound_to_source_and_thread(self) -> None:
+    def test_followup_evidence_is_append_only_and_bound_to_source_and_thread(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "records"
             record = estimate_record.create_initial_record(
@@ -2719,7 +3103,9 @@ class EstimateRecordTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "immutable"):
                 estimate_record.persist_record(root, changed)
 
-    def test_thread_review_requires_and_hashes_the_complete_thread_context(self) -> None:
+    def test_thread_review_requires_and_hashes_the_complete_thread_context(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "records"
             record = estimate_record.create_initial_record(
@@ -2798,6 +3184,7 @@ class EstimateRecordTests(unittest.TestCase):
                     "route": self.route(),
                     "specification": specification,
                     "proposed_price": 2_500,
+                    "internal_cost_sheet": internal_cost_sheet(2_500),
                 }
             )
             first = estimate_record.record_approval_requested(

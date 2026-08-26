@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import route_ownership
+import approval_guard
 
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -172,6 +173,39 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                     record["spec_gate_reply"] = existing_reply
             for field in ("followup_replies", "thread_reviews", "approval_requests"):
                 record = preserve_append_only(existing, record, field)
+            existing_delivery = existing.get("estimate_delivery")
+            proposed_delivery = record.get("estimate_delivery")
+            if existing_delivery is not None:
+                if (
+                    proposed_delivery is not None
+                    and proposed_delivery != existing_delivery
+                ):
+                    raise ValueError("estimate delivery evidence is immutable")
+                if proposed_delivery is None:
+                    record = dict(record)
+                    record["estimate_delivery"] = existing_delivery
+            existing_binding = existing.get("approval_binding_hash")
+            if existing_binding is not None:
+                existing_source = existing.get("approval_source_message_id")
+                proposed_source = record.get("approval_source_message_id")
+                if proposed_source is None:
+                    record = dict(record)
+                    record["approval_source_message_id"] = existing_source
+                elif proposed_source != existing_source:
+                    raise ValueError("approval source message ID is immutable")
+                bound_state = {
+                    "estimate_id": record.get("estimate_id"),
+                    "route": record.get("route"),
+                    "specification": record.get("specification"),
+                    "proposed_price": record.get("proposed_price"),
+                    "internal_cost_sheet": record.get("internal_cost_sheet"),
+                }
+                try:
+                    proposed_binding = approval_guard.binding_hash(bound_state)
+                except ValueError as exc:
+                    raise ValueError("approval-bound estimate state is invalid") from exc
+                if proposed_binding != existing_binding:
+                    raise ValueError("approval-bound estimate state is immutable")
         write_object(path, record)
     return record
 
@@ -204,7 +238,10 @@ def lookup_thread(root: Path, route: dict[str, Any]) -> list[dict[str, Any]]:
         for path in sorted(root.glob("jed-*.json")):
             record = read_object(path)
             record_route = record.get("route")
-            if isinstance(record_route, dict) and record_route.get("thread_id") == thread_id:
+            if (
+                isinstance(record_route, dict)
+                and record_route.get("thread_id") == thread_id
+            ):
                 candidates.append(record)
     return candidates
 
@@ -236,7 +273,9 @@ def record_spec_gate_sent(
         if record["status"] != "awaiting_specs":
             raise ValueError("spec-gate evidence requires awaiting_specs status")
         if provider_thread_id != record["route"]["thread_id"]:
-            raise ValueError("provider response threadId does not match the owned thread")
+            raise ValueError(
+                "provider response threadId does not match the owned thread"
+            )
         evidence = {
             "status": "sent",
             "provider_message_id": provider_message_id,
@@ -288,7 +327,9 @@ def record_followup_sent(
         if record["status"] != "awaiting_specs":
             raise ValueError("specification follow-up requires awaiting_specs status")
         if provider_thread_id != record["route"]["thread_id"]:
-            raise ValueError("provider response threadId does not match the owned thread")
+            raise ValueError(
+                "provider response threadId does not match the owned thread"
+            )
         evidence = {
             "status": "sent",
             "source_message_id_sha256": "sha256:"
@@ -304,9 +345,10 @@ def record_followup_sent(
         for existing in followups:
             if not isinstance(existing, dict):
                 raise ValueError("followup_replies contains invalid evidence")
-            if existing.get("source_message_id_sha256") != evidence[
-                "source_message_id_sha256"
-            ]:
+            if (
+                existing.get("source_message_id_sha256")
+                != evidence["source_message_id_sha256"]
+            ):
                 continue
             comparable = dict(existing)
             comparable.pop("sent_at", None)
@@ -381,9 +423,10 @@ def record_thread_review(
         for existing in reviews:
             if not isinstance(existing, dict):
                 raise ValueError("thread_reviews contains invalid evidence")
-            if existing.get("source_message_id_sha256") != evidence[
-                "source_message_id_sha256"
-            ]:
+            if (
+                existing.get("source_message_id_sha256")
+                != evidence["source_message_id_sha256"]
+            ):
                 continue
             comparable = dict(existing)
             comparable.pop("recorded_at", None)
@@ -391,7 +434,9 @@ def record_thread_review(
                 return record
             raise ValueError("conflicting thread review for source message")
         if record["status"] != "awaiting_specs":
-            raise ValueError("thread specification review requires awaiting_specs status")
+            raise ValueError(
+                "thread specification review requires awaiting_specs status"
+            )
         evidence["recorded_at"] = datetime.now(timezone.utc).isoformat()
         reviews.append(evidence)
         record["specification"] = specification
@@ -417,6 +462,8 @@ def record_approval_requested(
     proposed_price = approval_request.get("proposed_price")
     if isinstance(proposed_price, bool) or not isinstance(proposed_price, (int, float)):
         raise ValueError("approval request proposed_price must be numeric")
+    if approval_guard.binding_hash(approval_request) != binding_hash:
+        raise ValueError("approval request binding_hash does not match its contents")
 
     path = record_path(root, estimate_id)
     with record_lock(root):
@@ -462,9 +509,136 @@ def record_approval_requested(
         evidence["requested_at"] = datetime.now(timezone.utc).isoformat()
         requests.append(evidence)
         record["approval_binding_hash"] = binding_hash
+        record["approval_source_message_id"] = source_message_id
         record["proposed_price"] = proposed_price
+        record["internal_cost_sheet"] = approval_request["internal_cost_sheet"]
         record["missing_required_fields"] = []
         record["status"] = "pending_approval"
+        write_object(path, record)
+        return record
+
+
+def current_approval_state(root: Path, estimate_id: str) -> dict[str, Any]:
+    """Reconstruct the exact approval-bound state after claim work cleanup."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") not in {"pending_approval", "estimate_sent"}:
+            raise ValueError("estimate does not have an approval-bound state")
+        state = {
+            "estimate_id": record["estimate_id"],
+            "route": record["route"],
+            "specification": record.get("specification"),
+            "proposed_price": record.get("proposed_price"),
+            "internal_cost_sheet": record.get("internal_cost_sheet"),
+        }
+        expected = record.get("approval_binding_hash")
+        if approval_guard.binding_hash(state) != expected:
+            raise ValueError("authoritative approval state does not match its binding")
+        return state
+
+
+def approval_source_message_id(root: Path, estimate_id: str) -> str:
+    """Return the provider ID whose durable claim owns the approval request."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        source_message_id = validate_provider_id(
+            record.get("approval_source_message_id"), "approval_source_message_id"
+        )
+        source_hash = sha256_text(source_message_id)
+        if not any(
+            isinstance(item, dict)
+            and item.get("source_message_id_sha256") == source_hash
+            and item.get("binding_hash") == record.get("approval_binding_hash")
+            for item in record.get("approval_requests", [])
+        ):
+            raise ValueError("approval source message lacks matching durable evidence")
+        return source_message_id
+
+
+def record_estimate_sent(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    approved: dict[str, Any],
+    current_state: dict[str, Any],
+    provider_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Move a durably approved estimate to estimate_sent after provider acceptance."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    valid, errors = approval_guard.verify_execution(approved, current_state)
+    if not valid:
+        raise ValueError("approval verification failed: " + "; ".join(errors))
+    if current_state.get("estimate_id") != estimate_id:
+        raise ValueError("current state estimate_id does not match")
+    provider_message_id = validate_provider_id(
+        provider_response.get("id"), "provider response id"
+    )
+    provider_thread_id = validate_provider_id(
+        provider_response.get("threadId"), "provider response threadId"
+    )
+    binding_hash = approved.get("binding_hash")
+    if not isinstance(binding_hash, str) or not HASH_RE.fullmatch(binding_hash):
+        raise ValueError("approved binding_hash is invalid")
+    approved_price = approved.get("owner_approved_price")
+
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record["route"] != current_state.get("route"):
+            raise ValueError("current route does not match the record")
+        if record.get("specification") != current_state.get("specification"):
+            raise ValueError("current specification does not match the record")
+        if provider_thread_id != record["route"]["thread_id"]:
+            raise ValueError(
+                "provider response threadId does not match the owned thread"
+            )
+        approval = next(
+            (
+                item
+                for item in record.get("approval_requests", [])
+                if isinstance(item, dict)
+                and item.get("binding_hash") == binding_hash
+                and item.get("source_message_id_sha256")
+                == sha256_text(source_message_id)
+            ),
+            None,
+        )
+        if approval is None:
+            raise ValueError(
+                "estimate send lacks matching durable approval-request evidence"
+            )
+        if record.get("status") == "estimate_sent":
+            existing = record.get("estimate_delivery")
+            if isinstance(existing, dict) and all(
+                existing.get(key) == value
+                for key, value in {
+                    "approval_binding_hash": binding_hash,
+                    "approved_price": approved_price,
+                    "provider_message_id": provider_message_id,
+                    "thread_id": provider_thread_id,
+                }.items()
+            ):
+                return record
+            raise ValueError("conflicting estimate delivery evidence already exists")
+        if record.get("status") != "pending_approval":
+            raise ValueError("estimate delivery requires pending_approval status")
+        record["estimate_delivery"] = {
+            "status": "sent",
+            "source_message_id_sha256": sha256_text(source_message_id),
+            "approval_binding_hash": binding_hash,
+            "approved_price": approved_price,
+            "provider_message_id": provider_message_id,
+            "thread_id": provider_thread_id,
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+        }
+        record["approved_price"] = approved_price
+        record["outbound_provider_message_id"] = provider_message_id
+        record["status"] = "estimate_sent"
         write_object(path, record)
         return record
 
@@ -511,7 +685,9 @@ def require_processed_evidence(
             if matching_review.get("specification_sha256") != canonical_sha256(
                 record.get("specification")
             ):
-                raise ValueError("record specification changed after full-thread review")
+                raise ValueError(
+                    "record specification changed after full-thread review"
+                )
         evidence = record.get("spec_gate_reply")
         if not isinstance(evidence, dict) or evidence.get("status") != "sent":
             raise ValueError(
@@ -519,10 +695,13 @@ def require_processed_evidence(
                 "refusing processed outcome"
             )
         if evidence.get("thread_id") != record["route"]["thread_id"]:
-            raise ValueError("spec-gate send evidence is bound to the wrong Gmail thread")
-        if not isinstance(evidence.get("provider_message_id"), str) or not evidence[
-            "provider_message_id"
-        ]:
+            raise ValueError(
+                "spec-gate send evidence is bound to the wrong Gmail thread"
+            )
+        if (
+            not isinstance(evidence.get("provider_message_id"), str)
+            or not evidence["provider_message_id"]
+        ):
             raise ValueError("spec-gate send evidence lacks a provider message ID")
         return
 
@@ -550,7 +729,9 @@ def require_processed_evidence(
             None,
         )
         if followup is None:
-            raise ValueError("incomplete customer reply lacks durable follow-up send evidence")
+            raise ValueError(
+                "incomplete customer reply lacks durable follow-up send evidence"
+            )
         return
     if outcome == "specs_complete":
         if record["status"] != "pending_approval":
@@ -573,7 +754,9 @@ def require_processed_evidence(
             or action.get("category") != "approval_request"
             or action.get("status") != "sent"
         ):
-            raise ValueError("complete customer reply lacks a sent claimed approval request")
+            raise ValueError(
+                "complete customer reply lacks a sent claimed approval request"
+            )
         return
     raise ValueError("thread review has an invalid completion outcome")
 
@@ -636,7 +819,9 @@ def main(argv: list[str] | None = None) -> int:
     thread_review = sub.add_parser("record-thread-review")
     thread_review.add_argument("--estimate-id", required=True)
     thread_review.add_argument("--snapshot", type=Path, required=True)
-    thread_review.add_argument("--record-root", type=Path, default=default_record_root())
+    thread_review.add_argument(
+        "--record-root", type=Path, default=default_record_root()
+    )
     thread_review.add_argument("--output", type=Path)
     approval = sub.add_parser("record-approval-requested")
     approval.add_argument("--estimate-id", required=True)
@@ -644,6 +829,14 @@ def main(argv: list[str] | None = None) -> int:
     approval.add_argument("--approval-request", type=Path, required=True)
     approval.add_argument("--record-root", type=Path, default=default_record_root())
     approval.add_argument("--output", type=Path)
+    sent = sub.add_parser("record-estimate-sent")
+    sent.add_argument("--estimate-id", required=True)
+    sent.add_argument("--source-message-id", required=True)
+    sent.add_argument("--approved", type=Path, required=True)
+    sent.add_argument("--current-state", type=Path, required=True)
+    sent.add_argument("--provider-response", type=Path, required=True)
+    sent.add_argument("--record-root", type=Path, default=default_record_root())
+    sent.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "create-inquiry":
@@ -684,12 +877,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.output is not None:
                 write_object(args.output, record)
-        else:
+        elif args.command == "record-approval-requested":
             record = record_approval_requested(
                 args.record_root,
                 args.estimate_id,
                 args.source_message_id,
                 read_object(args.approval_request),
+            )
+            if args.output is not None:
+                write_object(args.output, record)
+        else:
+            record = record_estimate_sent(
+                args.record_root,
+                args.estimate_id,
+                args.source_message_id,
+                read_object(args.approved),
+                read_object(args.current_state),
+                read_object(args.provider_response),
             )
             if args.output is not None:
                 write_object(args.output, record)

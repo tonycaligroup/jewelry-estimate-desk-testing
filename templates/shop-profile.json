@@ -22,8 +22,26 @@
     "price_approval": "always_owner",
     "standing_exceptions": []
   },
+  "owner_notifications": {
+    "requested_channel": "kolo_chat",
+    "active_channel": "kolo_chat",
+    "inactive_reason": null,
+    "email": null,
+    "email_verified": false,
+    "sms": null,
+    "sms_verified": false
+  },
   "pricing": {
+    "model": "cost_plus_multiplier",
     "markup_multiplier": 1.25,
+    "target_margin": null,
+    "spot_metal": {
+      "enabled": false,
+      "provider": "stackerscan",
+      "refresh_frequency": "daily",
+      "currency": "USD",
+      "unit": "gram"
+    },
     "trade_markup_multiplier": null,
     "metal_per_gram": {},
     "stones_per_carat": {},
@@ -51,6 +69,7 @@
     "buffer_minutes": 0,
     "minimum_notice_minutes": 120,
     "book_out_days": 30,
+    "meeting_offer_window_days": 7,
     "location": null
   },
   "inbox_monitoring": {

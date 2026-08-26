@@ -124,7 +124,9 @@ def setup_lock(root: Path) -> Iterator[None]:
     try:
         lock.mkdir(mode=0o700)
     except FileExistsError as exc:
-        raise ValueError("inbox-monitor setup is already running or needs manual recovery") from exc
+        raise ValueError(
+            "inbox-monitor setup is already running or needs manual recovery"
+        ) from exc
     try:
         yield
     finally:
@@ -153,12 +155,17 @@ def validate_capabilities(value: Any) -> dict[str, bool]:
         raise ValueError("capabilities contains missing or unsupported fields")
     missing = [name for name in REQUIRED_CAPABILITIES if value.get(name) is not True]
     if missing:
-        raise ValueError("unsupported environment; missing capabilities: " + ", ".join(missing))
+        raise ValueError(
+            "unsupported environment; missing capabilities: " + ", ".join(missing)
+        )
     return {name: True for name in REQUIRED_CAPABILITIES}
 
 
 def normalize_legacy_monitor_state(value: Any) -> Any:
-    if not isinstance(value, dict) or value.get("schema_version") != LEGACY_SCHEMA_VERSION:
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != LEGACY_SCHEMA_VERSION
+    ):
         return value
     expected = {
         "schema_version",
@@ -168,7 +175,10 @@ def normalize_legacy_monitor_state(value: Any) -> Any:
         "activated_at_ms",
         "discovery_watermark_ms",
     }
-    if set(value) != expected or value.get("activation_state") not in {"prepared", "active"}:
+    if set(value) != expected or value.get("activation_state") not in {
+        "prepared",
+        "active",
+    }:
         raise ValueError("invalid legacy monitor state")
     return {
         "schema_version": SCHEMA_VERSION,
@@ -292,13 +302,17 @@ def prepare(root: Path, capabilities: Any, cron_config: Any) -> dict[str, Any]:
         return state
 
 
-def activate(root: Path, cron_config: Any, activated_at_ms: int | None = None) -> dict[str, Any]:
+def activate(
+    root: Path, cron_config: Any, activated_at_ms: int | None = None
+) -> dict[str, Any]:
     cron_config_helper.validate_binding(cron_config)
     cron_hash = sha256_json(cron_config)
     with setup_lock(root):
         state = load_monitor_state(root)
         if state["bound_cron_sha256"] != cron_hash:
-            raise ValueError("verified cron identity/config does not match prepared state")
+            raise ValueError(
+                "verified cron identity/config does not match prepared state"
+            )
         if state["activation_state"] == "active":
             if state.get("schema_version") != SCHEMA_VERSION:
                 state["schema_version"] = SCHEMA_VERSION
@@ -306,7 +320,9 @@ def activate(root: Path, cron_config: Any, activated_at_ms: int | None = None) -
             return state
         if state["activation_state"] != "prepared":
             raise ValueError("monitor is not prepared for initial activation")
-        activation = int(time.time() * 1000) if activated_at_ms is None else activated_at_ms
+        activation = (
+            int(time.time() * 1000) if activated_at_ms is None else activated_at_ms
+        )
         require_epoch_ms(activation, "activated_at_ms")
         state["activation_state"] = "active"
         state["activated_at_ms"] = activation
@@ -375,7 +391,10 @@ def cancel_reconfiguration(root: Path, current_cron_config: Any) -> dict[str, An
 
 
 def validate_queue_item(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or value.get("schema_version") != QUEUE_SCHEMA_VERSION:
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != QUEUE_SCHEMA_VERSION
+    ):
         raise ValueError("invalid queue item schema_version")
     allowed = {
         "schema_version",
@@ -418,7 +437,9 @@ def validate_queue_item(value: Any) -> dict[str, Any]:
     ):
         raise ValueError("invalid queue reason_code")
     if "review_status" in value:
-        if value["processing_status"] != "manual_review" or value["review_status"] not in {
+        if value["processing_status"] != "manual_review" or value[
+            "review_status"
+        ] not in {
             "open",
             "resolved",
         }:
@@ -429,7 +450,10 @@ def validate_queue_item(value: Any) -> dict[str, Any]:
         or not value["review_resolved_at"]
     ):
         raise ValueError("review_resolved_at requires a resolved manual review")
-    if value["processing_status"] in TERMINAL_STATES and value["discovery_status"] != "complete":
+    if (
+        value["processing_status"] in TERMINAL_STATES
+        and value["discovery_status"] != "complete"
+    ):
         raise ValueError("terminal queue item must have complete discovery_status")
     return value
 
@@ -455,7 +479,9 @@ def discover_complete(
         require_epoch_ms(window_start_ms, "window_start_ms")
         require_epoch_ms(window_end_ms, "window_end_ms")
         if window_start_ms != state["discovery_watermark_ms"]:
-            raise ValueError("window_start_ms must equal the durable discovery watermark")
+            raise ValueError(
+                "window_start_ms must equal the durable discovery watermark"
+            )
         if window_end_ms < window_start_ms:
             raise ValueError("window_end_ms cannot precede window_start_ms")
         if not isinstance(batch, list):
@@ -471,10 +497,16 @@ def discover_complete(
                 "thread_id",
                 "internal_date_ms",
             }:
-                raise ValueError("each discovery item must contain only Gmail ID, thread ID, and internalDate")
-            message_id = require_provider_id(raw["gmail_message_id"], "gmail_message_id")
+                raise ValueError(
+                    "each discovery item must contain only Gmail ID, thread ID, and internalDate"
+                )
+            message_id = require_provider_id(
+                raw["gmail_message_id"], "gmail_message_id"
+            )
             thread_id = require_provider_id(raw["thread_id"], "thread_id")
-            internal_date = require_epoch_ms(raw["internal_date_ms"], "internal_date_ms")
+            internal_date = require_epoch_ms(
+                raw["internal_date_ms"], "internal_date_ms"
+            )
             if internal_date < state["activated_at_ms"]:
                 ignored_before_activation += 1
                 continue
@@ -495,7 +527,9 @@ def discover_complete(
                 prior = load_queue_item(root, message_id)
                 for field in ("gmail_message_id", "thread_id", "internal_date_ms"):
                     if prior[field] != item[field]:
-                        raise ValueError(f"immutable queue metadata changed for {message_id}")
+                        raise ValueError(
+                            f"immutable queue metadata changed for {message_id}"
+                        )
                 existing += 1
             else:
                 atomic_write_json(path, item)
@@ -516,7 +550,9 @@ def all_queue_items(root: Path) -> list[dict[str, Any]]:
     queue = root / "queue"
     if not queue.exists():
         return []
-    return [validate_queue_item(read_json(path)) for path in sorted(queue.glob("*.json"))]
+    return [
+        validate_queue_item(read_json(path)) for path in sorted(queue.glob("*.json"))
+    ]
 
 
 def prepare_run_work(root: Path) -> dict[str, str]:
@@ -556,9 +592,7 @@ def cleanup_run_work(root: Path, discovery_batch: Path) -> None:
         pass
 
 
-def prepare_claim_work(
-    root: Path, claim_root: Path, message_id: str
-) -> dict[str, str]:
+def prepare_claim_work(root: Path, claim_root: Path, message_id: str) -> dict[str, str]:
     """Create and return the only supported persistent artifact paths for a claim."""
     item = load_queue_item(root, message_id)
     claim = inbox_claim.read_state(inbox_claim.claim_path(claim_root, message_id))
@@ -652,7 +686,9 @@ def stale_processing_items(
 
 def assert_settled(root: Path) -> dict[str, int]:
     processing = [
-        item for item in all_queue_items(root) if item["processing_status"] == "processing"
+        item
+        for item in all_queue_items(root)
+        if item["processing_status"] == "processing"
     ]
     if processing:
         raise ValueError(
@@ -676,13 +712,13 @@ def next_eligible(
     if state["activation_state"] != "active":
         raise ValueError("monitor is not active")
     items = all_queue_items(root)
-    ordered = sorted(items, key=lambda item: (item["internal_date_ms"], item["gmail_message_id"]))
+    ordered = sorted(
+        items, key=lambda item: (item["internal_date_ms"], item["gmail_message_id"])
+    )
     if claim_root is not None:
         stale_by_hash = {
             item["gmail_message_id_sha256"]: item
-            for item in stale_processing_items(
-                root, claim_root, stale_after_seconds
-            )
+            for item in stale_processing_items(root, claim_root, stale_after_seconds)
             if item["recovery_action"] == "resume"
         }
         for item in ordered:
@@ -791,7 +827,9 @@ def list_manual_reviews(root: Path) -> list[dict[str, Any]]:
                 "review_status": item.get("review_status", "open"),
             }
         )
-    return sorted(reviews, key=lambda item: (item["internal_date_ms"], item["review_key"]))
+    return sorted(
+        reviews, key=lambda item: (item["internal_date_ms"], item["review_key"])
+    )
 
 
 def resolve_manual_review(root: Path, review_key: str) -> dict[str, Any]:
@@ -830,7 +868,9 @@ def finalize_item(
         raise ValueError("outcome must be processed or manual_review")
     if outcome == "processed" and record_root is not None:
         item = validate_queue_item(read_json(queue_path(root, message_id)))
-        claim_state = inbox_claim.read_state(inbox_claim.claim_path(claim_root, message_id))
+        claim_state = inbox_claim.read_state(
+            inbox_claim.claim_path(claim_root, message_id)
+        )
         if claim_state.get("claim_token") != claim_token:
             raise ValueError("claim token does not match")
         estimate_record.require_processed_evidence(
@@ -867,7 +907,9 @@ def main(argv: list[str] | None = None) -> int:
     reconfigure_activate_parser = sub.add_parser("reconfigure-activate")
     reconfigure_activate_parser.add_argument("--cron-config", type=Path, required=True)
     reconfigure_cancel_parser = sub.add_parser("reconfigure-cancel")
-    reconfigure_cancel_parser.add_argument("--current-cron-config", type=Path, required=True)
+    reconfigure_cancel_parser.add_argument(
+        "--current-cron-config", type=Path, required=True
+    )
     legacy_parser = sub.add_parser("verify-legacy-binding")
     legacy_parser.add_argument("--live-job", type=Path, required=True)
     legacy_parser.add_argument("--output", type=Path, required=True)
@@ -878,7 +920,9 @@ def main(argv: list[str] | None = None) -> int:
     discover_parser.add_argument("--window-start-ms", type=int, required=True)
     discover_parser.add_argument("--window-end-ms", type=int, required=True)
     next_parser = sub.add_parser("next")
-    next_parser.add_argument("--claim-root", type=Path, default=inbox_claim.default_claim_root())
+    next_parser.add_argument(
+        "--claim-root", type=Path, default=inbox_claim.default_claim_root()
+    )
     next_parser.add_argument("--stale-after-seconds", type=int, default=600)
     claim_next_parser = sub.add_parser("claim-next")
     claim_next_parser.add_argument(
@@ -898,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
     finalize_parser = sub.add_parser("finalize")
     finalize_parser.add_argument("--message-id", required=True)
     finalize_parser.add_argument("--claim-root", type=Path, required=True)
-    finalize_parser.add_argument("--claim-token", required=True)
+    finalize_parser.add_argument("--claim-token")
     finalize_parser.add_argument(
         "--outcome", choices=("processed", "manual_review"), required=True
     )
@@ -908,7 +952,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
-            result = prepare(args.root, read_json(args.capabilities), read_json(args.cron_config))
+            result = prepare(
+                args.root, read_json(args.capabilities), read_json(args.cron_config)
+            )
         elif args.command == "activate":
             result = activate(args.root, read_json(args.cron_config))
         elif args.command == "reconfigure-prepare":
@@ -940,9 +986,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             cleanup_run_work(args.root, args.batch)
         elif args.command == "next":
-            result = next_eligible(
-                args.root, args.claim_root, args.stale_after_seconds
-            )
+            result = next_eligible(args.root, args.claim_root, args.stale_after_seconds)
         elif args.command == "claim-next":
             result = claim_next(args.root, args.claim_root, args.stale_after_seconds)
         elif args.command == "assert-settled":
@@ -952,15 +996,20 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "resolve-manual-review":
             result = resolve_manual_review(args.root, args.review_key)
         elif args.command == "sync-claim":
-            result = sync_claim(args.root, args.message_id, read_json(args.claim_result))
+            result = sync_claim(
+                args.root, args.message_id, read_json(args.claim_result)
+            )
         elif args.command == "reconcile-terminal":
             result = reconcile_terminal(args.root, args.message_id, args.claim_root)
         else:
+            token = args.claim_token or inbox_claim.authoritative_claim_token(
+                args.claim_root, args.message_id
+            )
             result = finalize_item(
                 args.root,
                 args.message_id,
                 args.claim_root,
-                args.claim_token,
+                token,
                 args.outcome,
                 args.reason_code,
                 args.record_root,

@@ -87,13 +87,18 @@ def run_command(
 def send_reply_claimed(
     claim_root: Path,
     message_id: str,
-    claim_token: str,
+    claim_token: str | None,
     delivery_key: str,
     payload_path: Path,
     provider_response_path: Path,
     token: str,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    allow_processed_claim: bool = False,
 ) -> dict[str, str]:
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(
+            claim_root, message_id, allow_processed=allow_processed_claim
+        )
     payload = read_payload(payload_path)
     binding = canonical_sha256(payload)
     command = build_command(payload_path, token)
@@ -104,6 +109,7 @@ def send_reply_claimed(
         delivery_key,
         "customer_delivery",
         binding,
+        allow_processed=allow_processed_claim,
     )
     if not acquired:
         action = state["external_actions"][delivery_key]
@@ -111,7 +117,9 @@ def send_reply_claimed(
             receipt = receipt_from_action(action)
             write_private_json(provider_response_path, receipt)
             return receipt
-        raise ValueError(f"customer delivery is already {action['status']}; refusing retry")
+        raise ValueError(
+            f"customer delivery is already {action['status']}; refusing retry"
+        )
     try:
         result = run_command(command, runner=runner)
         response = json.loads(result.stdout)
@@ -122,7 +130,9 @@ def send_reply_claimed(
         if not isinstance(provider_message_id, str) or not provider_message_id:
             raise ValueError("Gmail provider response lacks id")
         if provider_thread_id != payload["threadId"]:
-            raise ValueError("Gmail provider response threadId does not match reply payload")
+            raise ValueError(
+                "Gmail provider response threadId does not match reply payload"
+            )
     except Exception:
         # Once curl is invoked, any failure is delivery-ambiguous and must not
         # be retried automatically.
@@ -150,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     send = sub.add_parser("send-reply-claimed")
     send.add_argument("--claim-root", type=Path, required=True)
     send.add_argument("--message-id", required=True)
-    send.add_argument("--claim-token", required=True)
+    send.add_argument("--claim-token")
     send.add_argument("--delivery-key", required=True)
     send.add_argument("--payload", type=Path, required=True)
     send.add_argument("--provider-response", type=Path, required=True)
@@ -167,7 +177,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(receipt, sort_keys=True))
         return 0
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+    except (
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        subprocess.CalledProcessError,
+    ) as exc:
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
 
