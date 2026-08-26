@@ -925,6 +925,30 @@ class CronConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cron_config.validate_binding(binding)
 
+    def test_render_message_cli_writes_exact_binding_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "cron-message.txt"
+            workspace = Path(directory) / "workspace"
+            base_dir = Path(directory) / "skill"
+            self.assertEqual(
+                cron_config.main(
+                    [
+                        "render-message",
+                        "--workspace",
+                        str(workspace),
+                        "--base-dir",
+                        str(base_dir),
+                        "--output",
+                        str(output),
+                    ]
+                ),
+                0,
+            )
+            rendered = output.read_text(encoding="utf-8")
+            self.assertEqual(rendered, cron_config.render_message(workspace, base_dir))
+            self.assertFalse(rendered.endswith("\n"))
+            cron_config.validate_canonical_message(rendered)
+
 
 class InboxMonitorTests(unittest.TestCase):
     def capabilities(self) -> dict:
