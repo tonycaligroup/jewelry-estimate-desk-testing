@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import cron_config as cron_config_helper
+import estimate_record
 import inbox_claim
 
 
@@ -609,6 +610,7 @@ def finalize_item(
     claim_token: str,
     outcome: str,
     reason_code: str | None = None,
+    record_root: Path | None = None,
 ) -> dict[str, Any]:
     """Idempotently finish one claim and reconcile its durable queue item."""
     if outcome == "processed":
@@ -621,6 +623,8 @@ def finalize_item(
         status = "manual_review"
     else:
         raise ValueError("outcome must be processed or manual_review")
+    if outcome == "processed" and record_root is not None:
+        estimate_record.require_initial_reply_evidence(record_root, message_id)
     inbox_claim.finish(
         claim_root,
         message_id,
@@ -674,6 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         "--outcome", choices=("processed", "manual_review"), required=True
     )
     finalize_parser.add_argument("--reason-code")
+    finalize_parser.add_argument("--record-root", type=Path, required=True)
 
     args = parser.parse_args(argv)
     try:
@@ -723,6 +728,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.claim_token,
                 args.outcome,
                 args.reason_code,
+                args.record_root,
             )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0

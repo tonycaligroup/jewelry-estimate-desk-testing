@@ -412,8 +412,31 @@ For each returned message:
    python3 {baseDir}/scripts/inbox_monitor.py finalize \
      --message-id '<gmail-id>' \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --claim-token '<claim-token>' --outcome processed
+     --claim-token '<claim-token>' --outcome processed \
+     --record-root '<absolute-workspace>/estimate-desk/records'
    ```
+
+   For an initiating inquiry that remains `awaiting_specs`, "processed" means
+   the price-free specification request was actually sent in the original
+   Gmail thread. After the Gmail API accepts that reply, persist its unmodified
+   provider response before finalizing:
+
+   ```bash
+   python3 {baseDir}/scripts/estimate_record.py record-spec-gate-sent \
+     --estimate-id '<jed-id>' --reply-body "$WORK/customer-reply.txt" \
+     --provider-response "$WORK/gmail-provider-response.json" \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --output "$WORK/current-record.json"
+   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
+     --record-type skill.jewelry_estimate --external-id '<jed-id>' \
+     --payload "$WORK/current-record.json" --status awaiting_specs
+   ```
+
+   `finalize --outcome processed` fails closed if an initiating
+   `awaiting_specs` record lacks same-thread provider send evidence. Never treat
+   record creation or `awaiting_specs` alone as completed customer handling. If
+   reply construction or sending fails, or provider acceptance is ambiguous,
+   use manual review instead of `processed`; never resend an ambiguous reply.
 
    For every manual-review decision, persist the terminal claim and queue state
    before attempting the one privacy-safe owner notification:
@@ -545,7 +568,8 @@ Cost assumptions remain owner-only in every mode.
 
 When fields are missing, use `templates/spec-gate-email.md`: one friendly,
 price-free, batched request; do not re-ask known facts; offer two real open
-slots with timezone. At Stage 1, draft it. At Stage 2 or 3, it may be sent.
+slots with timezone. At Stage 1, draft it. At Stage 2 or 3, it must be sent
+before the initiating inquiry can be completed.
 For Gmail, send it only through the Email reply invariant above.
 After one partial reply, ask once more only for load-bearing gaps; then escalate
 the decision to the owner.
