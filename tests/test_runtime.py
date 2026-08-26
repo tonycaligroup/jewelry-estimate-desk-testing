@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import base64
+import io
 import subprocess
 import sys
 import tempfile
@@ -17,9 +18,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
 import inbox_claim
+import inbox_monitor
 import gmail_reply
 import gmail_route
+import gmail_classify
 import kolo_safe
+import route_ownership
 import validate_profile
 
 
@@ -147,6 +151,16 @@ class SafeCliTests(unittest.TestCase):
                 "jed-0123456789abcdef", "customer-name-from-inbox"
             )
 
+    def test_generic_monitor_notification_contains_no_customer_or_estimate_data(self) -> None:
+        argv = kolo_safe.build_notify_monitor("system-actionable")
+        self.assertEqual(argv[:2], ["kolo", "notify-owner"])
+        self.assertNotIn("@", argv[-1])
+        self.assertNotIn("jed-", argv[-1].lower())
+
+    def test_unknown_monitor_notification_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            kolo_safe.build_notify_monitor("customer@example.com")
+
     def test_invalid_session_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "brief.json"
@@ -212,6 +226,304 @@ class InboxClaimTests(unittest.TestCase):
                 root, "gmail-message-2", state["claim_token"], "processed"
             )
             self.assertEqual(finished["status"], "processed")
+
+    def test_duplicate_claim_is_successful_noop_with_existing_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            acquired, state = inbox_claim.acquire(root, "gmail-message-duplicate")
+            self.assertTrue(acquired)
+            duplicate, duplicate_state = inbox_claim.acquire(
+                root, "gmail-message-duplicate"
+            )
+            self.assertFalse(duplicate)
+            self.assertEqual(duplicate_state["status"], "processing")
+            self.assertEqual(duplicate_state["claim_token"], state["claim_token"])
+
+    def test_duplicate_claim_cli_returns_exit_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            argv = [
+                "--root",
+                str(Path(directory) / "claims"),
+                "claim",
+                "--message-id",
+                "gmail-message-cli",
+            ]
+            with unittest.mock.patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(inbox_claim.main(argv), 0)
+                self.assertEqual(inbox_claim.main(argv), 0)
+
+    def test_legacy_claim_is_migrated_without_losing_terminal_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            path = inbox_claim.claim_path(root, "legacy-message")
+            path.mkdir(parents=True)
+            legacy = {
+                "message_id_sha256": inbox_claim.claim_key("legacy-message"),
+                "claim_token": "legacy-token",
+                "status": "processed",
+                "claimed_at": "2026-08-25T00:00:00+00:00",
+                "finished_at": "2026-08-25T00:01:00+00:00",
+            }
+            (path / "state.json").write_text(json.dumps(legacy), encoding="utf-8")
+            migrated = inbox_claim.read_state(path)
+            self.assertEqual(migrated["schema_version"], 1)
+            self.assertEqual(migrated["status"], "processed")
+
+    def test_notification_write_ahead_crash_becomes_uncertain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, state = inbox_claim.acquire(root, "gmail-message-notify")
+            pending = inbox_claim.begin_notification(
+                root,
+                "gmail-message-notify",
+                state["claim_token"],
+                "customer_replied:jed-0123456789abcdef:gmail-message-notify",
+            )
+            self.assertEqual(pending["owner_notification"]["status"], "pending")
+            reconciled = inbox_claim.reconcile_notification(
+                root, "gmail-message-notify"
+            )
+            self.assertEqual(reconciled["owner_notification"]["status"], "uncertain")
+            with self.assertRaises(ValueError):
+                inbox_claim.begin_notification(
+                    root,
+                    "gmail-message-notify",
+                    state["claim_token"],
+                    "customer_replied:jed-0123456789abcdef:gmail-message-notify",
+                )
+
+    def test_notification_allows_only_one_pre_delivery_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, state = inbox_claim.acquire(root, "gmail-message-retry")
+            key = "system_actionable:gmail-message-retry"
+            inbox_claim.begin_notification(
+                root, "gmail-message-retry", state["claim_token"], key
+            )
+            inbox_claim.finish_notification(
+                root,
+                "gmail-message-retry",
+                state["claim_token"],
+                "failed_pre_delivery",
+            )
+            retried = inbox_claim.begin_notification(
+                root, "gmail-message-retry", state["claim_token"], key
+            )
+            self.assertEqual(retried["owner_notification"]["attempts"], 2)
+            inbox_claim.finish_notification(
+                root,
+                "gmail-message-retry",
+                state["claim_token"],
+                "failed_pre_delivery",
+            )
+            with self.assertRaises(ValueError):
+                inbox_claim.begin_notification(
+                    root, "gmail-message-retry", state["claim_token"], key
+                )
+
+
+class InboxMonitorTests(unittest.TestCase):
+    def capabilities(self) -> dict:
+        return {
+            "gmail_after_epoch": True,
+            "gmail_internal_date_ms": True,
+            "gmail_complete_pagination": True,
+        }
+
+    def cron(self) -> dict:
+        return {
+            "name": "jed-inbox-monitor",
+            "schedule": "*/5 9-17 * * 1-5",
+            "timezone": "America/Los_Angeles",
+            "model": "litellm-fireworks/qwen-3-7-plus",
+            "fallbacks": "",
+        }
+
+    def active_root(self, directory: str) -> Path:
+        root = Path(directory) / "monitor"
+        inbox_monitor.prepare(root, self.capabilities(), self.cron())
+        inbox_monitor.activate(root, self.cron(), 1_000)
+        return root
+
+    def test_activation_fails_closed_without_required_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            capabilities = self.capabilities()
+            capabilities["gmail_complete_pagination"] = False
+            with self.assertRaises(ValueError):
+                inbox_monitor.prepare(Path(directory), capabilities, self.cron())
+            self.assertFalse((Path(directory) / "monitor-state.json").exists())
+
+    def test_two_phase_activation_and_exact_cron_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            prepared = inbox_monitor.prepare(root, self.capabilities(), self.cron())
+            self.assertEqual(prepared["activation_state"], "prepared")
+            self.assertIsNone(prepared["activated_at_ms"])
+            changed = self.cron()
+            changed["fallbacks"] = "another-model"
+            with self.assertRaises(ValueError):
+                inbox_monitor.activate(root, changed, 1_000)
+            active = inbox_monitor.activate(root, self.cron(), 1_000)
+            self.assertEqual(active["activation_state"], "active")
+            self.assertEqual(active["discovery_watermark_ms"], 1_000)
+
+    def test_missing_or_corrupt_active_state_never_reinitializes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            with self.assertRaises(ValueError):
+                inbox_monitor.load_monitor_state(root)
+            root.mkdir()
+            (root / "monitor-state.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                inbox_monitor.load_monitor_state(root)
+
+    def test_discovery_filters_pre_activation_and_orders_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            batch = [
+                {
+                    "gmail_message_id": "old",
+                    "thread_id": "old-thread",
+                    "internal_date_ms": 999,
+                },
+                {
+                    "gmail_message_id": "second",
+                    "thread_id": "thread-a",
+                    "internal_date_ms": 1_200,
+                },
+                {
+                    "gmail_message_id": "first",
+                    "thread_id": "thread-a",
+                    "internal_date_ms": 1_100,
+                },
+                {
+                    "gmail_message_id": "other",
+                    "thread_id": "thread-b",
+                    "internal_date_ms": 1_150,
+                },
+            ]
+            result = inbox_monitor.discover_complete(root, batch, 1_000, 2_000)
+            self.assertEqual(result["inserted"], 3)
+            self.assertEqual(result["ignored_before_activation"], 1)
+            self.assertEqual(inbox_monitor.next_eligible(root)["gmail_message_id"], "first")
+
+            claim = {
+                "acquired": True,
+                "schema_version": 1,
+                "message_id_sha256": inbox_monitor.message_key("first"),
+                "claim_token": "token",
+                "status": "processing",
+                "claimed_at": "2026-08-25T00:00:00+00:00",
+            }
+            inbox_monitor.sync_claim(root, "first", claim)
+            self.assertEqual(inbox_monitor.next_eligible(root)["gmail_message_id"], "other")
+
+    def test_duplicate_terminal_claim_completes_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": "done",
+                        "thread_id": "thread-done",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            terminal = {
+                "acquired": False,
+                "schema_version": 1,
+                "message_id_sha256": inbox_monitor.message_key("done"),
+                "claim_token": "token",
+                "status": "manual_review",
+                "claimed_at": "2026-08-25T00:00:00+00:00",
+                "finished_at": "2026-08-25T00:01:00+00:00",
+                "reason_code": "uncertain_classification",
+            }
+            item = inbox_monitor.sync_claim(root, "done", terminal)
+            self.assertEqual(item["discovery_status"], "complete")
+            self.assertEqual(item["processing_status"], "manual_review")
+            self.assertEqual(item["reason_code"], "uncertain_classification")
+
+    def test_failed_enumeration_does_not_advance_watermark(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            state = inbox_monitor.load_monitor_state(root)
+            self.assertEqual(state["discovery_watermark_ms"], 1_000)
+            # A failed/timeout enumeration never calls discover_complete.
+            self.assertEqual(
+                inbox_monitor.load_monitor_state(root)["discovery_watermark_ms"],
+                1_000,
+            )
+
+    def test_invalid_partial_batch_never_advances_watermark(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            batch = [
+                {
+                    "gmail_message_id": "valid-first",
+                    "thread_id": "thread-first",
+                    "internal_date_ms": 1_100,
+                },
+                {"gmail_message_id": "invalid-second"},
+            ]
+            with self.assertRaises(ValueError):
+                inbox_monitor.discover_complete(root, batch, 1_000, 2_000)
+            self.assertEqual(
+                inbox_monitor.load_monitor_state(root)["discovery_watermark_ms"],
+                1_000,
+            )
+            result = inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": "valid-first",
+                        "thread_id": "thread-first",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            self.assertEqual(result["existing"], 1)
+
+    def test_queue_claim_hash_mismatch_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            inbox_monitor.discover_complete(
+                root,
+                [
+                    {
+                        "gmail_message_id": "expected",
+                        "thread_id": "thread-expected",
+                        "internal_date_ms": 1_100,
+                    }
+                ],
+                1_000,
+                2_000,
+            )
+            mismatched = {
+                "acquired": True,
+                "message_id_sha256": inbox_monitor.message_key("different"),
+                "status": "processing",
+                "claimed_at": "2026-08-25T00:00:00+00:00",
+            }
+            with self.assertRaises(ValueError):
+                inbox_monitor.sync_claim(root, "expected", mismatched)
+
+    def test_stale_discovery_cannot_roll_back_watermark(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            inbox_monitor.discover_complete(root, [], 1_000, 3_000)
+            with self.assertRaises(ValueError):
+                inbox_monitor.discover_complete(root, [], 1_000, 2_000)
+            self.assertEqual(
+                inbox_monitor.load_monitor_state(root)["discovery_watermark_ms"],
+                3_000,
+            )
 
 
 class GmailReplyTests(unittest.TestCase):
@@ -337,6 +649,131 @@ class GmailRouteTests(unittest.TestCase):
         self.assertEqual(route["gmail_message_id"], "gmail-message-2")
         self.assertEqual(route["thread_id"], "gmail-thread-2")
         self.assertEqual(route["original_message_id"], "<new@example.net>")
+
+    def test_plus_addressing_is_preserved_as_exact_identity(self) -> None:
+        plus = gmail_route.build_route(
+            self.message("Customer <customer+design@example.net>"),
+            "sales@example.com",
+        )
+        plain = gmail_route.build_route(
+            self.message("Customer <customer@example.net>"),
+            "sales@example.com",
+        )
+        self.assertEqual(plus["recipient"], "customer+design@example.net")
+        self.assertNotEqual(plus["identity_key"], plain["identity_key"])
+
+
+class GmailClassificationTests(unittest.TestCase):
+    def message(self, headers: list[dict[str, str]]) -> dict:
+        return {"payload": {"headers": headers}}
+
+    def test_google_mailer_daemon_dsn_is_deterministic(self) -> None:
+        result = gmail_classify.classify(
+            self.message(
+                [
+                    {"name": "From", "value": "Mail Delivery Subsystem <mailer-daemon@googlemail.com>"},
+                    {"name": "Subject", "value": "Delivery Status Notification (Failure)"},
+                    {"name": "Auto-Submitted", "value": "auto-generated"},
+                    {"name": "Content-Type", "value": "multipart/report; report-type=delivery-status"},
+                ]
+            )
+        )
+        self.assertEqual(result["classification"], "dsn_candidate")
+
+    def test_auto_reply_is_filtered_without_llm(self) -> None:
+        result = gmail_classify.classify(
+            self.message(
+                [
+                    {"name": "From", "value": "customer@example.net"},
+                    {"name": "Subject", "value": "Automatic Reply: quote"},
+                    {"name": "Auto-Submitted", "value": "auto-replied"},
+                ]
+            )
+        )
+        self.assertEqual(result["classification"], "auto_reply")
+
+    def test_ordinary_message_is_not_guessed_system_noise(self) -> None:
+        result = gmail_classify.classify(
+            self.message(
+                [
+                    {"name": "From", "value": "customer@example.net"},
+                    {"name": "Subject", "value": "Custom ring estimate"},
+                ]
+            )
+        )
+        self.assertEqual(result["classification"], "customer_or_uncertain")
+
+
+class RouteOwnershipTests(unittest.TestCase):
+    def route(self) -> dict:
+        return {
+            "thread_id": "thread-1",
+            "identity_key": gmail_route.email_identity_key("customer+one@example.net"),
+        }
+
+    def record(self, status: str = "estimate_sent") -> dict:
+        return {
+            "schema_version": 1,
+            "estimate_id": "jed-0123456789abcdef",
+            "status": status,
+            "route": {
+                "thread_id": "thread-1",
+                "identity_key": gmail_route.email_identity_key("customer+one@example.net"),
+                "gmail_message_id": "initiating-message",
+            },
+        }
+
+    def processed_claim(self, root: Path) -> None:
+        _, state = inbox_claim.acquire(root, "initiating-message")
+        inbox_claim.finish(
+            root, "initiating-message", state["claim_token"], "processed"
+        )
+
+    def test_exact_route_and_initiating_claim_prove_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            self.processed_claim(root)
+            result = route_ownership.decide(self.route(), [self.record()], root)
+            self.assertEqual(result["decision"], "owned")
+            self.assertEqual(result["estimate_id"], "jed-0123456789abcdef")
+
+    def test_same_thread_different_email_is_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            self.processed_claim(root)
+            route = self.route()
+            route["identity_key"] = gmail_route.email_identity_key(
+                "customer+two@example.net"
+            )
+            result = route_ownership.decide(route, [self.record()], root)
+            self.assertEqual(result["decision"], "manual_review")
+            self.assertEqual(result["reason_code"], "identity_mismatch")
+
+    def test_missing_initiating_claim_never_proves_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = route_ownership.decide(
+                self.route(), [self.record()], Path(directory) / "claims"
+            )
+            self.assertEqual(result["decision"], "manual_review")
+            self.assertEqual(result["reason_code"], "missing_initiating_claim")
+
+    def test_terminal_record_retains_ownership_but_requires_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            self.processed_claim(root)
+            result = route_ownership.decide(
+                self.route(), [self.record("dormant")], root
+            )
+            self.assertEqual(result["decision"], "owned_manual_review")
+
+    def test_existing_manual_review_record_cannot_resume_automatically(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            self.processed_claim(root)
+            result = route_ownership.decide(
+                self.route(), [self.record("manual_review")], root
+            )
+            self.assertEqual(result["decision"], "owned_manual_review")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,10 @@ OWNER_NOTIFICATION_MESSAGES = {
     "approval-ready": "Estimate {estimate_id} is ready for approval. Open the brief in Kolo.",
     "customer-replied": "Customer replied on estimate {estimate_id}. Open Kolo to review.",
 }
+MONITOR_NOTIFICATION_MESSAGES = {
+    "system-actionable": "Jewelry Estimate Desk inbox monitor needs attention. Open Kolo to review.",
+    "state-error": "Jewelry Estimate Desk inbox monitor state needs attention. Open Kolo to review.",
+}
 
 
 def read_json_argument(path: Path) -> str:
@@ -79,6 +83,14 @@ def build_notify_owner(estimate_id: str, event: str = "approval-ready") -> list[
         "-m",
         message,
     ]
+
+
+def build_notify_monitor(event: str) -> list[str]:
+    try:
+        message = MONITOR_NOTIFICATION_MESSAGES[event]
+    except KeyError as exc:
+        raise ValueError("invalid monitor notification event") from exc
+    return ["kolo", "notify-owner", "-m", message]
 
 
 def build_record_upsert(record_type: str, external_id: str, payload: Path, status: str) -> list[str]:
@@ -158,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     notify.add_argument(
         "--event", choices=sorted(OWNER_NOTIFICATION_MESSAGES), default="approval-ready"
     )
+    notify_monitor = sub.add_parser("notify-monitor")
+    notify_monitor.add_argument(
+        "--event", choices=sorted(MONITOR_NOTIFICATION_MESSAGES), required=True
+    )
 
     upsert = sub.add_parser("record-upsert")
     upsert.add_argument("--record-type", required=True)
@@ -181,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "notify-owner":
             command = build_notify_owner(args.estimate_id, args.event)
+        elif args.command == "notify-monitor":
+            command = build_notify_monitor(args.event)
         elif args.command == "record-upsert":
             command = build_record_upsert(
                 args.record_type, args.external_id, args.payload, args.status

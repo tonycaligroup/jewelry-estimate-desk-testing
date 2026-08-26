@@ -1,6 +1,5 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 3.3.3
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail or wholesale custom-jewelry estimate workflows; do not use for appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -53,7 +52,13 @@ route to the pinned agent.
 - `scripts/kolo_safe.py`: request approvals, notify the owner, upsert records,
   and write idempotent audit events without a shell.
 - `scripts/inbox_claim.py`: prevent overlapping processing in a shared Kolo
-  workspace using atomic directory creation.
+  workspace and persist crash-safe owner-notification state.
+- `scripts/inbox_monitor.py`: manage two-phase activation, validated monitor
+  state, and a durable provider-ID-only discovery queue.
+- `scripts/gmail_classify.py`: conservatively identify delivery-status and
+  automatic-reply messages from deterministic Gmail headers.
+- `scripts/route_ownership.py`: prove thread ownership from an exact route,
+  one schema-valid estimate record, and its initiating inbox claim.
 - `scripts/gmail_reply.py`: construct a Gmail reply payload bound to the
   original thread and RFC message headers.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
@@ -123,70 +128,181 @@ automatically. Missing or unreadable stage means Stage 1.
 
 ## Inbox monitoring
 
-Monitoring is optional and requires `inbox_monitoring.enabled: true`. Create
-only one polling cron for this skill. Search Gmail through the path returned by
-`kolo integration-routing`; when it returns `maton`, read
-`/opt/kolo-skills/api-gateway/SKILL.md` before using Gmail.
+Monitoring is optional and requires `inbox_monitoring.enabled: true`. Search
+Gmail through the path returned by `kolo integration-routing`; when it returns
+`maton`, read `/opt/kolo-skills/api-gateway/SKILL.md` before using Gmail.
 
-For each matching Gmail message:
+### One-time setup and activation boundary
 
-1. Confirm it is inbound from the customer. Skip messages sent by the shop's
-   outbound mailbox and any message whose ID is already stored as an outbound
-   provider message ID. Extract the immutable Gmail `id`; do not use `threadId`
-   as the message ID.
-2. Claim it before any notification, draft, send, or record mutation:
+Never search or act on historical mail during installation. There is no
+seven-day bootstrap or other fallback window. Jewelers may already have handled
+every pre-activation inquiry manually.
 
-   ```bash
-   python3 {baseDir}/scripts/inbox_claim.py claim --message-id '<gmail-id>'
+1. Perform a read-only capability check. Verify that the Gmail integration can:
+   use `after:<epoch-seconds>`, return integer `internalDate` epoch milliseconds,
+   and enumerate every page until no `nextPageToken` remains. Write a private
+   JSON file containing these three fixed booleans:
+
+   ```json
+   {"gmail_after_epoch":true,"gmail_internal_date_ms":true,"gmail_complete_pagination":true}
    ```
 
-   Gmail IDs are provider-generated, not customer text. Save the returned
-   `claim_token` in private job state. Exit 4 means another run already owns or
-   completed the message; skip it without side effects.
-3. Immediately write a `processing` record keyed by the Gmail message ID using
-   `scripts/kolo_safe.py record-upsert` and a JSON payload file.
-4. Save the full Gmail message resource to private job state and derive its
-   route before any lookup, draft, notification, or send:
+   If any capability is unavailable, report an unsupported environment and
+   leave monitoring inactive. Never weaken the activation boundary.
+2. Write the complete intended cron identity and configuration to private JSON.
+   It must specify exactly one `jed-inbox-monitor`, the configured business-hours
+   schedule in its IANA timezone, model `litellm-fireworks/qwen-3-7-plus`, no
+   fallbacks, isolated sessions, and the fixed runbook below.
+3. Prepare durable state under an atomic setup lock:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py prepare \
+     --capabilities "$WORK/capabilities.json" \
+     --cron-config "$WORK/cron-config.json"
+   ```
+
+4. Create or adopt one inert cron. An existing cron may be adopted only when its
+   identity and complete configuration exactly match the prepared JSON. A cron
+   must read monitor status first and exit silently unless it is `active`.
+   Concurrent or mismatched setup requires manual review; never create a second
+   cron.
+5. Re-read the live cron configuration, save it to JSON, and activate only when
+   its canonical hash matches the prepared configuration:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py activate \
+     --cron-config "$WORK/verified-live-cron.json"
+   ```
+
+   The helper atomically records `activated_at_ms` and initializes the discovery
+   watermark. Missing, corrupt, or unsupported-version active state fails closed
+   and must never be silently recreated.
+
+### Cron discovery phase
+
+Discovery and processing are separate. A processing failure must not prevent a
+later discovery window from being durably recorded.
+
+1. Validate the shop profile, then read monitor status. Exit silently when the
+   monitor is not `active`.
+2. Capture `window_end_ms` before searching. Starting at the durable watermark,
+   query Gmail with a one-second overlap using
+   `in:inbox after:<epoch-seconds>`. Paginate within this run until
+   `nextPageToken` is absent. Never persist a Gmail page token across runs and
+   never impose a fixed ten-message limit.
+3. For every result, collect only immutable Gmail `id`, `threadId`, and integer
+   `internalDate`. Write no customer name, address, subject, or message content
+   to the discovery batch. After complete enumeration, call:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py discover-complete \
+     --batch "$WORK/discovery-batch.json" \
+     --window-start-ms '<durable-watermark>' \
+     --window-end-ms '<captured-window-end-ms>'
+   ```
+
+   The helper rejects pre-activation messages, inserts each provider ID
+   atomically, and advances the watermark only after every insertion is durable.
+   If Gmail pagination fails or times out, do not call `discover-complete`; the
+   watermark remains unchanged and the same window is enumerated next run.
+
+### Queue processing phase
+
+Repeatedly call `inbox_monitor.py next`. It returns the oldest eligible message,
+or `null`. The helper permits only the oldest unfinished item in each Gmail
+thread; a stuck thread does not block other threads.
+
+For each returned message:
+
+1. Claim the immutable Gmail message ID before fetching content, notifying,
+   drafting, sending, or mutating a Kolo estimate:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_claim.py claim \
+     --message-id '<gmail-id>' > "$WORK/claim-result.json"
+   python3 {baseDir}/scripts/inbox_monitor.py sync-claim \
+     --message-id '<gmail-id>' --claim-result "$WORK/claim-result.json"
+   ```
+
+   `claim` returns exit 0 for both `acquired:true` and `acquired:false`.
+   A duplicate `processed` or `manual_review` claim completes the queue item. A
+   duplicate `processing` claim remains owned by the earlier run and receives no
+   side effects; reconcile it manually if stale. Never auto-steal a claim.
+2. Only for `acquired:true`, fetch the full Gmail message and run the conservative
+   deterministic header classifier before involving the LLM:
+
+   ```bash
+   python3 {baseDir}/scripts/gmail_classify.py "$WORK/gmail-message.json"
+   ```
+
+   - `auto_reply`: complete as processed with no response or owner alert.
+   - `dsn_candidate`: correlate only against durable stored outbound provider
+     evidence and the exact failed-recipient email. Never trust an estimate ID
+     found only in message text. A verified failure becomes `manual_review` with
+     reason `delivery_failed` and an event-specific owner alert. An uncorrelated
+     DSN becomes `manual_review` with reason `uncorrelated_dsn`; never treat it as
+     a customer.
+   - `customer_or_uncertain`: derive and validate the customer route below.
+   - Mailbox quota, authentication/security, or persistent system failures are
+     `manual_review` with reason `system_actionable` and use the fixed generic
+     monitor alert. Other uncertain classifications are `manual_review` with
+     reason `uncertain_classification`.
+3. Derive the route from the exact message. The normalized sender email remains
+   exact; never remove plus-address tags or merge aliases:
 
    ```bash
    python3 {baseDir}/scripts/gmail_route.py \
      "$WORK/gmail-message.json" '<profile-outbound-mailbox>' "$WORK/route.json"
    ```
 
-   The resulting `identity_key` is a hash of the normalized sender email. Never
-   look up or reuse a route by sender display name. Link the message to an
-   existing estimate only when both `identity_key` and Gmail `thread_id` match
-   that estimate. A name match is irrelevant; an email or thread mismatch means
-   a separate estimate. If a stored thread points to a different identity key,
-   stop as `manual_review` without sending.
-5. If its Gmail thread ID belongs to an existing estimate, notify the owner at
-   every trust stage before drafting or sending any further customer response:
+4. A thread is Kolo-owned only when one schema-valid estimate record matches the
+   exact `thread_id`, exact `identity_key`, and initiating Gmail ID, and that
+   initiating ID has a valid local claim. A display-name match is irrelevant.
+   Save only the candidate structured records returned by the exact thread
+   lookup to a private JSON array, then run:
 
    ```bash
+   python3 {baseDir}/scripts/route_ownership.py \
+     "$WORK/route.json" "$WORK/candidate-records.json"
+   ```
+
+   If the thread contains an earlier message but has no valid ownership record,
+   or records disagree, stop as `manual_review` without sending. If this is the
+   first and only message in the thread, create a new inquiry. `declined` and
+   `dormant` records retain ownership but require manual review rather than a new
+   estimate.
+5. For a valid response on an active estimate, notify the owner at every trust
+   stage before any customer response. Bind the alert to an event-specific key
+   that includes the event, estimate ID, and Gmail ID:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_claim.py notification-begin \
+     --message-id '<gmail-id>' --token '<claim-token>' \
+     --notification-key 'customer_replied:<jed-id>:<gmail-id>'
    python3 {baseDir}/scripts/kolo_safe.py notify-owner \
      --event customer-replied --estimate-id '<jed-id>'
    ```
 
-   This notification is mandatory whenever monitoring is enabled and contains
-   only the opaque estimate ID, never customer content. The claimed Gmail
-   message ID is its deduplication key: store the notification outcome on that
-   processing record and do not send the alert again for the same message. If
-   delivery is uncertain, record `owner_notification_status: uncertain` and do
-   not retry the alert independently.
-6. Process messages sequentially in the same monitor run. Do not create a
-   second monitoring cron or manually start a concurrent monitor.
-7. After successful triage and any authorized action, mark both the Kolo record
-   and local claim `processed`. If failure occurs after an external send might
-   have happened, mark `manual_review` and never retry automatically. Retry once
-   only when failure is proven to have occurred before any external side effect.
+   Write `pending` before invoking Kolo. Exit 0 means accepted by Kolo; finish as
+   `sent`. A confirmed non-zero pre-delivery rejection becomes
+   `failed_pre_delivery` and permits exactly one retry. If the process crashes
+   while pending or acceptance is ambiguous, run `notification-reconcile` next
+   time to mark `uncertain`; never resend independently. Generic mailbox alerts
+   use `kolo_safe.py notify-monitor --event system-actionable` and contain no
+   estimate or customer data.
+6. After authorized processing, finish the claim first, using `complete` or
+   `fail --reason-code <fixed_reason>`. Then call `inbox_monitor.py
+   reconcile-terminal`; the terminal claim is authoritative for processing side
+   effects and the queue is authoritative only for discovery. Any impossible
+   mismatch becomes manual review plus a fixed privacy-safe monitor alert—never
+   a customer send.
 
-Kolo records do not provide compare-and-swap. The local claim protects a shared
-workspace, but cannot guarantee exclusion across independent hosts. Treat a
-stale `processing` claim as manual review, not permission to repeat a send.
-
-The cron's message must contain only fixed instructions and opaque/provider IDs.
-Owner notifications use the opaque estimate ID, never a customer name, email
-address, message text, or piece type. Stay silent when no new messages exist.
+Kolo records do not provide compare-and-swap. These helpers protect one shared
+workspace but cannot guarantee exclusion across independent hosts. Keep claim
+and queue state indefinitely; do not delete claims or create a retention cron.
+The monitor uses only the existing statuses `processed` and `manual_review` plus
+fixed reason codes. Its cron message contains only fixed instructions and
+opaque/provider IDs. Stay silent when no queued work or alert exists.
 
 ## Email reply invariant
 
@@ -409,7 +525,9 @@ If a rendering is authorized, read `references/rendering-standards.md` first.
 ## Phase 5: records, follow-up, and cleanup
 
 Record the estimate under the opaque estimate ID, never a customer name. The
-record should retain the email-derived identity key, inbound message ID and
+record must use `schema_version: 1` and retain the complete validated `route`,
+including its email-derived identity key, initiating inbound Gmail message ID,
+thread ID, and original RFC Message-ID. It should also retain the inbound
 timestamp; approval binding hash and approved price; specification and
 assumptions; internal cost sheet; outbound provider message ID; trust stage;
 appointment data; and next action date. Use

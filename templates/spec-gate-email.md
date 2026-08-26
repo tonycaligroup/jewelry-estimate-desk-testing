@@ -5,7 +5,14 @@ checklist in ONE friendly email without making the customer feel quizzed.
 
 ---
 
-**Subject (surprise-safe):** Following up on your inquiry
+**CRITICAL: This must be a REPLY to the original customer inquiry thread.**
+
+Do NOT compose a new email with subject "Following up on your inquiry". Instead,
+use `scripts/gmail_reply.py` with the route from `scripts/gmail_route.py` to
+keep the conversation in the original thread. The subject line will automatically
+be "Re: <original subject>" from the reply headers.
+
+**Email body:**
 
 Hi {{first_name}},
 
@@ -38,7 +45,8 @@ Warmly,
 
 ## Rules
 
+- **MUST use gmail_reply.py with route.json from gmail_route.py** — never compose a new email.
 - Delete any cluster you already have answers for; confirm in a half-sentence instead of asking.
 - Never include a price, or a range, in this email.
 - Never send more than one follow-up ask, and only for what is still missing.
-- Keep the subject detail-free on anything gift- or proposal-shaped.
+- The subject line is automatic from the reply headers — do not invent one.
