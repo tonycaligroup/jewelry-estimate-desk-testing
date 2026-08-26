@@ -418,7 +418,42 @@ For each returned message:
    `uncertain` after 600 seconds. Never resend `pending` or `uncertain` alerts.
    Generic mailbox alerts tied to a claimed message must never call
    `notify-monitor` directly.
-6. Use only these combined terminal commands; do not call `inbox_claim.py
+6. Before deciding which specifications are missing or complete, fetch the
+   exact Gmail thread resource and read every message in chronological order,
+   including the initiating inquiry and all later customer replies. Never
+   evaluate only the newest message and never treat the current record as a
+   substitute for missing thread content. Build `$WORK/thread-review.json`
+   directly from that exact thread with:
+
+   - `thread_id`: the owned Gmail thread ID;
+   - `source_message_id`: the currently claimed inbound Gmail ID;
+   - `message_ids`: every Gmail message ID in the fetched thread, in
+     chronological order, including shop messages;
+   - `specification`: one normalized customer-safe specification merged from
+     the complete thread; and
+   - `missing_required_fields`: only the applicable Phase 1.5 field keys still
+     absent after the merge, or an empty array when complete.
+
+   Persist this review before drafting, pricing, requesting approval, or
+   finalizing:
+
+   ```bash
+   python3 {baseDir}/scripts/estimate_record.py record-thread-review \
+     --estimate-id '<jed-id>' --snapshot "$WORK/thread-review.json" \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --output "$WORK/current-record.json"
+   ```
+
+   The helper stores normalized specifications plus hashes and counts, not raw
+   email bodies or later provider message IDs. It fails if the initiating or
+   currently claimed message is absent. Mirror the exact output to Kolo using
+   its returned status. Do not re-ask any field present anywhere in the thread.
+
+   If `missing_required_fields` is nonempty, follow the specification-request
+   branch and persist its same-source send receipt. If it is empty, continue
+   through internal pricing and the claimed owner-approval request in the same
+   run. Notification alone is never a completed customer reply.
+7. Use only these combined terminal commands; do not call `inbox_claim.py
    complete`, `inbox_claim.py fail`, or `reconcile-terminal` separately.
 
    After successful authorized processing and all required durable record
@@ -477,6 +512,28 @@ For each returned message:
 
    `record-spec-gate-sent` is only for the initiating inquiry. Never overwrite
    its immutable evidence with a later follow-up receipt.
+
+   For a customer reply that completes the specification, calculate the
+   internal estimate, create and deliver the claimed approval request from
+   Phase 3, then persist its accepted binding before finalizing:
+
+   ```bash
+   python3 {baseDir}/scripts/estimate_record.py record-approval-requested \
+     --estimate-id '<jed-id>' --source-message-id '<gmail-id>' \
+     --approval-request "$WORK/approval-request.json" \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --output "$WORK/current-record.json"
+   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
+     --record-type skill.jewelry_estimate --external-id '<jed-id>' \
+     --payload "$WORK/current-record.json" --status pending_approval
+   ```
+
+   Run `record-approval-requested` only after
+   `request-approval-claimed` reports accepted or already sent. Never tell the
+   owner to calculate or send the estimate manually, and never send a customer
+   price before the returned approval event passes `approval_guard.py verify`.
+   Finalization fails unless the exact claimed Gmail ID has both a complete
+   full-thread review and a sent claimed approval request.
 
    For every manual-review decision, persist the terminal claim and queue state
    before attempting the one privacy-safe owner notification:
@@ -622,6 +679,10 @@ misleading `x/8` score. Wholesale estimates may label customer-visible
 product/specification unknowns, but never jeweler cost or pricing assumptions.
 Cost assumptions remain owner-only in every mode.
 
+Evaluate these fields against the merged full-thread specification recorded in
+Inbox monitoring step 6. A fact supplied in the initiating inquiry or any
+later customer reply is known and must not be requested again.
+
 When fields are missing, use `templates/spec-gate-email.md`: one friendly,
 price-free, batched request; do not re-ask known facts; offer two real open
 slots with timezone. At Stage 1, draft it. At Stage 2 or 3, it must be sent
@@ -686,6 +747,12 @@ python3 {baseDir}/scripts/kolo_safe.py request-approval-claimed \
   --details "$WORK/approval-request.json" \
   --session-key '<session-key>'
 ```
+
+After Kolo accepts that exact claimed action, immediately run the
+`record-approval-requested` and record-mirror commands from Inbox monitoring
+step 7 before finalizing the claimed email. The approval request is not durable
+workflow completion until both the claim action and authoritative local record
+contain matching evidence.
 
 The claimed approval request is the owner-facing Kolo action. Do not add a
 second unjournaled `notify-owner` call for the same approval-ready event.

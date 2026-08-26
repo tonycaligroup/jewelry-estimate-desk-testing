@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 from contextlib import contextmanager
@@ -16,6 +17,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import route_ownership
+
+
+HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def default_record_root() -> Path:
@@ -99,6 +103,43 @@ def record_path(root: Path, estimate_id: str) -> Path:
     return root / f"{estimate_id}.json"
 
 
+def sha256_text(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def validate_provider_id(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > 512:
+        raise ValueError(f"{field} must contain 1-512 characters")
+    if any(ord(character) < 33 or ord(character) == 127 for character in value):
+        raise ValueError(f"{field} contains invalid characters")
+    return value
+
+
+def preserve_append_only(
+    existing: dict[str, Any], proposed: dict[str, Any], field: str
+) -> dict[str, Any]:
+    existing_values = existing.get(field, [])
+    proposed_values = proposed.get(field, [])
+    if not isinstance(existing_values, list) or not isinstance(proposed_values, list):
+        raise ValueError(f"{field} must be an array")
+    if existing_values and not proposed_values:
+        proposed = dict(proposed)
+        proposed[field] = existing_values
+        proposed_values = existing_values
+    if proposed_values[: len(existing_values)] != existing_values:
+        raise ValueError(f"{field} is immutable and append-only")
+    if len(proposed_values) < len(existing_values):
+        raise ValueError(f"{field} cannot be removed")
+    return proposed
+
+
 def reject_duplicate_thread_record(root: Path, record: dict[str, Any]) -> None:
     thread_id = record["route"]["thread_id"]
     estimate_id = record["estimate_id"]
@@ -129,20 +170,8 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                 if proposed_reply is None:
                     record = dict(record)
                     record["spec_gate_reply"] = existing_reply
-            existing_followups = existing.get("followup_replies", [])
-            proposed_followups = record.get("followup_replies", [])
-            if not isinstance(existing_followups, list) or not isinstance(
-                proposed_followups, list
-            ):
-                raise ValueError("followup_replies must be an array")
-            if existing_followups and not proposed_followups:
-                record = dict(record)
-                record["followup_replies"] = existing_followups
-                proposed_followups = existing_followups
-            if proposed_followups[: len(existing_followups)] != existing_followups:
-                raise ValueError("follow-up send evidence is immutable")
-            if len(proposed_followups) < len(existing_followups):
-                raise ValueError("follow-up send evidence cannot be removed")
+            for field in ("followup_replies", "thread_reviews", "approval_requests"):
+                record = preserve_append_only(existing, record, field)
         write_object(path, record)
     return record
 
@@ -290,8 +319,279 @@ def record_followup_sent(
         return record
 
 
+def record_thread_review(
+    root: Path,
+    estimate_id: str,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist a privacy-minimal full-thread specification review."""
+    thread_id = validate_provider_id(snapshot.get("thread_id"), "thread_id")
+    source_message_id = validate_provider_id(
+        snapshot.get("source_message_id"), "source_message_id"
+    )
+    message_ids = snapshot.get("message_ids")
+    if not isinstance(message_ids, list) or not message_ids:
+        raise ValueError("message_ids must be a non-empty array")
+    validated_ids = [
+        validate_provider_id(value, "message_ids entry") for value in message_ids
+    ]
+    if len(set(validated_ids)) != len(validated_ids):
+        raise ValueError("message_ids must not contain duplicates")
+    if source_message_id not in validated_ids:
+        raise ValueError("source_message_id must be present in message_ids")
+    specification = snapshot.get("specification")
+    if not isinstance(specification, dict) or not specification:
+        raise ValueError("specification must be a non-empty object")
+    missing = snapshot.get("missing_required_fields")
+    if not isinstance(missing, list) or any(
+        not isinstance(field, str)
+        or not field
+        or len(field) > 80
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789_.-"
+            for character in field
+        )
+        for field in missing
+    ):
+        raise ValueError("missing_required_fields must contain lowercase field keys")
+    if len(set(missing)) != len(missing):
+        raise ValueError("missing_required_fields must not contain duplicates")
+    outcome = "awaiting_specs" if missing else "specs_complete"
+
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if thread_id != record["route"]["thread_id"]:
+            raise ValueError("thread review does not match the owned thread")
+        if record["route"]["gmail_message_id"] not in validated_ids:
+            raise ValueError("thread review must include the initiating Gmail message")
+        evidence = {
+            "source_message_id_sha256": sha256_text(source_message_id),
+            "thread_id": thread_id,
+            "thread_message_count": len(validated_ids),
+            "thread_context_sha256": canonical_sha256(validated_ids),
+            "specification_sha256": canonical_sha256(specification),
+            "missing_required_fields": sorted(missing),
+            "outcome": outcome,
+        }
+        reviews = record.setdefault("thread_reviews", [])
+        if not isinstance(reviews, list):
+            raise ValueError("thread_reviews must be an array")
+        for existing in reviews:
+            if not isinstance(existing, dict):
+                raise ValueError("thread_reviews contains invalid evidence")
+            if existing.get("source_message_id_sha256") != evidence[
+                "source_message_id_sha256"
+            ]:
+                continue
+            comparable = dict(existing)
+            comparable.pop("recorded_at", None)
+            if comparable == evidence:
+                return record
+            raise ValueError("conflicting thread review for source message")
+        if record["status"] != "awaiting_specs":
+            raise ValueError("thread specification review requires awaiting_specs status")
+        evidence["recorded_at"] = datetime.now(timezone.utc).isoformat()
+        reviews.append(evidence)
+        record["specification"] = specification
+        record["missing_required_fields"] = sorted(missing)
+        record["status"] = "awaiting_specs"
+        write_object(path, record)
+        return record
+
+
+def record_approval_requested(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    approval_request: dict[str, Any],
+) -> dict[str, Any]:
+    """Append owner-approval evidence after Kolo accepts the claimed request."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    if approval_request.get("estimate_id") != estimate_id:
+        raise ValueError("approval request estimate_id does not match")
+    binding_hash = approval_request.get("binding_hash")
+    if not isinstance(binding_hash, str) or not HASH_RE.fullmatch(binding_hash):
+        raise ValueError("approval request binding_hash is invalid")
+    proposed_price = approval_request.get("proposed_price")
+    if isinstance(proposed_price, bool) or not isinstance(proposed_price, (int, float)):
+        raise ValueError("approval request proposed_price must be numeric")
+
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if approval_request.get("route") != record["route"]:
+            raise ValueError("approval request route does not match the record")
+        if approval_request.get("specification") != record.get("specification"):
+            raise ValueError("approval request specification does not match the record")
+        source_hash = sha256_text(source_message_id)
+        review = next(
+            (
+                item
+                for item in record.get("thread_reviews", [])
+                if isinstance(item, dict)
+                and item.get("source_message_id_sha256") == source_hash
+                and item.get("outcome") == "specs_complete"
+            ),
+            None,
+        )
+        if review is None:
+            raise ValueError("approval request lacks a matching complete thread review")
+        evidence = {
+            "source_message_id_sha256": source_hash,
+            "binding_hash": binding_hash,
+            "proposed_price": proposed_price,
+        }
+        requests = record.setdefault("approval_requests", [])
+        if not isinstance(requests, list):
+            raise ValueError("approval_requests must be an array")
+        for existing in requests:
+            if not isinstance(existing, dict):
+                raise ValueError("approval_requests contains invalid evidence")
+            if existing.get("source_message_id_sha256") != source_hash:
+                continue
+            comparable = dict(existing)
+            comparable.pop("requested_at", None)
+            if comparable == evidence:
+                return record
+            raise ValueError("conflicting approval request for source message")
+        if record["status"] != "awaiting_specs":
+            raise ValueError("approval evidence requires awaiting_specs status")
+        evidence["requested_at"] = datetime.now(timezone.utc).isoformat()
+        requests.append(evidence)
+        record["approval_binding_hash"] = binding_hash
+        record["proposed_price"] = proposed_price
+        record["missing_required_fields"] = []
+        record["status"] = "pending_approval"
+        write_object(path, record)
+        return record
+
+
+def require_processed_evidence(
+    root: Path,
+    message_id: str,
+    thread_id: str,
+    claim_state: dict[str, Any],
+) -> None:
+    """Refuse completion when an estimate-thread message lacks its durable outcome."""
+    matches: list[dict[str, Any]] = []
+    if root.exists():
+        with record_lock(root):
+            for path in sorted(root.glob("jed-*.json")):
+                record = read_object(path)
+                route_ownership.validate_record(record)
+                if record["route"]["thread_id"] == thread_id:
+                    matches.append(record)
+    if len(matches) > 1:
+        raise ValueError("multiple estimate records match the Gmail thread")
+    if not matches:
+        return
+    record = matches[0]
+    source_hash = sha256_text(message_id)
+    initiating = record["route"]["gmail_message_id"] == message_id
+    reviews = record.get("thread_reviews", [])
+    matching_review = next(
+        (
+            item
+            for item in reviews
+            if isinstance(item, dict)
+            and item.get("source_message_id_sha256") == source_hash
+        ),
+        None,
+    )
+
+    if initiating and record["status"] == "awaiting_specs":
+        if matching_review is not None:
+            if matching_review.get("thread_id") != thread_id:
+                raise ValueError("thread review is bound to the wrong Gmail thread")
+            if matching_review.get("outcome") != "awaiting_specs":
+                raise ValueError("thread review outcome does not match estimate status")
+            if matching_review.get("specification_sha256") != canonical_sha256(
+                record.get("specification")
+            ):
+                raise ValueError("record specification changed after full-thread review")
+        evidence = record.get("spec_gate_reply")
+        if not isinstance(evidence, dict) or evidence.get("status") != "sent":
+            raise ValueError(
+                "awaiting_specs inquiry lacks durable spec-gate send evidence; "
+                "refusing processed outcome"
+            )
+        if evidence.get("thread_id") != record["route"]["thread_id"]:
+            raise ValueError("spec-gate send evidence is bound to the wrong Gmail thread")
+        if not isinstance(evidence.get("provider_message_id"), str) or not evidence[
+            "provider_message_id"
+        ]:
+            raise ValueError("spec-gate send evidence lacks a provider message ID")
+        return
+
+    if matching_review is None:
+        raise ValueError("estimate-thread message lacks a durable full-thread review")
+    if matching_review.get("thread_id") != thread_id:
+        raise ValueError("thread review is bound to the wrong Gmail thread")
+    if matching_review.get("specification_sha256") != canonical_sha256(
+        record.get("specification")
+    ):
+        raise ValueError("record specification changed after full-thread review")
+    outcome = matching_review.get("outcome")
+    if outcome == "awaiting_specs":
+        if record["status"] != "awaiting_specs":
+            raise ValueError("thread review outcome does not match estimate status")
+        followup = next(
+            (
+                item
+                for item in record.get("followup_replies", [])
+                if isinstance(item, dict)
+                and item.get("source_message_id_sha256") == source_hash
+                and item.get("status") == "sent"
+                and item.get("thread_id") == thread_id
+            ),
+            None,
+        )
+        if followup is None:
+            raise ValueError("incomplete customer reply lacks durable follow-up send evidence")
+        return
+    if outcome == "specs_complete":
+        if record["status"] != "pending_approval":
+            raise ValueError("complete thread review is not pending approval")
+        approval = next(
+            (
+                item
+                for item in record.get("approval_requests", [])
+                if isinstance(item, dict)
+                and item.get("source_message_id_sha256") == source_hash
+            ),
+            None,
+        )
+        if approval is None:
+            raise ValueError("complete customer reply lacks durable approval evidence")
+        action_key = f"approval_request:{record['estimate_id']}:{message_id}"
+        action = claim_state.get("external_actions", {}).get(action_key)
+        if (
+            not isinstance(action, dict)
+            or action.get("category") != "approval_request"
+            or action.get("status") != "sent"
+        ):
+            raise ValueError("complete customer reply lacks a sent claimed approval request")
+        return
+    raise ValueError("thread review has an invalid completion outcome")
+
+
 def require_initial_reply_evidence(root: Path, message_id: str) -> None:
-    """Refuse completion of an awaiting-specs inquiry without same-thread send proof."""
+    """Backward-compatible initial-inquiry evidence check."""
+    matches = lookup_by_initiating_message(root, message_id)
+    if not matches or matches[0]["status"] != "awaiting_specs":
+        return
+    require_processed_evidence(
+        root,
+        message_id,
+        matches[0]["route"]["thread_id"],
+        {},
+    )
+
+
+def lookup_by_initiating_message(root: Path, message_id: str) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     if root.exists():
         with record_lock(root):
@@ -302,21 +602,7 @@ def require_initial_reply_evidence(root: Path, message_id: str) -> None:
                     matches.append(record)
     if len(matches) > 1:
         raise ValueError("multiple estimate records match the initiating Gmail message")
-    if not matches or matches[0]["status"] != "awaiting_specs":
-        return
-    record = matches[0]
-    evidence = record.get("spec_gate_reply")
-    if not isinstance(evidence, dict) or evidence.get("status") != "sent":
-        raise ValueError(
-            "awaiting_specs inquiry lacks durable spec-gate send evidence; "
-            "refusing processed outcome"
-        )
-    if evidence.get("thread_id") != record["route"]["thread_id"]:
-        raise ValueError("spec-gate send evidence is bound to the wrong Gmail thread")
-    if not isinstance(evidence.get("provider_message_id"), str) or not evidence[
-        "provider_message_id"
-    ]:
-        raise ValueError("spec-gate send evidence lacks a provider message ID")
+    return matches
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -347,6 +633,17 @@ def main(argv: list[str] | None = None) -> int:
     followup.add_argument("--provider-response", type=Path, required=True)
     followup.add_argument("--record-root", type=Path, default=default_record_root())
     followup.add_argument("--output", type=Path)
+    thread_review = sub.add_parser("record-thread-review")
+    thread_review.add_argument("--estimate-id", required=True)
+    thread_review.add_argument("--snapshot", type=Path, required=True)
+    thread_review.add_argument("--record-root", type=Path, default=default_record_root())
+    thread_review.add_argument("--output", type=Path)
+    approval = sub.add_parser("record-approval-requested")
+    approval.add_argument("--estimate-id", required=True)
+    approval.add_argument("--source-message-id", required=True)
+    approval.add_argument("--approval-request", type=Path, required=True)
+    approval.add_argument("--record-root", type=Path, default=default_record_root())
+    approval.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "create-inquiry":
@@ -371,13 +668,28 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.output is not None:
                 write_object(args.output, record)
-        else:
+        elif args.command == "record-followup-sent":
             record = record_followup_sent(
                 args.record_root,
                 args.estimate_id,
                 args.source_message_id,
                 args.reply_body.read_text(encoding="utf-8"),
                 read_object(args.provider_response),
+            )
+            if args.output is not None:
+                write_object(args.output, record)
+        elif args.command == "record-thread-review":
+            record = record_thread_review(
+                args.record_root, args.estimate_id, read_object(args.snapshot)
+            )
+            if args.output is not None:
+                write_object(args.output, record)
+        else:
+            record = record_approval_requested(
+                args.record_root,
+                args.estimate_id,
+                args.source_message_id,
+                read_object(args.approval_request),
             )
             if args.output is not None:
                 write_object(args.output, record)

@@ -696,7 +696,16 @@ def finalize_item(
     else:
         raise ValueError("outcome must be processed or manual_review")
     if outcome == "processed" and record_root is not None:
-        estimate_record.require_initial_reply_evidence(record_root, message_id)
+        item = validate_queue_item(read_json(queue_path(root, message_id)))
+        claim_state = inbox_claim.read_state(inbox_claim.claim_path(claim_root, message_id))
+        if claim_state.get("claim_token") != claim_token:
+            raise ValueError("claim token does not match")
+        estimate_record.require_processed_evidence(
+            record_root,
+            message_id,
+            item["thread_id"],
+            claim_state,
+        )
     inbox_claim.finish(
         claim_root,
         message_id,
