@@ -62,6 +62,8 @@ route to the pinned agent.
 - `scripts/validate_profile.py`: validate runtime shop configuration.
 - `scripts/activation_binding.py`: privately bind approvals to the Kolo user
   who installs and activates the skill.
+- `scripts/customer_state_reset.py`: clear prior customer/job state for a fresh
+  test while preserving shop, pricing, approval, cron, and watermark state.
 - `scripts/approval_guard.py`: create opaque estimate IDs, bind approvals to
   route and specification, and reject changed execution state.
 - `scripts/kolo_safe.py`: request approvals, notify the owner, upsert records,
@@ -340,6 +342,46 @@ watermark, queue, claims, and records are preserved.
    If the edit fails, restore the complete former live config before using
    `reconfigure-cancel`; never cancel while the live cron differs from the
    formerly bound config.
+
+### Resetting customer state for a fresh test
+
+Only when the activating Kolo user explicitly requests a clean test reset:
+
+1. Disable the existing inbox cron and verify `enabled: false`. Do not delete or
+   replace the cron.
+2. Run the bundled reset helper:
+
+   ```bash
+   python3 {baseDir}/scripts/customer_state_reset.py \
+     --workspace '<absolute-workspace>' --confirmed-cron-disabled
+   ```
+
+   It validates the shop profile, activation binding, and active monitor state;
+   advances the Gmail discovery watermark to the reset time; and removes local
+   estimate records, claims, queue/manual-review items, customer work artifacts,
+   and abandoned run directories. It preserves the complete shop profile and
+   pricing data, activation binding, monitor activation/binding state, cron job,
+   schedule, and non-customer configuration. It refuses unknown directory
+   shapes rather than deleting them.
+3. Enumerate every page of owner-visible Kolo mirrors:
+
+   ```bash
+   kolo record-list --record-type skill.jewelry_estimate --page-size 200
+   ```
+
+   For every exact opaque `external-id` returned, run the explicitly destructive
+   erasure requested by the user:
+
+   ```bash
+   kolo record-delete --record-type skill.jewelry_estimate \
+     --external-id '<exact-external-id>' --hard
+   ```
+
+   Re-list every page and require zero remaining records. `--hard` is immediate
+   and irreversible; never run it without the explicit clean-reset request.
+   Kolo action/audit logs are append-only, non-PII historical traces and are not
+   deleted; they do not own or route active customer work.
+4. Leave the cron disabled until the user says the next test may begin.
 
 ### Cron discovery phase
 
