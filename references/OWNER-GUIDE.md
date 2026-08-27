@@ -15,6 +15,9 @@ times from your calendar and book it.
 **You approve every price before any customer sees it.** That never changes,
 at any setting, ever.
 
+The Kolo user who installs and activates the skill is the approver
+automatically. Setup does not ask for a separate approver name or email.
+
 What you get out of it: an inquiry that used to sit in your inbox until
 Tuesday gets a priced, ready-to-send answer in about ten minutes — and a
 consultation on the books while the customer is still excited.
@@ -151,7 +154,7 @@ that only says “open Kolo” is incomplete; you should not have to hunt for it
 Two things, and the second one is optional at first.
 
 **1. Required shop settings.** Your business name; retail or trade mode;
-cost-plus or target-margin pricing; who approves; which mailbox sends; what
+cost-plus or target-margin pricing; which mailbox sends; what
 trust stage to use; which timezone controls dates; and how often to refresh
 spot metal prices. I also record whether you want owner alerts in Kolo, email,
 or SMS. Today, only Kolo chat is an active supported owner-alert channel;
@@ -161,8 +164,9 @@ verifies them. I validate these settings before reading the first inquiry.
 **2. Your past invoices — when you get around to it.** This is the one that
 matters. Market averages don't know what *your* 6mm band actually weighs, what
 *you* pay per gram, or what *your* bench hour costs. Your invoices do. Send me
-a stack and my estimates stop being generic. Until then I'll use defaults and
-tell you plainly that I did.
+a stack and my estimates stop being generic. Until enough pricing inputs are
+available, I prepare the quantities and leave unsupported dollar amounts blank
+for you rather than inventing market defaults.
 
 **One thing I'll keep nagging you about:** your bench labor rate. A quote
 that's only metal plus stones plus casting charges nothing for your time,

@@ -51,7 +51,8 @@ fields but only four bullets?** Combine, don't drop: stone origin + carat ride
 in one bullet ("lab-grown or natural, and roughly what size"), metal + karat in
 another. Timing and event-date questions move into prose, not the bullet list.
 Budget may keep its own bullet when useful, but the customer does not have to
-provide one before receiving an estimate.
+provide one before receiving an estimate. Event date is also useful for
+feasibility but is not an estimate prerequisite.
 
 **Delegated choices:** if the customer asks the jeweler to choose what looks
 good, treat color, clarity, cut, and similar quality choices as delegated—not

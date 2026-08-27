@@ -46,7 +46,7 @@ def validate_profile(data: Any) -> dict[str, Any]:
     if not isinstance(shop_name, str) or not shop_name.strip():
         errors.append("shop.name is required")
 
-    for path in ("shop.approver_email", "shop.outbound_mailbox"):
+    for path in ("shop.outbound_mailbox",):
         value = _read_path(data, path)
         if not isinstance(value, str) or not EMAIL_RE.fullmatch(value):
             errors.append(f"{path} must be a valid email address")
