@@ -1432,6 +1432,19 @@ class CronConfigTests(unittest.TestCase):
                 inbox_monitor.adopt_disabled_live_reconfiguration(
                     root, current, live, Path("/workspace"), ROOT
                 )
+
+    def test_adopt_live_reconfiguration_rejects_already_bound_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            live = self.live_job()
+            live["enabled"] = False
+            current = cron_config.build_binding(live, Path("/workspace"), ROOT)
+            inbox_monitor.prepare(root, self.capabilities(), current)
+            inbox_monitor.activate(root, current, 1_000)
+            with self.assertRaisesRegex(ValueError, "already bound"):
+                inbox_monitor.adopt_disabled_live_reconfiguration(
+                    root, current, live, Path("/workspace"), ROOT
+                )
             live["enabled"] = False
             live["id"] = "different-job-id"
             with self.assertRaises(ValueError):
