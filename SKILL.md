@@ -567,20 +567,40 @@ For each returned message:
    `notify-monitor` directly.
 
    Exception: when a Stage 1 or 2 reply contains appointment intent, do not use
-   the generic `customer-replied` notification as the appointment route. After
-   the claim's customer/rendering work and durable finalization are complete,
-   run the following command and return its exact stdout as the cron's final
-   response instead of `NO_REPLY`:
+   the generic `customer-replied` notification as the appointment route and do
+   not rely on the cron's final chat delivery. Write this exact-shape private
+   artifact to `work_paths.appointment_intent`:
 
-   ```bash
-   python3 {baseDir}/scripts/kolo_safe.py appointment-action-result \
-     --estimate-id '<jed-id>'
+   ```json
+   {
+     "requested_times": [],
+     "calendar_availability": []
+   }
    ```
 
-   The cron delivery target is the activating owner's Kolo chat, so this is the
-   one visible appointment-action alert. Do not also call
-   `notify-owner-claimed` for that appointment action, and do not claim the
-   owner was notified unless this result is actually returned.
+   Preserve customer-provided timing in `requested_times`. Add only live,
+   validated slots to `calendar_availability`, each with exactly `start`, `end`,
+   and the owner-timezone `label`; either array may be empty. Then run:
+
+   ```bash
+   python3 {baseDir}/scripts/workflow_safe.py request-appointment-approval \
+     --monitor-root '<workspace>/estimate-desk/inbox-monitor' \
+     --claim-root '<workspace>/estimate-desk/inbox-claims' \
+     --record-root '<workspace>/estimate-desk/records' \
+     --message-id '<claimed-gmail-id>' --estimate-id '<jed-id>' \
+     --appointment-intent '<work_paths.appointment_intent>' \
+     --appointment-approval '<work_paths.appointment_approval>' \
+     --record-output '<work_paths.current_record>'
+   ```
+
+   This binds the activating Kolo user, the email-derived customer and thread,
+   and the claimed source message into one durable, retry-safe approval. It
+   records the approval before finalizing an appointment-only claim. Run
+   `assert-settled` and return `NO_REPLY`; the approval remains visible and
+   actionable even if cron announce delivery fails. For a message that also
+   requests rendering, add `--defer-finalize-for-rendering`, then complete
+   `send-rendering`, which finalizes the claim. Never claim the appointment is
+   booked until approval is granted and the live calendar write succeeds.
 6. Before deciding which specifications are missing or complete, fetch the
    exact Gmail thread resource and read every message in chronological order,
    including the initiating inquiry and all later customer replies. Never
@@ -984,6 +1004,34 @@ recipient field) as an attendee in the calendar event so they receive the
 invitation. Confirm to the customer only after the calendar write succeeds.
 Use the owner's IANA timezone, never the pod's UTC clock. Never select meeting
 times based on the desired delivery date.
+
+### Handling approved appointment requests in the main Kolo session
+
+When Kolo delivers an approved execution payload whose `action_type` is
+`appointment_booking`, the main session must continue the existing estimate,
+not create a new inquiry:
+
+1. Load the local record named by `estimate_id`. Verify its customer email and
+   Gmail thread against the execution payload with the existing
+   email-identity and route-ownership rules. The local record remains
+   authoritative; stop if any value differs.
+2. Query Google Calendar again with `calendar_query.py`. Approval does not make
+   stale availability current. Use the same routed calendar integration
+   configured during activation for the event write, and include the
+   authoritative customer email as an attendee.
+3. If one approved time remains unambiguous and free, create the event through
+   that calendar integration. Only after the provider returns a successful
+   event ID may the record advance to `appointment_booked` and the customer be
+   told that the appointment is confirmed.
+4. If no single time was approved or the approved time is no longer free, use
+   `appointment_options.py` to create two or three fresh near-term options.
+   Send those options through the same authenticated Gmail reply route used by
+   the estimate, in the authoritative original thread. Do not write an event
+   or claim a booking yet.
+5. After a successful calendar write, send the confirmation through that same
+   Gmail reply route and persist the event ID, confirmed interval, provider
+   message ID, and thread ID. Never expose the approval payload or internal
+   estimate data to the customer.
 
 After an estimate is sent, treat an explicit customer request for a visual
 rendering as an in-scope continuation of that estimate. It does not require

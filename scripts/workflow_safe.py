@@ -148,6 +148,97 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
     return record
 
 
+def _appointment_approval_details(
+    record: dict[str, Any],
+    message_id: str,
+    intent: dict[str, Any],
+) -> dict[str, Any]:
+    if set(intent) != {"requested_times", "calendar_availability"}:
+        raise ValueError("appointment intent contains missing or unsupported fields")
+    requested_times = intent["requested_times"]
+    if (
+        not isinstance(requested_times, list)
+        or len(requested_times) > 5
+        or any(
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > 160
+            or any(character in value for character in "\r\n")
+            for value in requested_times
+        )
+    ):
+        raise ValueError("requested_times must contain at most five short strings")
+    availability = intent["calendar_availability"]
+    if not isinstance(availability, list) or len(availability) > 5:
+        raise ValueError("calendar_availability must contain at most five slots")
+    normalized_slots = []
+    for index, slot in enumerate(availability):
+        if not isinstance(slot, dict) or set(slot) != {"start", "end", "label"}:
+            raise ValueError(
+                f"calendar_availability[{index}] must contain start, end, and label"
+            )
+        if any(
+            not isinstance(slot[field], str)
+            or not slot[field]
+            or len(slot[field]) > 160
+            or any(character in slot[field] for character in "\r\n")
+            for field in ("start", "end", "label")
+        ):
+            raise ValueError(f"calendar_availability[{index}] contains invalid text")
+        normalized_slots.append(dict(slot))
+    route_ownership.validate_record(record)
+    if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
+        raise ValueError("appointment approval requires a sent estimate")
+    route = record["route"]
+    return {
+        "schema_version": 1,
+        "action_type": "appointment_booking",
+        "estimate_id": record["estimate_id"],
+        "source_message_id": message_id,
+        "customer_email": route["recipient"],
+        "thread_id": route["thread_id"],
+        "requested_times": [value.strip() for value in requested_times],
+        "calendar_availability": normalized_slots,
+    }
+
+
+def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
+    """Create a durable appointment approval and optionally finalize the claim."""
+    record = read_object(
+        estimate_record.record_path(args.record_root, args.estimate_id)
+    )
+    intent = read_object(args.appointment_intent)
+    if args.appointment_approval.exists():
+        approval = read_object(args.appointment_approval)
+        expected = _appointment_approval_details(record, args.message_id, intent)
+        if approval != expected:
+            raise ValueError("existing appointment approval binding changed")
+    else:
+        approval = _appointment_approval_details(record, args.message_id, intent)
+        write_private(args.appointment_approval, approval)
+    approver = activation_binding.load(
+        activation_binding.binding_path(args.monitor_root)
+    )
+    kolo_safe.request_appointment_approval_claimed(
+        args.claim_root,
+        args.message_id,
+        None,
+        f"appointment_approval:{args.estimate_id}:{args.message_id}",
+        args.estimate_id,
+        args.appointment_approval,
+        approver["session_key"],
+    )
+    record = estimate_record.record_appointment_approval_requested(
+        args.record_root, args.estimate_id, args.message_id, approval
+    )
+    mirror_record(record, args.record_output)
+    if not args.defer_finalize_for_rendering:
+        finish_processed(
+            args.monitor_root, args.claim_root, args.record_root, args.message_id
+        )
+    return record
+
+
 def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
     current = (
         read_object(args.current_state)
@@ -195,7 +286,9 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
-    record = read_object(estimate_record.record_path(args.record_root, args.estimate_id))
+    record = read_object(
+        estimate_record.record_path(args.record_root, args.estimate_id)
+    )
     route_ownership.validate_record(record)
     if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
         raise ValueError("rendering delivery requires a sent estimate")
@@ -272,6 +365,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     rendering.add_argument("--gmail-payload", type=Path, required=True)
     rendering.add_argument("--provider-response", type=Path, required=True)
+    appointment = sub.add_parser("request-appointment-approval")
+    add_common_paths(appointment)
+    appointment.add_argument("--monitor-root", type=Path, required=True)
+    appointment.add_argument("--appointment-intent", type=Path, required=True)
+    appointment.add_argument("--appointment-approval", type=Path, required=True)
+    appointment.add_argument("--defer-finalize-for-rendering", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "send-spec-followup":
@@ -280,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
             record = request_approval(args)
         elif args.command == "send-approved-estimate":
             record = send_approved_estimate(args)
+        elif args.command == "request-appointment-approval":
+            record = request_appointment_approval(args)
         else:
             record = send_rendering(args)
         print(json.dumps(record, sort_keys=True))
