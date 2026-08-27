@@ -83,6 +83,8 @@ route to the pinned agent.
   messages/threads through fixed Maton requests without model-built commands.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
   key from the exact inbound Gmail message rather than a display name.
+- `scripts/rendering_materialize.py`: copy a native Kolo-generated PNG from the
+  managed media directory into the claimed canonical rendering path.
 - `scripts/workflow_safe.py`: execute complete spec-follow-up, approval-request,
   and approved-estimate actions without exposing claim tokens or partial state
   transitions to the model.
@@ -890,9 +892,21 @@ interpret “rendering” as a request for a manufacturing file. Each distinct
 customer request may create one new rendering iteration; replaying the same
 Gmail message must not create or send another iteration.
 
-Generate one or two illustrations with Kolo's native `image_generate` tool and
-place the resulting PNG, JPEG, or WebP files only at the claim's returned
-`work_paths.rendering_image_1` and optional `work_paths.rendering_image_2`.
+Generate one or two PNG illustrations with Kolo's native `image_generate` tool.
+For each returned managed-media path, run the bundled materializer; never use
+`cp`, `mv`, `curl`, or a generic write tool for image bytes:
+
+```bash
+python3 {baseDir}/scripts/rendering_materialize.py \
+  --monitor-root '<workspace>/estimate-desk/inbox-monitor' \
+  --claim-root '<workspace>/estimate-desk/inbox-claims' \
+  --message-id '<claimed-gmail-id>' \
+  --source '<image_generate-managed-media-path>' --slot 1
+```
+
+Use `--slot 2` for the second image. The script accepts only a regular PNG
+inside Kolo's managed media directory and writes it atomically to the claim's
+returned canonical rendering path.
 Write the post-estimate visual-rendering note from
 `templates/customer-emails.md` to `work_paths.customer_reply`, then call:
 

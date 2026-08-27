@@ -26,6 +26,9 @@ Date: 2026-08-26
     are durable.
 - Added canonical persistent work paths for Gmail payloads and rendering images
   so the cron must not invent `.jed-work` or temporary folders.
+- Added a bundled rendering materializer that accepts only native Kolo PNG files
+  from the managed media directory and atomically copies them into the claimed
+  canonical rendering slot.
 - Prevented internal reasoning or loop-control text from becoming a Kolo cron
   announcement.
 - New inbox-monitor installations default to every five minutes during the
@@ -34,7 +37,7 @@ Date: 2026-08-26
 
 ## Verification
 
-- 142 automated runtime tests pass.
+- 144 automated runtime tests pass.
 - Python compilation passes for all scripts and tests.
 - Git whitespace validation passes.
 - No customer-facing template or instruction contains the prohibited term.

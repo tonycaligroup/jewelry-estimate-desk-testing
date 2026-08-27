@@ -38,6 +38,7 @@ import validate_profile
 import appointment_options
 import calendar_query
 import pricing_model
+import rendering_materialize
 import spot_price
 
 
@@ -2170,6 +2171,71 @@ class InboxMonitorTests(unittest.TestCase):
                 Path(result["work_paths"]["rendering_image_1"]),
                 expected / "rendering-1.png",
             )
+
+    def test_native_rendering_is_materialized_only_into_claim_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            message_id = "rendering-materialize"
+            inbox_monitor.discover_complete(
+                root,
+                [{
+                    "gmail_message_id": message_id,
+                    "thread_id": "rendering-thread",
+                    "internal_date_ms": 1_100,
+                }],
+                1_000,
+                2_000,
+            )
+            claimed = inbox_monitor.claim_next(root, claim_root, 600)
+            media_root = Path(directory) / "media"
+            media_root.mkdir()
+            source = media_root / "generated.png"
+            source.write_bytes(b"\x89PNG\r\n\x1a\nmanaged-image")
+
+            first = rendering_materialize.materialize(
+                root, claim_root, message_id, source, 1, media_root
+            )
+            second = rendering_materialize.materialize(
+                root, claim_root, message_id, source, 1, media_root
+            )
+
+            destination = Path(claimed["work_paths"]["rendering_image_1"])
+            self.assertEqual(first, second)
+            self.assertEqual(Path(first["path"]), destination)
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_rendering_materializer_rejects_non_media_and_non_png_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            message_id = "rendering-reject"
+            inbox_monitor.discover_complete(
+                root,
+                [{
+                    "gmail_message_id": message_id,
+                    "thread_id": "rendering-thread",
+                    "internal_date_ms": 1_100,
+                }],
+                1_000,
+                2_000,
+            )
+            inbox_monitor.claim_next(root, claim_root, 600)
+            media_root = Path(directory) / "media"
+            media_root.mkdir()
+            outside = Path(directory) / "outside.png"
+            outside.write_bytes(b"\x89PNG\r\n\x1a\noutside")
+            with self.assertRaisesRegex(ValueError, "Kolo media file"):
+                rendering_materialize.materialize(
+                    root, claim_root, message_id, outside, 1, media_root
+                )
+            invalid = media_root / "generated.png"
+            invalid.write_bytes(b"not-an-image")
+            with self.assertRaisesRegex(ValueError, "PNG image"):
+                rendering_materialize.materialize(
+                    root, claim_root, message_id, invalid, 1, media_root
+                )
 
     def test_prepare_run_returns_private_workspace_discovery_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
