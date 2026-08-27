@@ -340,6 +340,14 @@ class ActivationBindingTests(unittest.TestCase):
             )()
             with (
                 patch.object(
+                    workflow_safe.estimate_record,
+                    "prepare_approval_state",
+                    return_value=json.loads(current_state.read_text(encoding="utf-8")),
+                ),
+                patch.object(
+                    workflow_safe.estimate_record, "validate_approval_request"
+                ),
+                patch.object(
                     workflow_safe.kolo_safe, "request_approval_claimed"
                 ) as request,
                 patch.object(
@@ -366,6 +374,198 @@ class ActivationBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "not bound"):
                 activation_binding.load(Path(directory) / "missing.json")
+
+
+class WorkflowApprovalTransactionTests(unittest.TestCase):
+    def route(self) -> dict:
+        return {
+            "channel": "gmail",
+            "mailbox": "sales@example.com",
+            "recipient": "customer@example.net",
+            "identity_key": gmail_route.email_identity_key("customer@example.net"),
+            "gmail_message_id": "initial-message",
+            "thread_id": "approval-thread",
+            "original_message_id": "<initial@example.net>",
+            "original_subject": "Custom ring inquiry",
+            "references": [],
+        }
+
+    def specification(self) -> dict:
+        return {
+            "piece_type": "ring",
+            "metal": "14k yellow gold",
+            "finger_size": "6",
+            "setting_style": "prong",
+        }
+
+    def reviewed_record(self, root: Path, source_message_id: str) -> dict:
+        record = estimate_record.create_initial_record(root, self.route(), 1_000)
+        return estimate_record.record_thread_review(
+            root,
+            record["estimate_id"],
+            {
+                "thread_id": self.route()["thread_id"],
+                "source_message_id": source_message_id,
+                "message_ids": ["initial-message", source_message_id],
+                "specification": self.specification(),
+                "missing_required_fields": [],
+            },
+        )
+
+    def candidate(self, estimate_id: str, price: float = 2_500) -> dict:
+        later_route = self.route()
+        later_route["gmail_message_id"] = "latest-reply"
+        later_route["original_message_id"] = "<latest@example.net>"
+        return {
+            "estimate_id": estimate_id,
+            "route": later_route,
+            "specification": {"piece_type": "wrong-model-specification"},
+            "proposed_price": price,
+            "internal_cost_sheet": internal_cost_sheet(price),
+        }
+
+    def test_preparation_uses_authoritative_route_and_specification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            record_root = Path(directory) / "records"
+            source_message_id = "latest-reply"
+            record = self.reviewed_record(record_root, source_message_id)
+            state = estimate_record.prepare_approval_state(
+                record_root,
+                record["estimate_id"],
+                source_message_id,
+                self.candidate(record["estimate_id"]),
+            )
+            self.assertEqual(state["route"], self.route())
+            self.assertEqual(state["specification"], self.specification())
+            approval = approval_guard.build_request(state)
+            estimate_record.validate_approval_request(
+                record_root, record["estimate_id"], source_message_id, approval
+            )
+
+    def test_invalid_existing_artifact_is_rejected_before_kolo(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_root = root / "records"
+            source_message_id = "latest-reply"
+            record = self.reviewed_record(record_root, source_message_id)
+            current_state = root / "current-state.json"
+            current_state.write_text(
+                json.dumps(self.candidate(record["estimate_id"])), encoding="utf-8"
+            )
+            approval_request = root / "approval-request.json"
+            approval_request.write_text(
+                json.dumps(
+                    approval_guard.build_request(self.candidate(record["estimate_id"]))
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "monitor_root": root / "monitor",
+                    "claim_root": root / "claims",
+                    "record_root": record_root,
+                    "message_id": source_message_id,
+                    "estimate_id": record["estimate_id"],
+                    "current_state": current_state,
+                    "approval_request": approval_request,
+                    "record_output": root / "record.json",
+                },
+            )()
+            with patch.object(
+                workflow_safe.kolo_safe, "request_approval_claimed"
+            ) as request:
+                with self.assertRaisesRegex(ValueError, "route does not match"):
+                    workflow_safe.request_approval(args)
+            request.assert_not_called()
+
+    def test_retry_reuses_sent_artifact_and_finishes_local_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_root = root / "records"
+            claim_root = root / "claims"
+            monitor_root = root / "monitor"
+            source_message_id = "latest-reply"
+            record = self.reviewed_record(record_root, source_message_id)
+            _, claim = inbox_claim.acquire(claim_root, source_message_id)
+            activation_binding.create(
+                activation_binding.binding_path(monitor_root),
+                "agent:main:kolo:direct:test-owner",
+            )
+            current_state = root / "current-state.json"
+            current_state.write_text(
+                json.dumps(self.candidate(record["estimate_id"])), encoding="utf-8"
+            )
+            approval_request = root / "approval-request.json"
+            args = type(
+                "Args",
+                (),
+                {
+                    "monitor_root": monitor_root,
+                    "claim_root": claim_root,
+                    "record_root": record_root,
+                    "message_id": source_message_id,
+                    "estimate_id": record["estimate_id"],
+                    "current_state": current_state,
+                    "approval_request": approval_request,
+                    "record_output": root / "record.json",
+                },
+            )()
+            runner = Mock(
+                return_value=subprocess.CompletedProcess([], 0, "accepted\n", "")
+            )
+            claimed_request = kolo_safe.request_approval_claimed
+
+            def request_with_runner(*request_args):
+                return claimed_request(*request_args, runner=runner)
+
+            with (
+                patch.object(
+                    workflow_safe.kolo_safe,
+                    "request_approval_claimed",
+                    side_effect=request_with_runner,
+                ),
+                patch.object(
+                    workflow_safe.estimate_record,
+                    "record_approval_requested",
+                    side_effect=ValueError("simulated local write failure"),
+                ),
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe, "finish_processed"),
+            ):
+                with self.assertRaisesRegex(ValueError, "simulated local write"):
+                    workflow_safe.request_approval(args)
+
+            frozen = approval_request.read_bytes()
+            current_state.write_text(
+                json.dumps(self.candidate(record["estimate_id"], 2_750)),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(
+                    workflow_safe.kolo_safe,
+                    "request_approval_claimed",
+                    side_effect=request_with_runner,
+                ),
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe, "finish_processed"),
+            ):
+                completed = workflow_safe.request_approval(args)
+
+            self.assertEqual(runner.call_count, 1)
+            self.assertEqual(approval_request.read_bytes(), frozen)
+            self.assertEqual(completed["status"], "pending_approval")
+            self.assertEqual(completed["proposed_price"], 2_500)
+            action_key = (
+                f"approval_request:{record['estimate_id']}:{source_message_id}"
+            )
+            claim_state = inbox_claim.read_state(
+                inbox_claim.claim_path(claim_root, source_message_id)
+            )
+            self.assertEqual(
+                claim_state["external_actions"][action_key]["status"], "sent"
+            )
 
 
 class CustomerStateResetTests(unittest.TestCase):

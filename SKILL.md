@@ -854,6 +854,10 @@ python3 {baseDir}/scripts/workflow_safe.py request-approval \
 
 The command succeeds only when the claimed Kolo action, authoritative local
 record, Kolo mirror, claim phases, and queue finalization are complete.
+It always replaces any model-produced route and specification with the
+authoritative estimate record before requesting approval. If a retry finds an
+existing `approval-request.json`, it validates and reuses that exact artifact;
+never delete or rewrite it to force a retry.
 
 The claimed approval request is the owner-facing Kolo action. Do not add a
 second unjournaled `notify-owner` call for the same approval-ready event.

@@ -467,13 +467,13 @@ def record_thread_review(
         return record
 
 
-def record_approval_requested(
-    root: Path,
+def _validate_approval_request(
+    record: dict[str, Any],
     estimate_id: str,
     source_message_id: str,
     approval_request: dict[str, Any],
 ) -> dict[str, Any]:
-    """Append owner-approval evidence after Kolo accepts the claimed request."""
+    """Validate an approval against authoritative record state without writing."""
     source_message_id = validate_provider_id(source_message_id, "source_message_id")
     if approval_request.get("estimate_id") != estimate_id:
         raise ValueError("approval request estimate_id does not match")
@@ -485,40 +485,143 @@ def record_approval_requested(
         raise ValueError("approval request proposed_price must be numeric")
     if approval_guard.binding_hash(approval_request) != binding_hash:
         raise ValueError("approval request binding_hash does not match its contents")
+    route_ownership.validate_record(record)
+    if approval_request.get("route") != record["route"]:
+        raise ValueError("approval request route does not match the record")
+    if approval_request.get("specification") != record.get("specification"):
+        raise ValueError("approval request specification does not match the record")
+    source_hash = sha256_text(source_message_id)
+    review = next(
+        (
+            item
+            for item in record.get("thread_reviews", [])
+            if isinstance(item, dict)
+            and item.get("source_message_id_sha256") == source_hash
+            and item.get("outcome") == "specs_complete"
+        ),
+        None,
+    )
+    if review is None:
+        raise ValueError("approval request lacks a matching complete thread review")
+    return {
+        "source_message_id_sha256": source_hash,
+        "binding_hash": binding_hash,
+        "proposed_price": proposed_price,
+    }
 
+
+def prepare_approval_state(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind model-produced pricing to the record's immutable route and specs."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    if candidate.get("estimate_id") != estimate_id:
+        raise ValueError("current state estimate_id does not match the command")
     path = record_path(root, estimate_id)
     with record_lock(root):
         record = read_object(path)
         route_ownership.validate_record(record)
-        if approval_request.get("route") != record["route"]:
-            raise ValueError("approval request route does not match the record")
-        if approval_request.get("specification") != record.get("specification"):
-            raise ValueError("approval request specification does not match the record")
         source_hash = sha256_text(source_message_id)
-        review = next(
+        if not any(
+            isinstance(item, dict)
+            and item.get("source_message_id_sha256") == source_hash
+            and item.get("outcome") == "specs_complete"
+            for item in record.get("thread_reviews", [])
+        ):
+            raise ValueError("approval request lacks a matching complete thread review")
+        if record.get("status") == "pending_approval":
+            if record.get("approval_source_message_id") != source_message_id:
+                raise ValueError("pending approval belongs to a different source message")
+            state = {
+                "estimate_id": record["estimate_id"],
+                "route": record["route"],
+                "specification": record.get("specification"),
+                "proposed_price": record.get("proposed_price"),
+                "internal_cost_sheet": record.get("internal_cost_sheet"),
+            }
+            if approval_guard.binding_hash(state) != record.get(
+                "approval_binding_hash"
+            ):
+                raise ValueError(
+                    "authoritative approval state does not match its binding"
+                )
+            return state
+        if record.get("status") != "awaiting_specs":
+            raise ValueError("approval preparation requires awaiting_specs status")
+        state = dict(candidate)
+        state.update(
+            {
+                "estimate_id": record["estimate_id"],
+                "route": record["route"],
+                "specification": record.get("specification"),
+                "proposed_price": candidate.get("proposed_price"),
+                "internal_cost_sheet": candidate.get("internal_cost_sheet"),
+            }
+        )
+        approval_guard.binding_payload(state)
+        return state
+
+
+def validate_approval_request(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    approval_request: dict[str, Any],
+) -> dict[str, Any]:
+    """Preflight an approval before any external request is attempted."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        evidence = _validate_approval_request(
+            record, estimate_id, source_message_id, approval_request
+        )
+        matching = next(
             (
                 item
-                for item in record.get("thread_reviews", [])
+                for item in record.get("approval_requests", [])
                 if isinstance(item, dict)
-                and item.get("source_message_id_sha256") == source_hash
-                and item.get("outcome") == "specs_complete"
+                and item.get("source_message_id_sha256")
+                == evidence["source_message_id_sha256"]
             ),
             None,
         )
-        if review is None:
-            raise ValueError("approval request lacks a matching complete thread review")
-        evidence = {
-            "source_message_id_sha256": source_hash,
-            "binding_hash": binding_hash,
-            "proposed_price": proposed_price,
-        }
+        if matching is not None:
+            comparable = dict(matching)
+            comparable.pop("requested_at", None)
+            if comparable != evidence:
+                raise ValueError("conflicting approval request for source message")
+        elif record.get("status") != "awaiting_specs":
+            raise ValueError("approval evidence requires awaiting_specs status")
+        return approval_request
+
+
+def record_approval_requested(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    approval_request: dict[str, Any],
+) -> dict[str, Any]:
+    """Append owner-approval evidence after Kolo accepts the claimed request."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        evidence = _validate_approval_request(
+            record, estimate_id, source_message_id, approval_request
+        )
         requests = record.setdefault("approval_requests", [])
         if not isinstance(requests, list):
             raise ValueError("approval_requests must be an array")
         for existing in requests:
             if not isinstance(existing, dict):
                 raise ValueError("approval_requests contains invalid evidence")
-            if existing.get("source_message_id_sha256") != source_hash:
+            if (
+                existing.get("source_message_id_sha256")
+                != evidence["source_message_id_sha256"]
+            ):
                 continue
             comparable = dict(existing)
             comparable.pop("requested_at", None)
@@ -529,9 +632,9 @@ def record_approval_requested(
             raise ValueError("approval evidence requires awaiting_specs status")
         evidence["requested_at"] = datetime.now(timezone.utc).isoformat()
         requests.append(evidence)
-        record["approval_binding_hash"] = binding_hash
+        record["approval_binding_hash"] = evidence["binding_hash"]
         record["approval_source_message_id"] = source_message_id
-        record["proposed_price"] = proposed_price
+        record["proposed_price"] = evidence["proposed_price"]
         record["internal_cost_sheet"] = approval_request["internal_cost_sheet"]
         record["missing_required_fields"] = []
         record["status"] = "pending_approval"
