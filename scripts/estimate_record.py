@@ -21,6 +21,12 @@ import approval_guard
 
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+POST_ESTIMATE_ASSESSMENTS = {"unchanged", "changed", "uncertain"}
+POST_ESTIMATE_INTENTS = {
+    "estimate_acceptance",
+    "rendering_request",
+    "appointment_request",
+}
 
 
 def default_record_root() -> Path:
@@ -389,9 +395,6 @@ def record_thread_review(
         raise ValueError("message_ids must not contain duplicates")
     if source_message_id not in validated_ids:
         raise ValueError("source_message_id must be present in message_ids")
-    specification = snapshot.get("specification")
-    if not isinstance(specification, dict) or not specification:
-        raise ValueError("specification must be a non-empty object")
     missing = snapshot.get("missing_required_fields")
     if not isinstance(missing, list) or any(
         not isinstance(field, str)
@@ -420,16 +423,29 @@ def record_thread_review(
             "approved",
         }
         if post_estimate:
+            specification = record.get("specification")
+            if not isinstance(specification, dict) or not specification:
+                raise ValueError("sent estimate is missing its approved specification")
+            assessment, intents, changed_fields, malformed = (
+                classify_post_estimate_artifact(snapshot.get("post_estimate_artifact"))
+            )
             if missing:
-                raise ValueError(
-                    "post-estimate continuation cannot reopen the specification gate"
-                )
-            if specification != record.get("specification"):
-                raise ValueError(
-                    "post-estimate specification changed; new owner approval required"
-                )
-            outcome = "post_estimate_continuation"
+                malformed = True
+            if malformed:
+                outcome = "classification_malformed"
+                assessment = "uncertain"
+                intents = []
+                changed_fields = []
+            elif assessment == "changed":
+                outcome = "design_change_detected"
+            elif assessment == "uncertain":
+                outcome = "classification_uncertain"
+            else:
+                outcome = "post_estimate_continuation"
         else:
+            specification = snapshot.get("specification")
+            if not isinstance(specification, dict) or not specification:
+                raise ValueError("specification must be a non-empty object")
             outcome = "awaiting_specs" if missing else "specs_complete"
         evidence = {
             "source_message_id_sha256": sha256_text(source_message_id),
@@ -440,6 +456,15 @@ def record_thread_review(
             "missing_required_fields": sorted(missing),
             "outcome": outcome,
         }
+        if post_estimate:
+            evidence.update(
+                {
+                    "approved_specification_sha256": canonical_sha256(specification),
+                    "design_change_assessment": assessment,
+                    "intents": intents,
+                    "changed_fields": changed_fields,
+                }
+            )
         reviews = record.setdefault("thread_reviews", [])
         if not isinstance(reviews, list):
             raise ValueError("thread_reviews must be an array")
@@ -466,6 +491,193 @@ def record_thread_review(
             record["specification"] = specification
             record["missing_required_fields"] = sorted(missing)
             record["status"] = "awaiting_specs"
+        write_object(path, record)
+        return record
+
+
+def classify_post_estimate_artifact(
+    value: Any,
+) -> tuple[str, list[str], list[str], bool]:
+    """Return a normalized fail-closed post-estimate intent classification."""
+    if not isinstance(value, dict) or set(value) != {
+        "design_change_assessment",
+        "intents",
+        "changed_fields",
+    }:
+        return "uncertain", [], [], True
+    assessment = value.get("design_change_assessment")
+    intents = value.get("intents")
+    changed_fields = value.get("changed_fields")
+    malformed = (
+        assessment not in POST_ESTIMATE_ASSESSMENTS
+        or not isinstance(intents, list)
+        or any(not isinstance(intent, str) for intent in intents)
+        or len(set(intents)) != len(intents)
+        or any(intent not in POST_ESTIMATE_INTENTS for intent in intents)
+        or not isinstance(changed_fields, list)
+        or any(not isinstance(field, str) for field in changed_fields)
+        or len(set(changed_fields)) != len(changed_fields)
+        or any(
+            not isinstance(field, str)
+            or not field
+            or len(field) > 80
+            or any(
+                character not in "abcdefghijklmnopqrstuvwxyz0123456789_.-"
+                for character in field
+            )
+            for field in changed_fields
+        )
+        or (assessment == "changed" and not changed_fields)
+        or (assessment != "changed" and bool(changed_fields))
+    )
+    if malformed:
+        return "uncertain", [], [], True
+    return assessment, sorted(intents), sorted(changed_fields), False
+
+
+def post_estimate_decision(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    required_intent: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load the claim-bound post-estimate decision for one inbound message."""
+    source_hash = sha256_text(
+        validate_provider_id(source_message_id, "source_message_id")
+    )
+    record = read_object(record_path(root, estimate_id))
+    route_ownership.validate_record(record)
+    reviews = record.get("thread_reviews")
+    if not isinstance(reviews, list) or not reviews:
+        raise ValueError("post-estimate decision is missing")
+    decision = reviews[-1]
+    if not isinstance(decision, dict):
+        raise ValueError("post-estimate decision is invalid")
+    if decision.get("source_message_id_sha256") != source_hash:
+        raise ValueError("post-estimate decision does not match the claimed message")
+    if decision.get("thread_id") != record["route"]["thread_id"]:
+        raise ValueError("post-estimate decision does not match the owned thread")
+    specification = record.get("specification")
+    if not isinstance(specification, dict) or not specification:
+        raise ValueError("sent estimate is missing its approved specification")
+    approved_hash = canonical_sha256(specification)
+    if decision.get("approved_specification_sha256") != approved_hash:
+        raise ValueError("post-estimate decision does not match the approved specification")
+    outcome = decision.get("outcome")
+    allowed_outcomes = {
+        "post_estimate_continuation",
+        "design_change_detected",
+        "classification_uncertain",
+        "classification_malformed",
+    }
+    if outcome not in allowed_outcomes:
+        raise ValueError("post-estimate decision has an invalid outcome")
+    intents = decision.get("intents")
+    if (
+        not isinstance(intents, list)
+        or any(not isinstance(intent, str) for intent in intents)
+        or len(set(intents)) != len(intents)
+        or any(intent not in POST_ESTIMATE_INTENTS for intent in intents)
+    ):
+        raise ValueError("post-estimate decision has invalid intents")
+    if required_intent is not None and (
+        outcome != "post_estimate_continuation" or required_intent not in intents
+    ):
+        raise ValueError(
+            f"post-estimate decision does not authorize {required_intent}"
+        )
+    return record, decision
+
+
+def _require_aware_timestamp(value: Any, field: str) -> datetime:
+    if not isinstance(value, str) or not value or len(value) > 80:
+        raise ValueError(f"{field} must be a short ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field} must include a timezone")
+    return parsed
+
+
+def record_appointment_booked(
+    root: Path,
+    estimate_id: str,
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist one immutable booking receipt after provider actions succeed."""
+    required = {
+        "estimate_id",
+        "source_message_id",
+        "calendar_event_id",
+        "confirmed_start",
+        "confirmed_end",
+        "confirmation_message_id",
+        "confirmation_thread_id",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != required:
+        raise ValueError("appointment booking receipt has missing or unsupported fields")
+    if receipt.get("estimate_id") != estimate_id:
+        raise ValueError("appointment booking receipt estimate_id does not match")
+    source_message_id = validate_provider_id(
+        receipt.get("source_message_id"), "source_message_id"
+    )
+    calendar_event_id = validate_provider_id(
+        receipt.get("calendar_event_id"), "calendar_event_id"
+    )
+    confirmation_message_id = validate_provider_id(
+        receipt.get("confirmation_message_id"), "confirmation_message_id"
+    )
+    confirmation_thread_id = validate_provider_id(
+        receipt.get("confirmation_thread_id"), "confirmation_thread_id"
+    )
+    start = _require_aware_timestamp(
+        receipt.get("confirmed_start"), "confirmed_start"
+    )
+    end = _require_aware_timestamp(receipt.get("confirmed_end"), "confirmed_end")
+    if end <= start:
+        raise ValueError("confirmed_end must be after confirmed_start")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record["status"] not in {
+            "estimate_sent",
+            "appointment_booked",
+            "approved",
+        }:
+            raise ValueError("appointment booking requires a sent estimate")
+        if confirmation_thread_id != record["route"]["thread_id"]:
+            raise ValueError("appointment confirmation thread does not match route")
+        source_hash = sha256_text(source_message_id)
+        approvals = record.get("appointment_approval_requests")
+        if not isinstance(approvals, list) or not any(
+            isinstance(value, dict)
+            and value.get("source_message_id_sha256") == source_hash
+            for value in approvals
+        ):
+            raise ValueError("appointment booking has no matching approved request")
+        evidence = {
+            "source_message_id_sha256": source_hash,
+            "calendar_event_id": calendar_event_id,
+            "confirmed_start": receipt["confirmed_start"],
+            "confirmed_end": receipt["confirmed_end"],
+            "confirmation_message_id": confirmation_message_id,
+            "confirmation_thread_id": confirmation_thread_id,
+        }
+        existing = record.get("appointment_booked")
+        if existing is not None:
+            if not isinstance(existing, dict):
+                raise ValueError("appointment_booked receipt is invalid")
+            comparable = dict(existing)
+            comparable.pop("booked_at", None)
+            if comparable == evidence:
+                return record
+            raise ValueError("conflicting_appointment_receipt")
+        evidence["booked_at"] = datetime.now(timezone.utc).isoformat()
+        record["appointment_booked"] = evidence
+        record["status"] = "appointment_booked"
         write_object(path, record)
         return record
 

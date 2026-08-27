@@ -612,10 +612,19 @@ For each returned message:
    - `source_message_id`: the currently claimed inbound Gmail ID;
    - `message_ids`: every Gmail message ID in the fetched thread, in
      chronological order, including shop messages;
-   - `specification`: one normalized customer-safe specification merged from
-     the complete thread; and
+   - `specification`: for an estimate that has not been sent, one normalized
+     customer-safe specification merged from the complete thread; after an
+     estimate is sent, omit this field because the helper preserves the
+     immutable approved specification from the authoritative record;
    - `missing_required_fields`: only the applicable Phase 1.5 field keys still
-     absent after the merge, or an empty array when complete.
+     absent after the merge, or an empty array when complete; and
+   - `post_estimate_artifact`: only after an estimate is sent, an exact-shape
+     object with `design_change_assessment` (`unchanged`, `changed`, or
+     `uncertain`), unique `intents` chosen from `estimate_acceptance`,
+     `rendering_request`, and `appointment_request`, and `changed_fields`.
+     `changed_fields` must be nonempty only for `changed`; use `uncertain`
+     whenever the newest customer wording might alter the approved design but
+     cannot be mapped confidently to a specification field.
 
    Persist this review before drafting, pricing, requesting approval, or
    finalizing:
@@ -629,8 +638,26 @@ For each returned message:
 
    The helper stores normalized specifications plus hashes and counts, not raw
    email bodies or later provider message IDs. It fails if the initiating or
-   currently claimed message is absent. Mirror the exact output to Kolo using
-   its returned status. Do not re-ask any field present anywhere in the thread.
+   currently claimed message is absent. For a post-estimate reply it derives
+   the approved-specification hash from the authoritative record, never from
+   model output, and records the bounded intent decision. Then run:
+
+   ```bash
+   python3 {baseDir}/scripts/workflow_safe.py finalize-post-estimate \
+     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --message-id '<gmail-id>' --estimate-id '<jed-id>' \
+     --record-output "$WORK/current-record.json"
+   ```
+
+   This command mirrors the review, finalizes acknowledgements, terminalizes
+   changed, uncertain, or malformed classifications to manual review, and
+   returns the only allowed next action for rendering and appointment intents.
+   Do not retry a deterministic classification with rewritten JSON. The later
+   appointment and rendering commands revalidate that the persisted decision
+   belongs to the same estimate and claimed Gmail message before acting. Do not
+   re-ask any field present anywhere in the thread.
 
    If `missing_required_fields` is nonempty, follow the specification-request
    branch and persist its same-source send receipt. If it is empty, continue
@@ -1028,10 +1055,29 @@ not create a new inquiry:
    Send those options through the same authenticated Gmail reply route used by
    the estimate, in the authoritative original thread. Do not write an event
    or claim a booking yet.
-5. After a successful calendar write, send the confirmation through that same
-   Gmail reply route and persist the event ID, confirmed interval, provider
-   message ID, and thread ID. Never expose the approval payload or internal
-   estimate data to the customer.
+5. Before a new calendar write, stop if the authoritative record already has an
+   `appointment_booked` receipt; do not create another event or send another
+   confirmation. After a successful calendar write and confirmation in the
+   authoritative Gmail thread, write a private JSON receipt containing exactly
+   `estimate_id`, `source_message_id`, `calendar_event_id`, `confirmed_start`,
+   `confirmed_end`, `confirmation_message_id`, and `confirmation_thread_id`,
+   then run:
+
+   ```bash
+   python3 {baseDir}/scripts/workflow_safe.py record-appointment-booked \
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --estimate-id '<jed-id>' --receipt '<private-receipt-json>' \
+     --record-output '<private-current-record-json>'
+   ```
+
+   The helper matches the source-message hash to the durable appointment
+   approval, validates the original Gmail thread, atomically stores the event
+   and confirmation receipt, and mirrors the `appointment_booked` record.
+   Identical retries are no-ops and conflicting receipts fail closed. Never
+   expose the approval payload or internal estimate data to the customer. This
+   narrow receipt fix does not close the provider-action crash window before
+   receipt persistence; treat such an unverified retry as manual work rather
+   than risking a duplicate booking or confirmation.
 
 After an estimate is sent, treat an explicit customer request for a visual
 rendering as an in-scope continuation of that estimate. It does not require

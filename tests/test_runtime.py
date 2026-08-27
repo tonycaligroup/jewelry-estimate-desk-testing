@@ -594,6 +594,125 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                 claim_state["external_actions"][action_key]["status"], "sent"
             )
 
+    def post_estimate_args(
+        self,
+        root: Path,
+        *,
+        assessment: str = "unchanged",
+        intents: list[str] | None = None,
+        changed_fields: list[str] | None = None,
+    ) -> tuple[object, dict]:
+        record_root = root / "records"
+        record = estimate_record.create_initial_record(record_root, self.route(), 1_000)
+        record["status"] = "estimate_sent"
+        record["specification"] = self.specification()
+        estimate_record.persist_record(record_root, record)
+        message_id = "post-estimate-message"
+        estimate_record.record_thread_review(
+            record_root,
+            record["estimate_id"],
+            {
+                "thread_id": self.route()["thread_id"],
+                "source_message_id": message_id,
+                "message_ids": ["initial-message", message_id],
+                "missing_required_fields": [],
+                "post_estimate_artifact": {
+                    "design_change_assessment": assessment,
+                    "intents": [] if intents is None else intents,
+                    "changed_fields": (
+                        [] if changed_fields is None else changed_fields
+                    ),
+                },
+            },
+        )
+        args = type(
+            "Args",
+            (),
+            {
+                "monitor_root": root / "monitor",
+                "claim_root": root / "claims",
+                "record_root": record_root,
+                "message_id": message_id,
+                "estimate_id": record["estimate_id"],
+                "record_output": root / "record-output.json",
+            },
+        )()
+        return args, record
+
+    def test_finalize_post_estimate_returns_bound_combined_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _record = self.post_estimate_args(
+                Path(directory),
+                intents=["rendering_request", "appointment_request"],
+            )
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe, "finish_processed") as finish,
+            ):
+                result = workflow_safe.finalize_post_estimate(args)
+            finish.assert_not_called()
+            self.assertFalse(result["should_finalize"])
+            self.assertEqual(
+                result["next_action"],
+                "request_appointment_approval_then_send_rendering",
+            )
+
+    def test_finalize_post_estimate_settles_acknowledgement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _record = self.post_estimate_args(
+                Path(directory), intents=["estimate_acceptance"]
+            )
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe, "finish_processed") as finish,
+            ):
+                result = workflow_safe.finalize_post_estimate(args)
+            finish.assert_called_once()
+            self.assertTrue(result["should_finalize"])
+            self.assertEqual(result["next_action"], "finalize")
+
+    def test_finalize_post_estimate_terminalizes_design_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _record = self.post_estimate_args(
+                Path(directory),
+                assessment="changed",
+                changed_fields=["metal"],
+            )
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(
+                    workflow_safe.kolo_safe, "manual_review_claimed"
+                ) as manual,
+            ):
+                result = workflow_safe.finalize_post_estimate(args)
+            manual.assert_called_once_with(
+                args.monitor_root,
+                args.claim_root,
+                args.message_id,
+                None,
+                "design_change_detected",
+            )
+            self.assertEqual(result["next_action"], "manual_review")
+
+    def test_rendering_and_appointment_commands_require_the_bound_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args, record = self.post_estimate_args(
+                root, intents=["rendering_request"]
+            )
+            appointment_intent = root / "appointment-intent.json"
+            appointment_intent.write_text(
+                json.dumps({"requested_times": [], "calendar_availability": []}),
+                encoding="utf-8",
+            )
+            args.appointment_intent = appointment_intent
+            args.appointment_approval = root / "appointment-approval.json"
+            args.defer_finalize_for_rendering = False
+            with self.assertRaisesRegex(ValueError, "appointment_request"):
+                workflow_safe.request_appointment_approval(args)
+            self.assertFalse(args.appointment_approval.exists())
+            self.assertEqual(record["status"], "estimate_sent")
+
 
 class CustomerStateResetTests(unittest.TestCase):
     def build_workspace(self, root: Path) -> tuple[Path, str]:
@@ -4260,8 +4379,12 @@ class EstimateRecordTests(unittest.TestCase):
                         "gmail-initial-message",
                         "post-estimate-request",
                     ],
-                    "specification": specification,
                     "missing_required_fields": [],
+                    "post_estimate_artifact": {
+                        "design_change_assessment": "unchanged",
+                        "intents": ["rendering_request", "appointment_request"],
+                        "changed_fields": [],
+                    },
                 },
             )
 
@@ -4272,8 +4395,17 @@ class EstimateRecordTests(unittest.TestCase):
                 reviewed["thread_reviews"][-1]["outcome"],
                 "post_estimate_continuation",
             )
+            decision = reviewed["thread_reviews"][-1]
+            self.assertEqual(
+                decision["intents"],
+                ["appointment_request", "rendering_request"],
+            )
+            self.assertEqual(
+                decision["approved_specification_sha256"],
+                estimate_record.canonical_sha256(specification),
+            )
 
-    def test_post_estimate_thread_review_rejects_specification_change(self) -> None:
+    def test_post_estimate_thread_review_routes_design_change_to_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "records"
             record = estimate_record.create_initial_record(
@@ -4282,18 +4414,182 @@ class EstimateRecordTests(unittest.TestCase):
             record["status"] = "estimate_sent"
             record["specification"] = {"piece_type": "ring"}
             estimate_record.persist_record(root, record)
-            with self.assertRaisesRegex(ValueError, "new owner approval"):
-                estimate_record.record_thread_review(
-                    root,
-                    record["estimate_id"],
-                    {
-                        "thread_id": "gmail-thread",
-                        "source_message_id": "changed-design",
-                        "message_ids": ["gmail-initial-message", "changed-design"],
-                        "specification": {"piece_type": "pendant"},
-                        "missing_required_fields": [],
+            reviewed = estimate_record.record_thread_review(
+                root,
+                record["estimate_id"],
+                {
+                    "thread_id": "gmail-thread",
+                    "source_message_id": "changed-design",
+                    "message_ids": ["gmail-initial-message", "changed-design"],
+                    "missing_required_fields": [],
+                    "post_estimate_artifact": {
+                        "design_change_assessment": "changed",
+                        "intents": [],
+                        "changed_fields": ["piece_type"],
                     },
+                },
+            )
+            self.assertEqual(reviewed["specification"], {"piece_type": "ring"})
+            self.assertEqual(
+                reviewed["thread_reviews"][-1]["outcome"],
+                "design_change_detected",
+            )
+
+    def test_post_estimate_malformed_artifact_fails_closed_without_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            record["status"] = "estimate_sent"
+            record["specification"] = {"piece_type": "ring"}
+            estimate_record.persist_record(root, record)
+            reviewed = estimate_record.record_thread_review(
+                root,
+                record["estimate_id"],
+                {
+                    "thread_id": "gmail-thread",
+                    "source_message_id": "ambiguous-request",
+                    "message_ids": ["gmail-initial-message", "ambiguous-request"],
+                    "missing_required_fields": [],
+                    "post_estimate_artifact": {
+                        "design_change_assessment": "changed",
+                        "intents": ["rendering_request"],
+                        "changed_fields": [],
+                    },
+                },
+            )
+            decision = reviewed["thread_reviews"][-1]
+            self.assertEqual(decision["outcome"], "classification_malformed")
+            self.assertEqual(decision["intents"], [])
+
+    def test_post_estimate_decision_is_bound_to_latest_source_and_specification(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            record["status"] = "estimate_sent"
+            record["specification"] = {"piece_type": "ring"}
+            estimate_record.persist_record(root, record)
+            estimate_record.record_thread_review(
+                root,
+                record["estimate_id"],
+                {
+                    "thread_id": "gmail-thread",
+                    "source_message_id": "render-request",
+                    "message_ids": ["gmail-initial-message", "render-request"],
+                    "missing_required_fields": [],
+                    "post_estimate_artifact": {
+                        "design_change_assessment": "unchanged",
+                        "intents": ["rendering_request"],
+                        "changed_fields": [],
+                    },
+                },
+            )
+            _record, decision = estimate_record.post_estimate_decision(
+                root,
+                record["estimate_id"],
+                "render-request",
+                "rendering_request",
+            )
+            self.assertEqual(decision["outcome"], "post_estimate_continuation")
+            with self.assertRaisesRegex(ValueError, "claimed message"):
+                estimate_record.post_estimate_decision(
+                    root, record["estimate_id"], "different-request"
                 )
+
+    def appointment_record_and_receipt(self, root: Path) -> tuple[dict, dict]:
+        record = estimate_record.create_initial_record(
+            root, self.route(), 1_787_760_000_000
+        )
+        record["status"] = "estimate_sent"
+        record["specification"] = {"piece_type": "ring"}
+        estimate_record.persist_record(root, record)
+        source_message_id = "appointment-source"
+        approval = {
+            "schema_version": 1,
+            "action_type": "appointment_booking",
+            "estimate_id": record["estimate_id"],
+            "source_message_id": source_message_id,
+            "customer_email": "customer@example.net",
+            "thread_id": "gmail-thread",
+            "requested_times": ["tomorrow at 2pm"],
+            "calendar_availability": [],
+        }
+        estimate_record.record_appointment_approval_requested(
+            root, record["estimate_id"], source_message_id, approval
+        )
+        receipt = {
+            "estimate_id": record["estimate_id"],
+            "source_message_id": source_message_id,
+            "calendar_event_id": "calendar-event-1",
+            "confirmed_start": "2026-08-28T14:00:00-07:00",
+            "confirmed_end": "2026-08-28T14:30:00-07:00",
+            "confirmation_message_id": "confirmation-message-1",
+            "confirmation_thread_id": "gmail-thread",
+        }
+        return record, receipt
+
+    def test_appointment_booking_receipt_is_idempotent_and_conflicts_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record, receipt = self.appointment_record_and_receipt(root)
+            first = estimate_record.record_appointment_booked(
+                root, record["estimate_id"], receipt
+            )
+            second = estimate_record.record_appointment_booked(
+                root, record["estimate_id"], receipt
+            )
+            self.assertEqual(second, first)
+            self.assertEqual(first["status"], "appointment_booked")
+            self.assertEqual(
+                first["appointment_booked"]["calendar_event_id"],
+                "calendar-event-1",
+            )
+            self.assertNotIn(
+                "appointment-source", json.dumps(first["appointment_booked"])
+            )
+            conflicting = dict(receipt)
+            conflicting["calendar_event_id"] = "calendar-event-2"
+            with self.assertRaisesRegex(
+                ValueError, "conflicting_appointment_receipt"
+            ):
+                estimate_record.record_appointment_booked(
+                    root, record["estimate_id"], conflicting
+                )
+
+    def test_booking_workflow_mirrors_once_and_identical_retry_is_local_noop(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_root = root / "records"
+            record, receipt = self.appointment_record_and_receipt(record_root)
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            args = type(
+                "Args",
+                (),
+                {
+                    "record_root": record_root,
+                    "estimate_id": record["estimate_id"],
+                    "receipt": receipt_path,
+                    "record_output": root / "record-output.json",
+                },
+            )()
+            with patch.object(workflow_safe, "mirror_record") as mirror:
+                first = workflow_safe.record_appointment_booked(args)
+            mirror.assert_called_once()
+            with patch.object(workflow_safe, "mirror_record") as retry_mirror:
+                second = workflow_safe.record_appointment_booked(args)
+            retry_mirror.assert_not_called()
+            self.assertEqual(second, first)
+            self.assertEqual(
+                json.loads(args.record_output.read_text(encoding="utf-8")), first
+            )
 
     def test_second_record_cannot_claim_same_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
