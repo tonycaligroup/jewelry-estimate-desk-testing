@@ -60,6 +60,20 @@ def approval_reasoning(details: dict[str, Any]) -> str:
     review = details.get("owner_review")
     if not isinstance(review, dict):
         return "Structured custom-jewelry estimate ready for owner review"
+    required = {
+        "customer_price",
+        "hard_cost_total",
+        "estimated_gross_profit",
+        "metal_costs",
+        "stone_costs",
+        "labor_costs",
+        "other_hard_costs",
+    }
+    missing = sorted(required - set(review))
+    if missing:
+        raise ValueError(
+            "owner approval display is missing fields: " + ", ".join(missing)
+        )
     lines = [
         "JEWELER-ONLY COST SHEET — never customer-facing",
         f"Customer price: {_money(review['customer_price'])}",

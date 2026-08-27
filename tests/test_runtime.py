@@ -718,6 +718,22 @@ class SafeCliTests(unittest.TestCase):
                 "jeweler_only_never_customer_facing",
             )
 
+    def test_partial_owner_review_fails_with_descriptive_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "brief.json"
+            path.write_text(
+                json.dumps({"owner_review": {"customer_price": 4_200}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError, "owner approval display is missing fields"
+            ):
+                kolo_safe.build_request_approval(
+                    "jed-0123456789abcdef",
+                    path,
+                    "agent:main:kolo:test-session",
+                )
+
     def test_untrusted_details_remain_one_argv_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "brief.json"
@@ -3800,6 +3816,13 @@ class EstimateRecordTests(unittest.TestCase):
             self.assertEqual(first["proposed_price"], 2_500)
             self.assertEqual(first["approval_binding_hash"], approval["binding_hash"])
             self.assertNotIn("complete-reply", json.dumps(first["approval_requests"]))
+            self.assertNotIn("owner_review", first)
+            self.assertNotIn(
+                "owner_review",
+                estimate_record.record_path(root, record["estimate_id"]).read_text(
+                    encoding="utf-8"
+                ),
+            )
 
     def test_post_estimate_thread_review_preserves_approved_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
