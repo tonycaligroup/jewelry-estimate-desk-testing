@@ -162,6 +162,15 @@ def build_notify_monitor(event: str) -> list[str]:
     return ["kolo", "notify-owner", "-m", message]
 
 
+def appointment_action_result(estimate_id: str) -> str:
+    """Render the owner-visible cron result for a Stage 1/2 booking decision."""
+    estimate_id = validate_estimate_id(estimate_id)
+    return (
+        f"Appointment booking needs owner approval for {estimate_id.upper()}. "
+        "Reply in this Kolo chat to review and approve it."
+    )
+
+
 def build_record_upsert(
     record_type: str, external_id: str, payload: Path, status: str
 ) -> list[str]:
@@ -451,6 +460,8 @@ def main(argv: list[str] | None = None) -> int:
     notify_monitor.add_argument(
         "--event", choices=sorted(MONITOR_NOTIFICATION_MESSAGES), required=True
     )
+    appointment_result = sub.add_parser("appointment-action-result")
+    appointment_result.add_argument("--estimate-id", required=True)
     notify_claimed = sub.add_parser("notify-owner-claimed")
     notify_claimed.add_argument("--claim-root", type=Path, required=True)
     notify_claimed.add_argument("--message-id", required=True)
@@ -517,6 +528,9 @@ def main(argv: list[str] | None = None) -> int:
             command = build_notify_owner(args.estimate_id, args.event)
         elif args.command == "notify-monitor":
             command = build_notify_monitor(args.event)
+        elif args.command == "appointment-action-result":
+            print(appointment_action_result(args.estimate_id))
+            return 0
         elif args.command == "notify-owner-claimed":
             result = notify_owner_claimed(
                 args.claim_root,

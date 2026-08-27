@@ -1090,6 +1090,19 @@ class SafeCliTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             kolo_safe.build_notify_monitor("customer@example.com")
 
+    def test_appointment_action_result_routes_to_chat_without_customer_data(
+        self,
+    ) -> None:
+        result = kolo_safe.appointment_action_result("jed-0123456789abcdef")
+        self.assertEqual(
+            result,
+            "Appointment booking needs owner approval for "
+            "JED-0123456789ABCDEF. Reply in this Kolo chat to review and approve it.",
+        )
+        self.assertNotIn("@", result)
+        with self.assertRaises(ValueError):
+            kolo_safe.appointment_action_result("customer@example.com")
+
     def test_claimed_owner_notification_records_sent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
@@ -1874,6 +1887,18 @@ class CronConfigTests(unittest.TestCase):
         self.assertIn("combined rendering-and-appointment reply", message)
         self.assertIn("owner alert before invoking", message)
         self.assertIn("never expose internal reasoning", message)
+
+    def test_cron_routes_stage_one_two_appointment_action_to_chat_result(self) -> None:
+        message = cron_config.render_message(Path("/workspace"), ROOT)
+        self.assertIn(
+            "kolo_safe.py appointment-action-result --estimate-id '<jed-id>'",
+            message,
+        )
+        self.assertIn("return its exact stdout as the final response", message)
+        self.assertIn(
+            "Do not call `notify-owner-claimed` for that appointment action",
+            message,
+        )
 
     def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
         job = self.live_job()

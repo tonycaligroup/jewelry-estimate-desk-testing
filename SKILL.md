@@ -177,9 +177,11 @@ Do not modify the installed skill to store shop settings.
 
 Act on scheduling intent immediately at every stage; never delay a meeting
 offer until near the desired delivery date. At Stage 1 or 2, prepare the
-near-term options for owner action. Only Stage 3 authorizes autonomous offers,
-calendar writes, and confirmations inside declared windows. Never advance the
-stage automatically. Missing or unreadable stage means Stage 1.
+near-term options for owner action and route the visible action request through
+the cron's Kolo-chat result described in Inbox monitoring. Only Stage 3 authorizes autonomous offers,
+calendar writes, and confirmations inside
+declared windows. Never advance the stage automatically. Missing or unreadable
+stage means Stage 1.
 
 ## Inbox monitoring
 
@@ -538,9 +540,9 @@ For each returned message:
    send nothing and finish as manual review with reason
    `record_persistence_failed`. A successful initial record is updated through
    later phases; never create a second estimate record for that thread.
-5. For a valid response on an active estimate, notify the owner at every trust
-   stage before any customer response. Bind the alert to an event-specific key
-   that includes the event, estimate ID, and Gmail ID:
+5. For a valid response on an active estimate, normally notify the owner at
+   every trust stage before any customer response. Bind the alert to an
+   event-specific key that includes the event, estimate ID, and Gmail ID:
 
    ```bash
    python3 {baseDir}/scripts/kolo_safe.py notify-owner-claimed \
@@ -561,6 +563,22 @@ For each returned message:
    request was created.
    Generic mailbox alerts tied to a claimed message must never call
    `notify-monitor` directly.
+
+   Exception: when a Stage 1 or 2 reply contains appointment intent, do not use
+   the generic `customer-replied` notification as the appointment route. After
+   the claim's customer/rendering work and durable finalization are complete,
+   run the following command and return its exact stdout as the cron's final
+   response instead of `NO_REPLY`:
+
+   ```bash
+   python3 {baseDir}/scripts/kolo_safe.py appointment-action-result \
+     --estimate-id '<jed-id>'
+   ```
+
+   The cron delivery target is the activating owner's Kolo chat, so this is the
+   one visible appointment-action alert. Do not also call
+   `notify-owner-claimed` for that appointment action, and do not claim the
+   owner was notified unless this result is actually returned.
 6. Before deciding which specifications are missing or complete, fetch the
    exact Gmail thread resource and read every message in chronological order,
    including the initiating inquiry and all later customer replies. Never
