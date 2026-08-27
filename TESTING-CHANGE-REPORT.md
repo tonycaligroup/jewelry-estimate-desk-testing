@@ -18,6 +18,10 @@ Date: 2026-08-26
 - Clarified that a customer-reply notification is not an approval request.
 - Reconciled first-job pricing guidance: unsupported rates remain blank instead
   of being replaced with invented market defaults.
+- Added an explicit clean-test reset that removes local customer records,
+  claims, queued/manual-review state, and job artifacts; advances the discovery
+  watermark; and hard-deletes Kolo estimate mirrors while preserving business,
+  pricing, approver, cron, and monitor configuration.
 
 - Removed customer-facing use of the term `CAD`. Customer messages now use
   `design`, `final design`, or `visual rendering`.
@@ -52,7 +56,7 @@ Date: 2026-08-26
 
 ## Verification
 
-- 150 automated runtime tests pass.
+- 152 automated runtime tests pass.
 - Python compilation passes for all scripts and tests.
 - Git whitespace validation passes.
 - No customer-facing template or instruction contains the prohibited term.
@@ -60,7 +64,8 @@ Date: 2026-08-26
   MIME attachments, one/two-image limits, duplicate-request idempotency,
   distinct rendering iterations, owner-selected cron intervals, confidential
   customer content, delegated specification choices, private activation
-  binding, installer-as-approver routing, and cross-document policy coherence.
+  binding, installer-as-approver routing, cross-document policy coherence, and
+  customer-state reset preservation/refusal boundaries.
 
 ## Kolo platform findings
 

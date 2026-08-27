@@ -25,6 +25,7 @@ import approval_guard
 import activation_binding
 import customer_content_guard
 import cron_config
+import customer_state_reset
 import inbox_claim
 import inbox_monitor
 import estimate_record
@@ -346,6 +347,110 @@ class ActivationBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "not bound"):
                 activation_binding.load(Path(directory) / "missing.json")
+
+
+class CustomerStateResetTests(unittest.TestCase):
+    def build_workspace(self, root: Path) -> tuple[Path, str]:
+        desk = root / "estimate-desk"
+        desk.mkdir(parents=True)
+        (desk / "shop-profile.json").write_text(
+            json.dumps(valid_profile()), encoding="utf-8"
+        )
+        monitor_root = desk / "inbox-monitor"
+        activation_binding.create(
+            activation_binding.binding_path(monitor_root),
+            "agent:main:kolo:direct:test-owner",
+        )
+        inbox_monitor.atomic_write_json(
+            monitor_root / "monitor-state.json",
+            {
+                "schema_version": 2,
+                "activation_state": "active",
+                "bound_cron_sha256": "sha256:bound",
+                "pending_cron_sha256": None,
+                "capabilities": {
+                    "gmail_after_epoch": True,
+                    "gmail_internal_date_ms": True,
+                    "gmail_complete_pagination": True,
+                },
+                "activated_at_ms": 1_000,
+                "discovery_watermark_ms": 1_500,
+            },
+        )
+        message_id = "reset-message"
+        message_hash = inbox_monitor.message_key(message_id)
+        inbox_monitor.atomic_write_json(
+            inbox_monitor.queue_path(monitor_root, message_id),
+            {
+                "schema_version": 1,
+                "gmail_message_id": message_id,
+                "gmail_message_id_sha256": message_hash,
+                "thread_id": "reset-thread",
+                "internal_date_ms": 1_400,
+                "discovery_status": "complete",
+                "processing_status": "processing",
+                "processing_started_at": "2026-08-26T00:00:00+00:00",
+            },
+        )
+        claim = desk / "inbox-claims" / message_hash
+        claim.mkdir(parents=True)
+        (claim / "state.json").write_text("{}", encoding="utf-8")
+        customer_work = desk / "work" / message_hash
+        customer_work.mkdir()
+        (customer_work / "customer-reply.txt").write_text(
+            "customer data", encoding="utf-8"
+        )
+        (desk / "work" / "cron-binding.json").write_text("{}", encoding="utf-8")
+        run_work = desk / "run-work" / ("a" * 24)
+        run_work.mkdir(parents=True)
+        (run_work / "discovery-batch.json").write_text("[]", encoding="utf-8")
+        route = {
+            "channel": "gmail",
+            "mailbox": "sales@example.com",
+            "recipient": "customer@example.com",
+            "identity_key": gmail_route.email_identity_key("customer@example.com"),
+            "gmail_message_id": message_id,
+            "thread_id": "reset-thread",
+            "original_message_id": "<reset@example.com>",
+            "original_subject": "Reset test",
+            "references": [],
+        }
+        record = estimate_record.create_initial_record(
+            desk / "records", route, 1_400
+        )
+        return desk, record["estimate_id"]
+
+    def test_reset_clears_customer_state_and_preserves_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desk, estimate_id = self.build_workspace(root)
+            result = customer_state_reset.reset(root, now_ms=2_000)
+            self.assertTrue(result["customer_state_cleared"])
+            self.assertEqual(result["mirror_record_ids"], [estimate_id])
+            self.assertEqual(result["removed"]["records"], 1)
+            self.assertEqual(list((desk / "records").glob("jed-*.json")), [])
+            self.assertEqual(list((desk / "inbox-monitor" / "queue").glob("*.json")), [])
+            self.assertEqual(
+                [p for p in (desk / "inbox-claims").iterdir() if p.is_dir()], []
+            )
+            self.assertTrue((desk / "shop-profile.json").exists())
+            self.assertTrue((desk / "work" / "activation-binding.json").exists())
+            self.assertTrue((desk / "work" / "cron-binding.json").exists())
+            self.assertEqual(
+                inbox_monitor.load_monitor_state(desk / "inbox-monitor")[
+                    "discovery_watermark_ms"
+                ],
+                2_000,
+            )
+
+    def test_reset_refuses_unknown_customer_work_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desk, _ = self.build_workspace(root)
+            (desk / "work" / "unexpected-customer-folder").mkdir()
+            with self.assertRaisesRegex(ValueError, "unexpected reset target"):
+                customer_state_reset.reset(root, now_ms=2_000)
+            self.assertTrue(list((desk / "records").glob("jed-*.json")))
 
 
 class PricingAndSchedulingTests(unittest.TestCase):
