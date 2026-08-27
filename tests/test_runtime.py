@@ -181,6 +181,25 @@ class InstructionCoherenceTests(unittest.TestCase):
         self.assertIn("Budget is optional", cron)
         self.assertIn("not an estimate prerequisite", customer)
 
+    def test_cron_declares_bundled_tools_complete_for_missing_specs(self) -> None:
+        cron = (ROOT / "templates" / "inbox-monitor-cron.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("The allowed tool set is complete for this workflow", cron)
+        self.assertIn(
+            "Do not expect or request separate Gmail, messaging, database, "
+            "persistence, or thread-review tools",
+            cron,
+        )
+        self.assertIn(
+            "write `work_paths.thread_review`, persist it with "
+            "`estimate_record.py record-thread-review`",
+            cron,
+        )
+        self.assertIn(
+            "immediately run `workflow_safe.py send-spec-followup`", cron
+        )
+
     def test_stage_three_is_the_autonomous_booking_stage(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         owner_guide = (ROOT / "references" / "OWNER-GUIDE.md").read_text(
