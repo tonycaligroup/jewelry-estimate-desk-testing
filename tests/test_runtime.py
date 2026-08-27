@@ -687,6 +687,53 @@ class EstimateDeliveryTransitionTests(unittest.TestCase):
 
 
 class SafeCliTests(unittest.TestCase):
+    def test_approval_card_shows_complete_jeweler_only_cost_sheet(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = {
+                "estimate_id": "jed-0123456789abcdef",
+                "route": {"channel": "gmail"},
+                "specification": {"piece_type": "ring"},
+                "proposed_price": 4_200,
+                "internal_cost_sheet": internal_cost_sheet(),
+            }
+            request = approval_guard.build_request(state)
+            path = Path(directory) / "brief.json"
+            path.write_text(json.dumps(request), encoding="utf-8")
+
+            argv = kolo_safe.build_request_approval(
+                state["estimate_id"], path, "agent:main:kolo:test-session"
+            )
+            reasoning = argv[argv.index("--reasoning") + 1]
+            details = json.loads(argv[argv.index("--details") + 1])
+
+            self.assertIn("JEWELER-ONLY COST SHEET", reasoning)
+            self.assertIn("Customer price: $4,200.00", reasoning)
+            self.assertIn("10 g × $60.00/g = $600.00", reasoning)
+            self.assertIn("5 hr × $100.00/hr = $500.00", reasoning)
+            self.assertEqual(
+                details["owner_review"]["estimated_gross_profit"], 1_100
+            )
+            self.assertEqual(
+                details["owner_review"]["visibility"],
+                "jeweler_only_never_customer_facing",
+            )
+
+    def test_partial_owner_review_fails_with_descriptive_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "brief.json"
+            path.write_text(
+                json.dumps({"owner_review": {"customer_price": 4_200}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError, "owner approval display is missing fields"
+            ):
+                kolo_safe.build_request_approval(
+                    "jed-0123456789abcdef",
+                    path,
+                    "agent:main:kolo:test-session",
+                )
+
     def test_untrusted_details_remain_one_argv_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "brief.json"
@@ -1604,6 +1651,9 @@ class CronConfigTests(unittest.TestCase):
         self.assertIn("Customer-delegated quality choices are complete", message)
         self.assertIn("Budget is optional", message)
         self.assertIn("explicit post-estimate customer request", message)
+        self.assertIn("post-estimate continuation", message)
+        self.assertIn("combined rendering-and-appointment reply", message)
+        self.assertIn("owner alert before invoking", message)
         self.assertIn("never expose internal reasoning", message)
 
     def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
@@ -3766,6 +3816,75 @@ class EstimateRecordTests(unittest.TestCase):
             self.assertEqual(first["proposed_price"], 2_500)
             self.assertEqual(first["approval_binding_hash"], approval["binding_hash"])
             self.assertNotIn("complete-reply", json.dumps(first["approval_requests"]))
+            self.assertNotIn("owner_review", first)
+            self.assertNotIn(
+                "owner_review",
+                estimate_record.record_path(root, record["estimate_id"]).read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+    def test_post_estimate_thread_review_preserves_approved_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            specification = {
+                "piece_type": "ring",
+                "metal": "14k yellow gold",
+                "finger_size": "6",
+                "setting_style": "prong",
+            }
+            record["status"] = "estimate_sent"
+            record["specification"] = specification
+            record["approved_price"] = 2_500
+            estimate_record.persist_record(root, record)
+
+            reviewed = estimate_record.record_thread_review(
+                root,
+                record["estimate_id"],
+                {
+                    "thread_id": "gmail-thread",
+                    "source_message_id": "post-estimate-request",
+                    "message_ids": [
+                        "gmail-initial-message",
+                        "post-estimate-request",
+                    ],
+                    "specification": specification,
+                    "missing_required_fields": [],
+                },
+            )
+
+            self.assertEqual(reviewed["status"], "estimate_sent")
+            self.assertEqual(reviewed["approved_price"], 2_500)
+            self.assertEqual(reviewed["specification"], specification)
+            self.assertEqual(
+                reviewed["thread_reviews"][-1]["outcome"],
+                "post_estimate_continuation",
+            )
+
+    def test_post_estimate_thread_review_rejects_specification_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            record["status"] = "estimate_sent"
+            record["specification"] = {"piece_type": "ring"}
+            estimate_record.persist_record(root, record)
+            with self.assertRaisesRegex(ValueError, "new owner approval"):
+                estimate_record.record_thread_review(
+                    root,
+                    record["estimate_id"],
+                    {
+                        "thread_id": "gmail-thread",
+                        "source_message_id": "changed-design",
+                        "message_ids": ["gmail-initial-message", "changed-design"],
+                        "specification": {"piece_type": "pendant"},
+                        "missing_required_fields": [],
+                    },
+                )
 
     def test_second_record_cannot_claim_same_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

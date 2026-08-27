@@ -51,12 +51,73 @@ def validate_session_key(value: str) -> str:
     return activation_binding.validate_session_key(value)
 
 
+def _money(value: Any) -> str:
+    return f"${float(value):,.2f}"
+
+
+def approval_reasoning(details: dict[str, Any]) -> str:
+    """Render the bound cost sheet in the visible owner-approval summary."""
+    review = details.get("owner_review")
+    if not isinstance(review, dict):
+        return "Structured custom-jewelry estimate ready for owner review"
+    required = {
+        "customer_price",
+        "hard_cost_total",
+        "estimated_gross_profit",
+        "metal_costs",
+        "stone_costs",
+        "labor_costs",
+        "other_hard_costs",
+    }
+    missing = sorted(required - set(review))
+    if missing:
+        raise ValueError(
+            "owner approval display is missing fields: " + ", ".join(missing)
+        )
+    lines = [
+        "JEWELER-ONLY COST SHEET — never customer-facing",
+        f"Customer price: {_money(review['customer_price'])}",
+        f"Estimated hard costs: {_money(review['hard_cost_total'])}",
+        f"Estimated gross profit: {_money(review['estimated_gross_profit'])}",
+        "",
+        "Metal assumptions:",
+    ]
+    for item in review.get("metal_costs", []):
+        lines.append(
+            f"- {item['metal']}: {item['quantity_grams']:g} g × "
+            f"{_money(item['unit_cost'])}/g = {_money(item['total_cost'])}"
+        )
+    lines.append("Stone assumptions:")
+    for item in review.get("stone_costs", []):
+        lines.append(
+            f"- {item['stone']}: {item['quantity']:g} × "
+            f"{_money(item['unit_cost'])} = {_money(item['total_cost'])}"
+        )
+    lines.append("Labor assumptions:")
+    for item in review.get("labor_costs", []):
+        lines.append(
+            f"- {item['task']}: {item['hours']:g} hr × "
+            f"{_money(item['rate'])}/hr = {_money(item['total_cost'])}"
+        )
+    if review.get("other_hard_costs"):
+        lines.append("Other hard costs:")
+        for item in review["other_hard_costs"]:
+            lines.append(f"- {item['label']}: {_money(item['total_cost'])}")
+    reasoning = "\n".join(lines)
+    if len(reasoning) > 4000:
+        raise ValueError("owner approval cost summary exceeds 4000 characters")
+    return reasoning
+
+
 def build_request_approval(
     estimate_id: str, details: Path, session_key: str, agent_id: str = "main"
 ) -> list[str]:
     estimate_id = validate_estimate_id(estimate_id)
     session_key = validate_session_key(session_key)
-    payload = read_json_argument(details)
+    details_object = json.loads(read_json_argument(details))
+    payload = json.dumps(
+        details_object, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return [
         "kolo",
         "request-approval",
@@ -65,7 +126,7 @@ def build_request_approval(
         "--action",
         f"Custom estimate — {estimate_id}",
         "--reasoning",
-        "Structured custom-jewelry estimate ready for owner review",
+        approval_reasoning(details_object),
         "--risk-level",
         "medium",
         "--details",

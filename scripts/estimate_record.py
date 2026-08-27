@@ -403,8 +403,6 @@ def record_thread_review(
         raise ValueError("missing_required_fields must contain lowercase field keys")
     if len(set(missing)) != len(missing):
         raise ValueError("missing_required_fields must not contain duplicates")
-    outcome = "awaiting_specs" if missing else "specs_complete"
-
     path = record_path(root, estimate_id)
     with record_lock(root):
         record = read_object(path)
@@ -413,6 +411,23 @@ def record_thread_review(
             raise ValueError("thread review does not match the owned thread")
         if record["route"]["gmail_message_id"] not in validated_ids:
             raise ValueError("thread review must include the initiating Gmail message")
+        post_estimate = record["status"] in {
+            "estimate_sent",
+            "appointment_booked",
+            "approved",
+        }
+        if post_estimate:
+            if missing:
+                raise ValueError(
+                    "post-estimate continuation cannot reopen the specification gate"
+                )
+            if specification != record.get("specification"):
+                raise ValueError(
+                    "post-estimate specification changed; new owner approval required"
+                )
+            outcome = "post_estimate_continuation"
+        else:
+            outcome = "awaiting_specs" if missing else "specs_complete"
         evidence = {
             "source_message_id_sha256": sha256_text(source_message_id),
             "thread_id": thread_id,
@@ -438,15 +453,16 @@ def record_thread_review(
             if comparable == evidence:
                 return record
             raise ValueError("conflicting thread review for source message")
-        if record["status"] != "awaiting_specs":
+        if record["status"] != "awaiting_specs" and not post_estimate:
             raise ValueError(
-                "thread specification review requires awaiting_specs status"
+                "thread specification review requires an active estimate status"
             )
         evidence["recorded_at"] = datetime.now(timezone.utc).isoformat()
         reviews.append(evidence)
-        record["specification"] = specification
-        record["missing_required_fields"] = sorted(missing)
-        record["status"] = "awaiting_specs"
+        if not post_estimate:
+            record["specification"] = specification
+            record["missing_required_fields"] = sorted(missing)
+            record["status"] = "awaiting_specs"
         write_object(path, record)
         return record
 
