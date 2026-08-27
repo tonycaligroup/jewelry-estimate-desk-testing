@@ -108,6 +108,29 @@ def binding_hash(state: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def owner_review(state: dict[str, Any]) -> dict[str, Any]:
+    """Build the explicit jeweler-only cost view shown with an approval."""
+    payload = binding_payload(state)
+    sheet = payload["internal_cost_sheet"]
+    hard_cost = float(sheet["hard_cost_total"])
+    customer_price = float(sheet["customer_price"])
+    return {
+        "visibility": "jeweler_only_never_customer_facing",
+        "specification": payload["specification"],
+        "metal_costs": sheet["metal_lines"],
+        "stone_costs": sheet["stone_lines"],
+        "labor_costs": sheet["labor_lines"],
+        "other_hard_costs": sheet["other_hard_cost_lines"],
+        "hard_cost_total": hard_cost,
+        "customer_price": customer_price,
+        "estimated_gross_profit": round(customer_price - hard_cost, 2),
+        "cost_and_labor_assumptions": (
+            "Quantities, unit costs, labor hours, and labor rates shown above are "
+            "the jeweler's approval assumptions."
+        ),
+    }
+
+
 def new_estimate_id() -> str:
     return "jed-" + secrets.token_hex(8)
 
@@ -116,6 +139,7 @@ def build_request(state: dict[str, Any]) -> dict[str, Any]:
     binding_payload(state)
     result = dict(state)
     result["binding_hash"] = binding_hash(state)
+    result["owner_review"] = owner_review(state)
     return result
 
 
