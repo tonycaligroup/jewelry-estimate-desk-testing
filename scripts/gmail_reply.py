@@ -6,12 +6,13 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import mimetypes
 import re
 import sys
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from customer_content_guard import validate_customer_text
 from gmail_route import email_identity_key
@@ -47,7 +48,11 @@ def reply_subject(original_subject: str) -> str:
     return original_subject if re.match(r"^\s*re\s*:", original_subject, re.I) else f"Re: {original_subject}"
 
 
-def build_reply(route: dict[str, Any], body: str) -> dict[str, str]:
+def build_reply(
+    route: dict[str, Any],
+    body: str,
+    attachment: Path | Sequence[Path] | None = None,
+) -> dict[str, str]:
     if route.get("channel") != "gmail":
         raise ValueError("route.channel must be gmail")
     thread_id = require_text(route, "thread_id")
@@ -82,6 +87,39 @@ def build_reply(route: dict[str, Any], body: str) -> dict[str, str]:
     message["In-Reply-To"] = original_message_id
     message["References"] = " ".join(references)
     message.set_content(body)
+    attachments = (
+        []
+        if attachment is None
+        else [attachment]
+        if isinstance(attachment, Path)
+        else list(attachment)
+    )
+    if len(attachments) > 2:
+        raise ValueError("a rendering reply may contain at most two images")
+    for index, image in enumerate(attachments, start=1):
+        content_type, encoding = mimetypes.guess_type(image.name)
+        if encoding is not None or content_type not in {
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+        }:
+            raise ValueError("rendering attachment must be JPEG, PNG, or WebP")
+        data = image.read_bytes()
+        if not data or len(data) > 20 * 1024 * 1024:
+            raise ValueError("rendering attachment must contain 1-20971520 bytes")
+        maintype, subtype = content_type.split("/", 1)
+        suffix = image.suffix.lower().lstrip(".")
+        filename = (
+            f"design-rendering.{suffix}"
+            if len(attachments) == 1
+            else f"design-rendering-{index}.{suffix}"
+        )
+        message.add_attachment(
+            data,
+            maintype=maintype,
+            subtype=subtype,
+            filename=filename,
+        )
 
     encoded = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
     return {"threadId": thread_id, "raw": encoded}
@@ -104,12 +142,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("route", type=Path)
     parser.add_argument("body", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--attachment", type=Path, action="append")
     args = parser.parse_args(argv)
     try:
         write_object(
             args.output,
             build_reply(
-                read_object(args.route), args.body.read_text(encoding="utf-8")
+                read_object(args.route),
+                args.body.read_text(encoding="utf-8"),
+                args.attachment,
             ),
         )
         return 0

@@ -200,10 +200,14 @@ every pre-activation inquiry manually.
      --output "$WORK/cron-message.txt"
    ```
 
-3. Create exactly one disabled `jed-inbox-monitor` using that message, the
-   configured business-hours schedule and IANA timezone, model
+3. Create exactly one disabled `jed-inbox-monitor` using that message. Default
+   to every five minutes during the configured business hours in the owner's
+   IANA timezone. If the owner requests another interval, use and preserve that
+   interval instead; never silently reset an existing owner-selected schedule.
+   Use model
    `litellm-fireworks/qwen-3-7-plus`, no fallbacks, a 300-second timeout,
-   `lightContext: true`, `toolsAllow: ["exec", "read", "write"]`, an isolated
+   `lightContext: true`,
+   `toolsAllow: ["exec", "read", "write", "image_generate"]`, an isolated
    session, and Kolo owner announcement delivery. Never enable or manually run
    it yet. If a job with that name
    already exists, stop and use the reconfiguration procedure below; never
@@ -707,7 +711,7 @@ rate card and comparable jobs before any market default.
 | Metal | finished grams × profile $/g |
 | Center stone | carat × profile $/ct |
 | Accent stones | total carat × profile $/ct |
-| CAD, casting, setting, finishing, engraving | profile fees |
+| Design development, casting, setting, finishing, engraving | profile fees |
 | Bench labor | hours × profile $/hr; always separate internally |
 | COGS | sum of costs |
 | Proposed quote | `pricing_model.py` using the configured pricing model |
@@ -833,7 +837,7 @@ Then:
    specification and the exact owner-approved price. Do not read from, copy, or
    summarize the internal pricing or jeweler cost assumption fields while
    drafting. Save only the reply body to `$WORK/customer-reply.txt`.
-2. Include the canonical high-end/pending-CAD substance from
+2. Include the canonical high-end/pending-design substance from
    `templates/approved-estimate-note.md`, estimated—not guaranteed—lead time,
    validity date, and two or three live appointment options with timezone.
 3. Before every customer send on every channel, run the reusable final
@@ -878,7 +882,39 @@ invitation. Confirm to the customer only after the calendar write succeeds.
 Use the owner's IANA timezone, never the pod's UTC clock. Never select meeting
 times based on the desired delivery date.
 
-If a rendering is authorized, read `references/rendering-standards.md` first.
+After an estimate is sent, treat an explicit customer request for a visual
+rendering as an in-scope continuation of that estimate. It does not require
+another owner approval. Read `references/rendering-standards.md` first, bind
+the request to the existing email-derived record and Gmail thread, and never
+interpret “rendering” as a request for a manufacturing file. Each distinct
+customer request may create one new rendering iteration; replaying the same
+Gmail message must not create or send another iteration.
+
+Generate one or two illustrations with Kolo's native `image_generate` tool and
+place the resulting PNG, JPEG, or WebP files only at the claim's returned
+`work_paths.rendering_image_1` and optional `work_paths.rendering_image_2`.
+Write the post-estimate visual-rendering note from
+`templates/customer-emails.md` to `work_paths.customer_reply`, then call:
+
+```bash
+python3 {baseDir}/scripts/workflow_safe.py send-rendering \
+  --monitor-root '<workspace>/estimate-desk/inbox-monitor' \
+  --claim-root '<workspace>/estimate-desk/inbox-claims' \
+  --record-root '<workspace>/estimate-desk/records' \
+  --message-id '<claimed-gmail-id>' --estimate-id '<jed-id>' \
+  --body '<work_paths.customer_reply>' \
+  --image '<work_paths.rendering_image_1>' \
+  --gmail-payload '<work_paths.gmail_payload>' \
+  --provider-response '<work_paths.gmail_provider_response>' \
+  --record-output '<work_paths.current_record>'
+```
+
+When a second image was generated, add a second
+`--image '<work_paths.rendering_image_2>'`. Do not send if image generation
+does not produce a supported local file at a returned claim path. The
+high-level command binds the send to the claimed customer message, attaches the
+files to the original Gmail thread, records immutable provider/image evidence,
+mirrors the record, and finalizes the claim.
 
 ## Phase 5: records, follow-up, and cleanup
 

@@ -38,24 +38,29 @@ open -- happy to do a quick call, or have you visit the showroom.
 
 | Piece | Moves the price -- ask | Ask, but don't wait |
 |---|---|---|
-| Engagement ring | Stone origin (lab/natural), carat, color, clarity, metal + karat, finger size, setting style, budget | Band width |
+| Engagement ring | Stone origin (lab/natural), carat, metal + karat, finger size, setting style | Color, clarity, cut, budget, band width |
 | Wedding band | Metal + karat, finger size, width, plain vs set, budget | Finish, comfort fit, engraving |
 | Necklace / pendant | Chain length, metal + karat, gauge/style, stone spec, budget | Clasp, bail size, extender |
 | Bracelet | Length, metal + karat, style, stone spec, budget | Clasp, safety catch, taper |
 | Earrings | Metal + karat, stone spec, budget | Back type, drop length |
 | Remount / redesign | What exists, what to keep, metal, budget | Photos of the original, sentiment constraints |
-| Anything with stones | **Lab or natural, color, clarity -- always** | Certificate, origin preference |
+| Anything with stones | **Lab or natural and size** | Color, clarity, cut, certificate, origin preference |
 
 Cap it at four bullets. A wall of questions gets no reply. **Five load-bearing
 fields but only four bullets?** Combine, don't drop: stone origin + carat ride
 in one bullet ("lab-grown or natural, and roughly what size"), metal + karat in
 another. Timing and event-date questions move into prose, not the bullet list.
-Budget always keeps its own bullet — it's the one that most often moves the
-number.
+Budget may keep its own bullet when useful, but the customer does not have to
+provide one before receiving an estimate.
 
-**Budget:** ask for a range, frame it as design guidance, never as a
-qualification screen. "A rough range helps me steer the design toward
-something you'll actually love."
+**Delegated choices:** if the customer asks the jeweler to choose what looks
+good, treat color, clarity, cut, and similar quality choices as delegated—not
+missing. Use the shop's default tier as a jeweler-facing assumption. Default to
+shop sourcing unless the customer says they are supplying the material.
+
+**Budget:** optionally ask for a range as design guidance, never as a
+qualification screen or prerequisite to an estimate. "A rough range can help
+me steer the design toward something you'll actually love."
 
 ---
 
@@ -74,7 +79,7 @@ No internal weights, jeweler cost assumptions, or component costs.>
 
 Estimate: $<approved price>
 
-Just so you know how to read this: we estimate on the high end on purpose. This figure is pending CAD and rendering approval, and once your design is finalized the final price is often a little lower — if it comes in under, we pass that straight along to you. Nothing is locked in until you've seen and approved the CAD.
+Just so you know how to read this: we estimate on the high end on purpose. This figure is pending final design approval, and once your design is finalized the final price is often a little lower — if it comes in under, we pass that straight along to you. Nothing is locked in until you've seen and approved the final design.
 
 Estimated lead time: <x> business days
 <deposit terms> · <tax handling>
@@ -90,11 +95,22 @@ Happy to walk through any part of this. I have <slot 1> or <slot 2>
 <signature>
 ```
 
+### Post-estimate visual rendering
+
+```
+Attached are visual illustrations of the design direction we discussed. The
+written specification and the final design you approve control the finished
+piece.
+
+If you would like an adjustment to the look, reply here and tell me what you
+would like changed.
+```
+
 **Wholesale, add:**
 
 ```
 This is an estimate based on previous comparable jobs, to help you close the
-sale. On custom work the price can move once a CAD is produced, and the final
+sale. On custom work the price can move once the design is finalized, and the final
 price is often lower than estimated -- we estimate high and pass any savings
 along to you.
 ```

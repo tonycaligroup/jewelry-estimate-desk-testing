@@ -20,6 +20,7 @@ import gmail_safe
 import inbox_claim
 import inbox_monitor
 import kolo_safe
+import route_ownership
 
 
 def read_object(path: Path) -> dict[str, Any]:
@@ -177,6 +178,42 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
     return record
 
 
+def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
+    record = read_object(estimate_record.record_path(args.record_root, args.estimate_id))
+    route_ownership.validate_record(record)
+    if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
+        raise ValueError("rendering delivery requires a sent estimate")
+    route = record.get("route")
+    if not isinstance(route, dict):
+        raise ValueError("estimate record route must be an object")
+    body = args.body.read_text(encoding="utf-8")
+    customer_content_guard.validate_customer_text(body)
+    payload = gmail_reply.build_reply(route, body, args.images)
+    write_private(args.gmail_payload, payload)
+    receipt = gmail_safe.send_reply_claimed(
+        args.claim_root,
+        args.message_id,
+        None,
+        f"customer_rendering:{args.estimate_id}:{args.message_id}",
+        args.gmail_payload,
+        args.provider_response,
+        os.environ.get("MATON_API_KEY", ""),
+    )
+    record = estimate_record.record_rendering_sent(
+        args.record_root,
+        args.estimate_id,
+        args.message_id,
+        body,
+        args.images,
+        receipt,
+    )
+    mirror_record(record, args.record_output)
+    finish_processed(
+        args.monitor_root, args.claim_root, args.record_root, args.message_id
+    )
+    return record
+
+
 def add_common_paths(
     parser: argparse.ArgumentParser, *, message_required: bool = True
 ) -> None:
@@ -211,14 +248,25 @@ def main(argv: list[str] | None = None) -> int:
     send.add_argument("--body", type=Path, required=True)
     send.add_argument("--gmail-payload", type=Path, required=True)
     send.add_argument("--provider-response", type=Path, required=True)
+    rendering = sub.add_parser("send-rendering")
+    add_common_paths(rendering)
+    rendering.add_argument("--monitor-root", type=Path, required=True)
+    rendering.add_argument("--body", type=Path, required=True)
+    rendering.add_argument(
+        "--image", dest="images", type=Path, action="append", required=True
+    )
+    rendering.add_argument("--gmail-payload", type=Path, required=True)
+    rendering.add_argument("--provider-response", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "send-spec-followup":
             record = send_spec_followup(args)
         elif args.command == "request-approval":
             record = request_approval(args)
-        else:
+        elif args.command == "send-approved-estimate":
             record = send_approved_estimate(args)
+        else:
+            record = send_rendering(args)
         print(json.dumps(record, sort_keys=True))
         return 0
     except (

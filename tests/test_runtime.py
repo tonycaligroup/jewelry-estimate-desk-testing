@@ -10,6 +10,8 @@ import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 from unittest.mock import Mock
 from urllib.error import URLError
@@ -187,6 +189,18 @@ class ApprovalTests(unittest.TestCase):
             customer_content_guard.validate_approved_price(
                 "Your approved estimate is $5,400.", 4200
             )
+
+    def test_customer_text_rejects_cad_language(self) -> None:
+        with self.assertRaisesRegex(ValueError, "design or visual rendering"):
+            customer_content_guard.validate_customer_text(
+                "Your estimate is pending CAD approval."
+            )
+        self.assertEqual(
+            customer_content_guard.validate_customer_text(
+                "Your estimate is pending final design approval."
+            ),
+            "Your estimate is pending final design approval.",
+        )
 
     def test_owner_price_must_match_bound_proposed_price(self) -> None:
         current = self.state()
@@ -1365,6 +1379,13 @@ class CronConfigTests(unittest.TestCase):
         self.assertNotIn("state", binding)
         self.assertNotIn("accountId", binding["delivery"])
 
+    def test_cron_prompt_handles_delegated_specs_and_hides_internal_reasoning(self) -> None:
+        message = cron_config.render_message(Path("/workspace"), ROOT)
+        self.assertIn("Customer-delegated quality choices are complete", message)
+        self.assertIn("Budget is optional", message)
+        self.assertIn("explicit post-estimate customer request", message)
+        self.assertIn("never expose internal reasoning", message)
+
     def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
         job = self.live_job()
         job.pop("agentId")
@@ -1389,6 +1410,12 @@ class CronConfigTests(unittest.TestCase):
         self.assertEqual(target["payload"]["timeoutSeconds"], 300)
         self.assertTrue(target["payload"]["lightContext"])
         self.assertEqual(target["payload"]["toolsAllow"], cron_config.TOOLS_ALLOW)
+
+    def test_target_binding_preserves_owner_selected_interval(self) -> None:
+        job = self.live_job()
+        job["schedule"]["expr"] = "*/15 9-17 * * 1-5"
+        target = cron_config.build_target_binding(job, Path("/workspace"), ROOT)
+        self.assertEqual(target["schedule"]["expr"], "*/15 9-17 * * 1-5")
 
     def test_adopt_disabled_live_reconfiguration_preserves_runtime_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1458,9 +1485,9 @@ class CronConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cron_config.validate_binding(binding)
 
-    def test_binding_requires_minimal_tool_allowlist(self) -> None:
+    def test_binding_requires_exact_tool_allowlist(self) -> None:
         binding = cron_config.build_binding(self.live_job(), Path("/workspace"), ROOT)
-        self.assertEqual(binding["payload"]["toolsAllow"], ["exec", "read", "write"])
+        self.assertEqual(binding["payload"]["toolsAllow"], cron_config.TOOLS_ALLOW)
         binding["payload"]["toolsAllow"] = ["exec"]
         with self.assertRaises(ValueError):
             cron_config.validate_binding(binding)
@@ -2134,6 +2161,14 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertEqual(
                 Path(result["work_paths"]["candidate_records"]),
                 expected / "candidate-records.json",
+            )
+            self.assertEqual(
+                Path(result["work_paths"]["gmail_payload"]),
+                expected / "gmail-payload.json",
+            )
+            self.assertEqual(
+                Path(result["work_paths"]["rendering_image_1"]),
+                expected / "rendering-1.png",
             )
 
     def test_prepare_run_returns_private_workspace_discovery_path(self) -> None:
@@ -2825,6 +2860,53 @@ class GmailReplyTests(unittest.TestCase):
             "References: <earlier@example.net> <original@example.net>", message
         )
 
+    def test_rendering_attachment_stays_in_original_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "rendering.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\nrendering-test")
+            payload = gmail_reply.build_reply(
+                self.route(),
+                "Here is an illustration of the design direction.",
+                [image],
+            )
+            padding = "=" * (-len(payload["raw"]) % 4)
+            parsed = BytesParser(policy=policy.default).parsebytes(
+                base64.urlsafe_b64decode(payload["raw"] + padding)
+            )
+            attachments = list(parsed.iter_attachments())
+            self.assertEqual(payload["threadId"], "18d0thread1234567")
+            self.assertEqual(parsed["In-Reply-To"], "<original@example.net>")
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0].get_content_type(), "image/png")
+            self.assertEqual(attachments[0].get_filename(), "design-rendering.png")
+
+    def test_rendering_attachment_rejects_unsupported_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "rendering.svg"
+            image.write_text("<svg/>", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "JPEG, PNG, or WebP"):
+                gmail_reply.build_reply(self.route(), "Rendering attached.", image)
+
+    def test_rendering_reply_accepts_two_images_but_not_three(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            images = []
+            for index in range(3):
+                image = Path(directory) / f"rendering-{index}.png"
+                image.write_bytes(b"image-" + str(index).encode("ascii"))
+                images.append(image)
+            payload = gmail_reply.build_reply(
+                self.route(), "Two visual illustrations are attached.", images[:2]
+            )
+            padding = "=" * (-len(payload["raw"]) % 4)
+            parsed = BytesParser(policy=policy.default).parsebytes(
+                base64.urlsafe_b64decode(payload["raw"] + padding)
+            )
+            self.assertEqual(len(list(parsed.iter_attachments())), 2)
+            with self.assertRaisesRegex(ValueError, "at most two"):
+                gmail_reply.build_reply(
+                    self.route(), "Three illustrations are attached.", images
+                )
+
     def test_missing_original_thread_is_rejected(self) -> None:
         route = self.route()
         del route["thread_id"]
@@ -3410,6 +3492,84 @@ class EstimateRecordTests(unittest.TestCase):
             second["estimate_id"] = "jed-fedcba9876543210"
             with self.assertRaises(ValueError):
                 estimate_record.persist_record(root, second)
+
+    def test_rendering_delivery_is_one_iteration_per_source_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            record["status"] = "estimate_sent"
+            estimate_record.persist_record(root, record)
+            image = Path(directory) / "rendering.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\nrendering-test")
+            body = "Here is an illustration of the design direction."
+            first = estimate_record.record_rendering_sent(
+                root,
+                record["estimate_id"],
+                "render-request-1",
+                body,
+                [image],
+                {"id": "render-send-1", "threadId": "gmail-thread"},
+            )
+            duplicate = estimate_record.record_rendering_sent(
+                root,
+                record["estimate_id"],
+                "render-request-1",
+                body,
+                [image],
+                {"id": "render-send-1", "threadId": "gmail-thread"},
+            )
+            self.assertEqual(duplicate, first)
+            self.assertEqual(first["rendering_deliveries"][0]["iteration"], 1)
+            with self.assertRaisesRegex(ValueError, "conflicting"):
+                estimate_record.record_rendering_sent(
+                    root,
+                    record["estimate_id"],
+                    "render-request-1",
+                    body,
+                    [image],
+                    {"id": "different-send", "threadId": "gmail-thread"},
+                )
+            second = estimate_record.record_rendering_sent(
+                root,
+                record["estimate_id"],
+                "render-request-2",
+                body,
+                [image],
+                {"id": "render-send-2", "threadId": "gmail-thread"},
+            )
+            self.assertEqual(second["rendering_deliveries"][1]["iteration"], 2)
+            self.assertNotIn("render-request-1", json.dumps(second))
+
+    def test_rendering_delivery_requires_sent_estimate_and_owned_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            image = Path(directory) / "rendering.png"
+            image.write_bytes(b"image")
+            with self.assertRaisesRegex(ValueError, "sent estimate"):
+                estimate_record.record_rendering_sent(
+                    root,
+                    record["estimate_id"],
+                    "render-request",
+                    "Rendering attached.",
+                    [image],
+                    {"id": "render-send", "threadId": "gmail-thread"},
+                )
+            record["status"] = "estimate_sent"
+            estimate_record.persist_record(root, record)
+            with self.assertRaisesRegex(ValueError, "owned thread"):
+                estimate_record.record_rendering_sent(
+                    root,
+                    record["estimate_id"],
+                    "render-request",
+                    "Rendering attached.",
+                    [image],
+                    {"id": "render-send", "threadId": "wrong-thread"},
+                )
 
 
 if __name__ == "__main__":
