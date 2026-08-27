@@ -4,6 +4,21 @@ Date: 2026-08-26
 
 ## Completed in this update
 
+- Made the Kolo user who installs and activates the skill the automatic
+  approver. Setup no longer asks for an approver name or email.
+- Added a private activation binding for that user's durable Kolo session key.
+  The isolated cron no longer needs `sessions_list`, and the LLM-facing
+  approval command no longer accepts a session-key argument.
+- Restored the immediate stop/pause/hold rule to the main runtime instructions.
+- Reconciled trust-stage scheduling: scheduling intent is handled immediately,
+  but only Stage 3 permits autonomous offers, calendar writes, and confirmations.
+- Reconciled specification policy across the skill, cron, and customer
+  templates: budget and event date are optional; delegated quality choices are
+  complete; shop sourcing is the default unless the customer says otherwise.
+- Clarified that a customer-reply notification is not an approval request.
+- Reconciled first-job pricing guidance: unsupported rates remain blank instead
+  of being replaced with invented market defaults.
+
 - Removed customer-facing use of the term `CAD`. Customer messages now use
   `design`, `final design`, or `visual rendering`.
 - Added a final customer-content guard that blocks the prohibited term as well
@@ -37,14 +52,15 @@ Date: 2026-08-26
 
 ## Verification
 
-- 144 automated runtime tests pass.
+- 150 automated runtime tests pass.
 - Python compilation passes for all scripts and tests.
 - Git whitespace validation passes.
 - No customer-facing template or instruction contains the prohibited term.
 - Tests cover same-thread replies, email-derived customer identity, rendering
   MIME attachments, one/two-image limits, duplicate-request idempotency,
   distinct rendering iterations, owner-selected cron intervals, confidential
-  customer content, and delegated specification choices.
+  customer content, delegated specification choices, private activation
+  binding, installer-as-approver routing, and cross-document policy coherence.
 
 ## Kolo platform findings
 
@@ -65,8 +81,9 @@ Date: 2026-08-26
 
 ## Deployment state
 
-- The live inbox cron remains disabled while the reviewed GitHub version is
-  packaged and installed.
+- The live inbox cron is disabled while this installer-as-approver update is
+  reviewed, packaged, and installed. Its job, schedule, claims, records, and
+  unresolved review state were left intact.
 - Re-enable it only after the installed marketplace files match the reviewed
   GitHub commit and the live cron binding validates with `image_generate` in the
   exact tool allow-list.

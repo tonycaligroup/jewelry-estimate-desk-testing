@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import approval_guard
+import activation_binding
 import customer_content_guard
 import estimate_record
 import gmail_reply
@@ -113,6 +114,9 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("current state estimate_id does not match the command")
     approval = approval_guard.build_request(current)
     write_private(args.approval_request, approval)
+    approver = activation_binding.load(
+        activation_binding.binding_path(args.monitor_root)
+    )
     kolo_safe.request_approval_claimed(
         args.claim_root,
         args.message_id,
@@ -120,7 +124,7 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
         f"approval_request:{args.estimate_id}:{args.message_id}",
         args.estimate_id,
         args.approval_request,
-        args.session_key,
+        approver["session_key"],
     )
     record = estimate_record.record_approval_requested(
         args.record_root, args.estimate_id, args.message_id, approval
@@ -240,7 +244,6 @@ def main(argv: list[str] | None = None) -> int:
     approval.add_argument("--monitor-root", type=Path, required=True)
     approval.add_argument("--current-state", type=Path, required=True)
     approval.add_argument("--approval-request", type=Path, required=True)
-    approval.add_argument("--session-key", required=True)
     send = sub.add_parser("send-approved-estimate")
     add_common_paths(send, message_required=False)
     send.add_argument("--current-state", type=Path)

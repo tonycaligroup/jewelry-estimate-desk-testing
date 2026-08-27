@@ -48,6 +48,9 @@ and delivery commitment behind owner approval.
    which resolves the token from the authoritative claim by Gmail message ID.
 11. A conversational "yes" is not approval. Only a structured Kolo approval
    event that passes `approval_guard.py verify` authorizes a customer price.
+12. If the activating Kolo user says stop, pause, or hold, stop all outbound
+   work immediately. Preserve durable state and send nothing until that same
+   user explicitly resumes the workflow.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, with no fallback. Monitoring crons must use
@@ -57,6 +60,8 @@ route to the pinned agent.
 ## Bundled resources
 
 - `scripts/validate_profile.py`: validate runtime shop configuration.
+- `scripts/activation_binding.py`: privately bind approvals to the Kolo user
+  who installs and activates the skill.
 - `scripts/approval_guard.py`: create opaque estimate IDs, bind approvals to
   route and specification, and reject changed execution state.
 - `scripts/kolo_safe.py`: request approvals, notify the owner, upsert records,
@@ -116,7 +121,9 @@ in this skill and not in `SKILL.md` frontmatter. Do not store or trust a manual
 On first setup, copy `{baseDir}/templates/shop-profile.json` to the runtime
 location and collect:
 
-1. Business/shop name, owner name, approver email, outbound mailbox, and signature.
+1. Business/shop name, outbound mailbox, and signature. The Kolo user who
+   installs and activates the skill is automatically the approver; never ask
+   for or configure a separate approver.
 2. Business address (street, city, state, zip) — used for calendar invites and
    email communications.
 3. Business website (if available) — used for calendar invites and email
@@ -162,14 +169,15 @@ Do not modify the installed skill to store shop settings.
 
 | Stage | Autonomous work | Owner approval still required |
 |---|---|---|
-| 1 — Watch me | Read, calculate, draft, and schedule | Every outbound message and price |
-| 2 — Ask questions | Stage 1 plus price-free specification requests | Every price |
-| 3 — Book me | Stage 2 work | Every price |
+| 1 — Watch me | Read, calculate, and draft | Every outbound message, booking, and price |
+| 2 — Ask questions | Stage 1 plus price-free specification requests | Every booking and price |
+| 3 — Book me | Stage 2 plus offer and book inside declared windows | Every price |
 
-Scheduling autonomy (offering times, creating calendar events, sending
-scheduling confirmations) is permitted at all stages. Trust stage restrictions
-apply to pricing and estimates, not to scheduling. Never advance the stage
-automatically. Missing or unreadable stage means Stage 1.
+Act on scheduling intent immediately at every stage; never delay a meeting
+offer until near the desired delivery date. At Stage 1 or 2, prepare the
+near-term options for owner action. Only Stage 3 authorizes autonomous offers,
+calendar writes, and confirmations inside declared windows. Never advance the
+stage automatically. Missing or unreadable stage means Stage 1.
 
 ## Inbox monitoring
 
@@ -183,7 +191,21 @@ Never search or act on historical mail during installation. There is no
 seven-day bootstrap or other fallback window. Jewelers may already have handled
 every pre-activation inquiry manually.
 
-1. Perform a read-only capability check. Verify that the Gmail integration can:
+1. Use `sessions_list` once in the interactive activation session to obtain the
+   current Kolo session key, then bind that activating user as the automatic
+   approver:
+
+   ```bash
+   python3 {baseDir}/scripts/activation_binding.py bind-activating-user \
+     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
+     --session-key '<current-activation-session-key>'
+   ```
+
+   The helper stores the key in a private `0600` runtime binding and refuses to
+   replace a different activating user. Never ask for an approver name or email.
+   Isolated cron runs do not call `sessions_list`; `workflow_safe.py` loads this
+   binding itself when it requests approval.
+2. Perform a read-only capability check. Verify that the Gmail integration can:
    use `after:<epoch-seconds>`, return integer `internalDate` epoch milliseconds,
    and enumerate every page until no `nextPageToken` remains. Write a private
    JSON file containing these three fixed booleans:
@@ -194,7 +216,7 @@ every pre-activation inquiry manually.
 
    If any capability is unavailable, report an unsupported environment and
    leave monitoring inactive. Never weaken the activation boundary.
-2. Render the fixed cron message from the bundled template:
+3. Render the fixed cron message from the bundled template:
 
    ```bash
    python3 {baseDir}/scripts/cron_config.py render-message \
@@ -202,7 +224,7 @@ every pre-activation inquiry manually.
      --output "$WORK/cron-message.txt"
    ```
 
-3. Create exactly one disabled `jed-inbox-monitor` using that message. Default
+4. Create exactly one disabled `jed-inbox-monitor` using that message. Default
    to every five minutes during the configured business hours in the owner's
    IANA timezone. If the owner requests another interval, use and preserve that
    interval instead; never silently reset an existing owner-selected schedule.
@@ -214,7 +236,7 @@ every pre-activation inquiry manually.
    it yet. If a job with that name
    already exists, stop and use the reconfiguration procedure below; never
    create a second job.
-4. Re-read the disabled job from Kolo into private JSON and derive its stable
+5. Re-read the disabled job from Kolo into private JSON and derive its stable
    binding:
 
    ```bash
@@ -231,7 +253,7 @@ every pre-activation inquiry manually.
    Generated timestamps and runtime counters are excluded. `enabled` is also excluded
    because it is a lifecycle flag, but it must be false at this step and true
    only after activation.
-5. Prepare durable state under an atomic setup lock:
+6. Prepare durable state under an atomic setup lock:
 
    ```bash
    python3 {baseDir}/scripts/inbox_monitor.py prepare \
@@ -239,7 +261,7 @@ every pre-activation inquiry manually.
      --cron-config "$WORK/cron-binding.json"
    ```
 
-6. Activate only against that exact verified binding, then enable the same job
+7. Activate only against that exact verified binding, then enable the same job
    ID. Re-read it once more and require `enabled: true` and a successful
    `bind-live` result equal to `cron-binding.json`:
 
@@ -255,7 +277,11 @@ every pre-activation inquiry manually.
 ### Updating an active monitor
 
 Never replace the cron or reset its activation timestamp or discovery watermark.
-Edit the existing job ID in place:
+Before reconfiguration, run `activation_binding.py status` against the monitor
+root. For an older installation with no binding, use `sessions_list` in the
+current interactive setup conversation and run `bind-activating-user` once;
+that Kolo user becomes the automatic approver. Never make the isolated cron
+discover or select an approver. Then edit the existing job ID in place:
 
 If an operator already edited the disabled live cron before
 `reconfigure-prepare`, do not manually synchronize state and do not revert the
@@ -488,6 +514,9 @@ For each returned message:
    failure after invocation is `uncertain`, never a retryable pre-delivery
    failure. A process crash may leave `pending`; the stale reconciler marks it
    `uncertain` after 600 seconds. Never resend `pending` or `uncertain` alerts.
+   A `customer-replied` notice is not an approval request. If approval creation
+   later fails, say explicitly that the reply notice was sent but no approval
+   request was created.
    Generic mailbox alerts tied to a claimed message must never call
    `notify-monitor` directly.
 6. Before deciding which specifications are missing or complete, fetch the
@@ -681,8 +710,13 @@ Before sending a retail estimate, require all applicable fields:
 - Stone type, lab/natural origin, carat, color, clarity, and cut/shape.
 - Metal, karat, and color.
 - Finger size for rings; length/dimensions for chains, bracelets, or pendants.
-- Piece type and quantity, setting/style, event date, budget, and whether the
-  customer supplies stone or metal.
+- Piece type and quantity and setting/style.
+
+Color, clarity, cut, finish, and similar quality choices are complete when the
+customer explicitly delegates them to the jeweler; use shop defaults only as
+owner-facing pricing assumptions. Budget and event date are useful intake
+questions but are not prerequisites to an estimate. Default to shop sourcing
+unless the customer says they are supplying the stone or metal.
 
 For a piece without stones, stone fields are not applicable; do not report a
 misleading `x/8` score. Wholesale estimates may label customer-visible
@@ -773,7 +807,7 @@ python3 {baseDir}/scripts/workflow_safe.py request-approval \
   --estimate-id '<jed-id>' \
   --current-state "$WORK/current-state.json" \
   --approval-request "$WORK/approval-request.json" \
-  --record-output "$WORK/current-record.json" --session-key '<session-key>'
+  --record-output "$WORK/current-record.json"
 ```
 
 The command succeeds only when the claimed Kolo action, authoritative local
@@ -782,8 +816,9 @@ record, Kolo mirror, claim phases, and queue finalization are complete.
 The claimed approval request is the owner-facing Kolo action. Do not add a
 second unjournaled `notify-owner` call for the same approval-ready event.
 
-Get the session key from `sessions_list`. The owner notification contains only
-the opaque estimate ID. Never insert customer text into CLI arguments.
+The command loads the activating Kolo user's private approval binding. The
+owner notification contains only the opaque estimate ID. Never insert customer
+text into CLI arguments.
 
 Wait for a Kolo approval event. Copy only values actually returned by that
 event into `approved.json`: the submitted `estimate_id` and binding hash,

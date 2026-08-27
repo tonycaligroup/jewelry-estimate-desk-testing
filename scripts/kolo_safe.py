@@ -12,12 +12,12 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import activation_binding
 import inbox_claim
 import inbox_monitor
 
 
 ESTIMATE_ID_RE = re.compile(r"^jed-[0-9a-f]{16}$")
-SESSION_KEY_RE = re.compile(r"^agent:[A-Za-z0-9_.:@/-]{1,255}$")
 OWNER_NOTIFICATION_MESSAGES = {
     "approval-ready": "Estimate {estimate_id} is ready for approval. Open the brief in Kolo.",
     "customer-replied": "Customer replied on estimate {estimate_id}. Open Kolo to review.",
@@ -48,11 +48,7 @@ def validate_estimate_id(value: str) -> str:
 
 
 def validate_session_key(value: str) -> str:
-    if not SESSION_KEY_RE.fullmatch(value):
-        raise ValueError(
-            "session key must be an agent: session key returned by sessions_list"
-        )
-    return value
+    return activation_binding.validate_session_key(value)
 
 
 def build_request_approval(

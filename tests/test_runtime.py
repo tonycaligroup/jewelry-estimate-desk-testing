@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
+import activation_binding
 import customer_content_guard
 import cron_config
 import inbox_claim
@@ -40,6 +41,7 @@ import calendar_query
 import pricing_model
 import rendering_materialize
 import spot_price
+import workflow_safe
 
 
 def internal_cost_sheet(customer_price: float = 4200) -> dict:
@@ -75,7 +77,6 @@ def valid_profile() -> dict:
         "shop": {
             "name": "Example Jewelers",
             "mode": "retailer",
-            "approver_email": "owner@example.com",
             "outbound_mailbox": "sales@example.com",
             "address": {
                 "street": "123 Main St",
@@ -156,6 +157,42 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(result["ready"])
 
 
+class InstructionCoherenceTests(unittest.TestCase):
+    def test_installer_is_the_only_configured_approver(self) -> None:
+        profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
+        self.assertNotIn("approver_name", profile["shop"])
+        self.assertNotIn("approver_email", profile["shop"])
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("automatically the approver", skill)
+        self.assertNotIn(
+            "--record-output \"$WORK/current-record.json\" --session-key", skill
+        )
+
+    def test_budget_and_event_date_are_not_estimate_prerequisites(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        cron = (ROOT / "templates" / "inbox-monitor-cron.txt").read_text(
+            encoding="utf-8"
+        )
+        customer = (ROOT / "templates" / "customer-emails.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Budget and event date", skill)
+        self.assertIn("Budget is optional", cron)
+        self.assertIn("not an estimate prerequisite", customer)
+
+    def test_stage_three_is_the_autonomous_booking_stage(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        owner_guide = (ROOT / "references" / "OWNER-GUIDE.md").read_text(
+            encoding="utf-8"
+        )
+        customer = (ROOT / "templates" / "customer-emails.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Only Stage 3 authorizes autonomous offers", skill)
+        self.assertIn("Stage 3 — Let me book appointments", owner_guide)
+        self.assertIn("Stage 3+ for autonomous send", customer)
+
+
 class ApprovalTests(unittest.TestCase):
     def state(self) -> dict:
         return {
@@ -232,6 +269,83 @@ class ApprovalTests(unittest.TestCase):
         valid, errors = approval_guard.verify_execution(approved, current)
         self.assertFalse(valid)
         self.assertTrue(any("changed" in error for error in errors))
+
+
+class ActivationBindingTests(unittest.TestCase):
+    def test_activating_user_is_bound_privately_and_loaded_for_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            monitor_root = root / "estimate-desk" / "inbox-monitor"
+            binding = activation_binding.binding_path(monitor_root)
+            session_key = "agent:main:kolo:direct:test-owner"
+            created = activation_binding.create(binding, session_key)
+            self.assertEqual(created["approver_source"], "activating_kolo_user")
+            self.assertEqual(binding.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                activation_binding.load(binding)["session_key"], session_key
+            )
+
+            current_state = root / "current-state.json"
+            approval_request = root / "approval-request.json"
+            current_state.write_text(
+                json.dumps(
+                    {
+                        "estimate_id": "jed-0123456789abcdef",
+                        "route": {
+                            "channel": "gmail",
+                            "recipient": "customer@example.com",
+                            "thread_id": "thread-1",
+                            "mailbox": "sales@example.com",
+                        },
+                        "specification": {"piece": "ring"},
+                        "proposed_price": 4200,
+                        "internal_cost_sheet": internal_cost_sheet(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "monitor_root": monitor_root,
+                    "claim_root": root / "claims",
+                    "record_root": root / "records",
+                    "message_id": "gmail-message",
+                    "estimate_id": "jed-0123456789abcdef",
+                    "current_state": current_state,
+                    "approval_request": approval_request,
+                    "record_output": root / "record.json",
+                },
+            )()
+            with (
+                patch.object(
+                    workflow_safe.kolo_safe, "request_approval_claimed"
+                ) as request,
+                patch.object(
+                    workflow_safe.estimate_record,
+                    "record_approval_requested",
+                    return_value={"status": "pending_approval"},
+                ),
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe, "finish_processed"),
+            ):
+                workflow_safe.request_approval(args)
+            self.assertEqual(request.call_args.args[-1], session_key)
+
+    def test_binding_refuses_a_different_activating_user(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "activation-binding.json"
+            activation_binding.create(path, "agent:main:kolo:direct:first-owner")
+            with self.assertRaisesRegex(ValueError, "refusing replacement"):
+                activation_binding.create(
+                    path, "agent:main:kolo:direct:different-owner"
+                )
+
+    def test_missing_binding_fails_before_approval_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "not bound"):
+                activation_binding.load(Path(directory) / "missing.json")
 
 
 class PricingAndSchedulingTests(unittest.TestCase):

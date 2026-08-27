@@ -33,8 +33,8 @@ Thanks for reaching out — {{one_sentence_confirming_your_read_of_their_request
 - Any engraving or particular finish?
 
 **The timing**
-- Is there a date you're working toward?
-- And a budget range you'd like me to design within? It's genuinely the most useful thing you can tell me — it lets me put your money where you'll see it.
+- If there is a date or budget range you would like us to design around, feel
+  free to share it. Neither is required before we prepare your estimate.
 
 If it's easier, we can cover all of this in about thirty minutes in person and I'll have your estimate that much faster. I have **{{slot_1}}** or **{{slot_2}}** {{timezone}} open — either work?
 
@@ -49,6 +49,8 @@ Warmly,
 - Slot labels must come from a fresh `calendar_query.py` receipt validated by
   `appointment_options.py`; never type or infer a weekday/date label.
 - Delete any cluster you already have answers for; confirm in a half-sentence instead of asking.
+- Treat choices explicitly delegated to the jeweler as complete and default to
+  shop sourcing unless the customer says otherwise.
 - Never include a price, or a range, in this email.
 - Never send more than one follow-up ask, and only for what is still missing.
 - The subject line is automatic from the reply headers — do not invent one.
