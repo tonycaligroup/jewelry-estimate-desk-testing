@@ -375,6 +375,47 @@ def activate_reconfiguration(root: Path, cron_config_value: Any) -> dict[str, An
         return state
 
 
+def adopt_disabled_live_reconfiguration(
+    root: Path,
+    current_cron_config: Any,
+    live_job: Any,
+    workspace: Path,
+    base_dir: Path,
+) -> dict[str, Any]:
+    """Recover when a verified cron edit happened before reconfigure-prepare.
+
+    This is intentionally narrower than the normal two-phase path: the live job
+    must already be disabled, canonical, and have the same stable job ID as the
+    previously bound config. The old config must still match the durable bound
+    hash, so this cannot be used to adopt an unrelated or unproven edit.
+    """
+    if not isinstance(current_cron_config, dict) or not current_cron_config:
+        raise ValueError("current cron config must be a non-empty JSON object")
+    if not isinstance(live_job, dict) or live_job.get("enabled") is not False:
+        raise ValueError("live cron must be disabled before recovery adoption")
+    old_id = cron_config_helper.require_string(
+        current_cron_config.get("id"), "current_cron_config.id"
+    )
+    if live_job.get("id") != old_id:
+        raise ValueError("live cron id does not match the bound cron id")
+    target_config = cron_config_helper.build_binding(live_job, workspace, base_dir)
+    current_hash = sha256_json(current_cron_config)
+    target_hash = sha256_json(target_config)
+    if current_hash == target_hash:
+        raise ValueError("live cron config is already bound")
+    with setup_lock(root):
+        state = load_monitor_state(root)
+        if state["activation_state"] != "active":
+            raise ValueError("only an active monitor can adopt a recovered live config")
+        if state["pending_cron_sha256"] is not None:
+            raise ValueError("cannot adopt while a cron reconfiguration is pending")
+        if state["bound_cron_sha256"] != current_hash:
+            raise ValueError("current cron config does not match the bound config")
+        state["bound_cron_sha256"] = target_hash
+        atomic_write_json(root / "monitor-state.json", state)
+        return state
+
+
 def cancel_reconfiguration(root: Path, current_cron_config: Any) -> dict[str, Any]:
     if not isinstance(current_cron_config, dict) or not current_cron_config:
         raise ValueError("current cron config must be a non-empty JSON object")
@@ -907,6 +948,13 @@ def main(argv: list[str] | None = None) -> int:
     reconfigure_parser.add_argument("--target-cron-config", type=Path, required=True)
     reconfigure_activate_parser = sub.add_parser("reconfigure-activate")
     reconfigure_activate_parser.add_argument("--cron-config", type=Path, required=True)
+    reconfigure_adopt_parser = sub.add_parser("reconfigure-adopt-disabled-live")
+    reconfigure_adopt_parser.add_argument(
+        "--current-cron-config", type=Path, required=True
+    )
+    reconfigure_adopt_parser.add_argument("--live-job", type=Path, required=True)
+    reconfigure_adopt_parser.add_argument("--workspace", type=Path, required=True)
+    reconfigure_adopt_parser.add_argument("--base-dir", type=Path, required=True)
     reconfigure_cancel_parser = sub.add_parser("reconfigure-cancel")
     reconfigure_cancel_parser.add_argument(
         "--current-cron-config", type=Path, required=True
@@ -966,6 +1014,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "reconfigure-activate":
             result = activate_reconfiguration(args.root, read_json(args.cron_config))
+        elif args.command == "reconfigure-adopt-disabled-live":
+            result = adopt_disabled_live_reconfiguration(
+                args.root,
+                read_json(args.current_cron_config),
+                read_json(args.live_job),
+                args.workspace,
+                args.base_dir,
+            )
         elif args.command == "reconfigure-cancel":
             result = cancel_reconfiguration(
                 args.root, read_json(args.current_cron_config)
