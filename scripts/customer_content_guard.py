@@ -62,6 +62,7 @@ CONFIDENTIAL_PRICING_PATTERNS = (
 )
 
 DOLLAR_AMOUNT_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
+CUSTOMER_TERMINOLOGY_PATTERNS = (re.compile(r"\bCAD\b", re.I),)
 
 
 def validate_customer_text(text: str) -> str:
@@ -71,6 +72,11 @@ def validate_customer_text(text: str) -> str:
         if pattern.search(text):
             raise ValueError(
                 "customer-facing text contains owner-only pricing information"
+            )
+    for pattern in CUSTOMER_TERMINOLOGY_PATTERNS:
+        if pattern.search(text):
+            raise ValueError(
+                "customer-facing text must use design or visual rendering language"
             )
     return text
 

@@ -171,7 +171,12 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                 if proposed_reply is None:
                     record = dict(record)
                     record["spec_gate_reply"] = existing_reply
-            for field in ("followup_replies", "thread_reviews", "approval_requests"):
+            for field in (
+                "followup_replies",
+                "thread_reviews",
+                "approval_requests",
+                "rendering_deliveries",
+            ):
                 record = preserve_append_only(existing, record, field)
             existing_delivery = existing.get("estimate_delivery")
             proposed_delivery = record.get("estimate_delivery")
@@ -643,6 +648,72 @@ def record_estimate_sent(
         return record
 
 
+def record_rendering_sent(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    reply_body: str,
+    image_paths: list[Path],
+    provider_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Append one same-thread rendering delivery for one customer request."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    if not reply_body.strip():
+        raise ValueError("rendering reply body must not be empty")
+    if not image_paths or len(image_paths) > 2:
+        raise ValueError("rendering delivery requires one or two images")
+    image_bytes = [path.read_bytes() for path in image_paths]
+    if any(not value for value in image_bytes):
+        raise ValueError("rendering images must not be empty")
+    provider_message_id = validate_provider_id(
+        provider_response.get("id"), "provider response id"
+    )
+    provider_thread_id = validate_provider_id(
+        provider_response.get("threadId"), "provider response threadId"
+    )
+    source_hash = sha256_text(source_message_id)
+    evidence = {
+        "status": "sent",
+        "source_message_id_sha256": source_hash,
+        "provider_message_id": provider_message_id,
+        "thread_id": provider_thread_id,
+        "body_sha256": sha256_text(reply_body),
+        "image_sha256": [
+            "sha256:" + hashlib.sha256(value).hexdigest() for value in image_bytes
+        ],
+    }
+
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
+            raise ValueError("rendering delivery requires a sent estimate")
+        if provider_thread_id != record["route"]["thread_id"]:
+            raise ValueError(
+                "provider response threadId does not match the owned thread"
+            )
+        deliveries = record.setdefault("rendering_deliveries", [])
+        if not isinstance(deliveries, list):
+            raise ValueError("rendering_deliveries must be an array")
+        for existing in deliveries:
+            if not isinstance(existing, dict):
+                raise ValueError("rendering_deliveries contains invalid evidence")
+            if existing.get("source_message_id_sha256") != source_hash:
+                continue
+            comparable = dict(existing)
+            comparable.pop("sent_at", None)
+            comparable.pop("iteration", None)
+            if comparable == evidence:
+                return record
+            raise ValueError("conflicting rendering delivery for source message")
+        evidence["iteration"] = len(deliveries) + 1
+        evidence["sent_at"] = datetime.now(timezone.utc).isoformat()
+        deliveries.append(evidence)
+        write_object(path, record)
+        return record
+
+
 def require_processed_evidence(
     root: Path,
     message_id: str,
@@ -675,6 +746,20 @@ def require_processed_evidence(
         ),
         None,
     )
+
+    rendering = next(
+        (
+            item
+            for item in record.get("rendering_deliveries", [])
+            if isinstance(item, dict)
+            and item.get("source_message_id_sha256") == source_hash
+            and item.get("status") == "sent"
+            and item.get("thread_id") == thread_id
+        ),
+        None,
+    )
+    if rendering is not None:
+        return
 
     if initiating and record["status"] == "awaiting_specs":
         if matching_review is not None:

@@ -1,7 +1,8 @@
 # Rendering Standards
 
-Read this reference only after an estimate is approved and the shop profile's
-rendering policy permits a rendering.
+Read this reference after an estimate is sent and the customer requests a
+visual rendering, or when the owner explicitly requests one earlier. A
+post-estimate customer request does not require another owner approval.
 
 ## Purpose
 
@@ -33,4 +34,4 @@ unless the current environment confirms it.
 ## Customer note
 
 Label every rendering as an illustration of the design direction. State that
-the written specification and approved CAD control the final piece.
+the written specification and approved design control the final piece.

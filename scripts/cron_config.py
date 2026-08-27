@@ -14,7 +14,7 @@ from typing import Any
 MODEL = "litellm-fireworks/qwen-3-7-plus"
 JOB_NAME = "jed-inbox-monitor"
 TIMEOUT_SECONDS = 300
-TOOLS_ALLOW = ["exec", "read", "write"]
+TOOLS_ALLOW = ["exec", "read", "write", "image_generate"]
 
 
 def template_path() -> Path:
@@ -104,7 +104,9 @@ def validate_binding(value: Any) -> dict[str, Any]:
     if payload.get("fallbacks") != [] or payload.get("lightContext") is not True:
         raise ValueError("cron binding requires no fallbacks and lightContext true")
     if payload.get("toolsAllow") != TOOLS_ALLOW:
-        raise ValueError("cron binding toolsAllow must be exec, read, and write only")
+        raise ValueError(
+            "cron binding toolsAllow must be exec, read, write, and image_generate"
+        )
     if payload.get("timeoutSeconds") != TIMEOUT_SECONDS:
         raise ValueError("cron binding timeoutSeconds must be 300")
     message = require_string(payload.get("message"), "payload.message")
@@ -144,7 +146,7 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
     if payload.get("lightContext") is not True:
         raise ValueError("cron lightContext must be true")
     if payload.get("toolsAllow") != TOOLS_ALLOW:
-        raise ValueError("cron toolsAllow must be exec, read, and write only")
+        raise ValueError("cron toolsAllow must include the required safe tool set")
     if job.get("sessionTarget") != "isolated":
         raise ValueError("cron sessionTarget must be isolated")
     if delivery.get("mode") != "announce":
