@@ -92,6 +92,8 @@ route to the pinned agent.
   key from the exact inbound Gmail message rather than a display name.
 - `scripts/rendering_materialize.py`: copy a native Kolo-generated PNG from the
   managed media directory into the claimed canonical rendering path.
+- `scripts/rendering_wait.py`: keep an asynchronous rendering claim active for
+  at most eight fixed 30-second intervals while awaiting its completion event.
 - `scripts/workflow_safe.py`: execute complete spec-follow-up, approval-request,
   and approved-estimate actions without exposing claim tokens or partial state
   transitions to the model.
@@ -233,7 +235,7 @@ every pre-activation inquiry manually.
    IANA timezone. If the owner requests another interval, use and preserve that
    interval instead; never silently reset an existing owner-selected schedule.
    Use model
-   `litellm-fireworks/qwen-3-7-plus`, no fallbacks, a 300-second timeout,
+   `litellm-fireworks/qwen-3-7-plus`, no fallbacks, a 420-second timeout,
    `lightContext: true`,
    `toolsAllow: ["exec", "read", "write", "image_generate"]`, an isolated
    session, and Kolo owner announcement delivery. Never enable or manually run
@@ -991,8 +993,49 @@ interpret “rendering” as a request for a manufacturing file. Each distinct
 customer request may create one new rendering iteration; replaying the same
 Gmail message must not create or send another iteration.
 
-Generate one or two PNG illustrations with Kolo's native `image_generate` tool.
-For each returned managed-media path, run the bundled materializer; never use
+Generate exactly two complementary-view PNG illustrations of the same approved
+design in parallel with Kolo's native `image_generate` tool; never ask for
+alternate design proposals. The tool completes asynchronously. Until both
+completion events arrive or the bounded budget is exhausted, keep the isolated
+cron session active by running exactly:
+
+```bash
+python3 {baseDir}/scripts/rendering_wait.py wait \
+  --monitor-root '<workspace>/estimate-desk/inbox-monitor' \
+  --claim-root '<workspace>/estimate-desk/inbox-claims' \
+  --message-id '<claimed-gmail-id>'
+```
+
+After each wait returns, collect any completion events already delivered to
+this same session. Otherwise repeat the exact wait command. The helper permits
+at most eight 30-second waits. A pending rendering is not a valid final
+response: never promise to send it later, return success, or leave the claim
+processing.
+
+Compare each completed candidate with the immutable approved specification and
+the structural and `DO NOT CHANGE` constraints in
+`references/rendering-standards.md`. Discard any candidate that changes the
+silhouette, rail or shank layout, setting topology, stone location or coverage,
+requested view, or another explicit feature. When both events arrive, continue
+with one conforming image if the other is wrong, or both when both conform. If
+the eighth wait returns `exhausted:true`, continue with at least one completed,
+conforming candidate rather than blocking on the other. If no completion event
+supplied a usable managed-media path, run the manual-review command exactly,
+using `rendering_generation_timeout` when no candidate completed or
+`rendering_validation_failed` when completed candidates were nonconforming:
+
+```bash
+python3 {baseDir}/scripts/kolo_safe.py manual-review-claimed \
+  --monitor-root '<workspace>/estimate-desk/inbox-monitor' \
+  --claim-root '<workspace>/estimate-desk/inbox-claims' \
+  --message-id '<claimed-gmail-id>' \
+  --reason-code '<rendering_generation_timeout-or-rendering_validation_failed>'
+```
+
+Then run `assert-settled` and return a concise real failure. Do not send a
+customer email or an appointment-success message.
+
+For each conforming completion event, run the bundled materializer; never use
 `cp`, `mv`, `curl`, or a generic write tool for image bytes:
 
 ```bash
@@ -1003,9 +1046,9 @@ python3 {baseDir}/scripts/rendering_materialize.py \
   --source '<image_generate-managed-media-path>' --slot 1
 ```
 
-Use `--slot 2` for the second image. The script accepts only a regular PNG
-inside Kolo's managed media directory and writes it atomically to the claim's
-returned canonical rendering path.
+Use `--slot 2` for a second conforming candidate. The script accepts only a
+regular PNG inside Kolo's managed media directory and writes it atomically to
+the claim's returned canonical rendering path.
 Write the post-estimate visual-rendering note from
 `templates/customer-emails.md` to `work_paths.customer_reply`, then call:
 
@@ -1022,12 +1065,12 @@ python3 {baseDir}/scripts/workflow_safe.py send-rendering \
   --record-output '<work_paths.current_record>'
 ```
 
-When a second image was generated, add a second
-`--image '<work_paths.rendering_image_2>'`. Do not send if image generation
-does not produce a supported local file at a returned claim path. The
-high-level command binds the send to the claimed customer message, attaches the
-files to the original Gmail thread, records immutable provider/image evidence,
-mirrors the record, and finalizes the claim.
+When both candidates conform, add a second
+`--image '<work_paths.rendering_image_2>'`. Do not send if image generation does
+not produce at least one supported, conforming local file at a returned claim
+path. The high-level command binds the send to the claimed customer message,
+attaches the selected file or files to the original Gmail thread, records
+immutable provider/image evidence, mirrors the record, and finalizes the claim.
 
 ## Phase 5: records, follow-up, and cleanup
 

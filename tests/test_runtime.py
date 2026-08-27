@@ -41,6 +41,7 @@ import appointment_options
 import calendar_query
 import pricing_model
 import rendering_materialize
+import rendering_wait
 import spot_price
 import workflow_safe
 
@@ -1856,7 +1857,7 @@ class CronConfigTests(unittest.TestCase):
                 "message": cron_config.render_message(Path("/workspace"), ROOT),
                 "model": cron_config.MODEL,
                 "fallbacks": [],
-                "timeoutSeconds": 300,
+                "timeoutSeconds": 420,
                 "lightContext": True,
                 "toolsAllow": cron_config.TOOLS_ALLOW,
             },
@@ -1900,6 +1901,28 @@ class CronConfigTests(unittest.TestCase):
             message,
         )
 
+    def test_cron_waits_for_valid_rendering_before_appointment_action(self) -> None:
+        message = cron_config.render_message(Path("/workspace"), ROOT)
+        self.assertIn("Generate exactly two complementary-view PNG illustrations", message)
+        self.assertIn(
+            "rendering_wait.py wait --monitor-root", message
+        )
+        self.assertIn("at most eight fixed 30-second waits", message)
+        self.assertIn("A pending rendering is not a valid final response", message)
+        self.assertIn("rendering_generation_timeout", message)
+        self.assertIn("rendering_validation_failed", message)
+        self.assertIn("discard any candidate that visibly changes", message)
+        self.assertIn("continue with one conforming candidate", message)
+        self.assertIn("never alternate design proposals", message)
+        self.assertIn("silhouette, rail or shank layout", message)
+        self.assertIn(
+            "kolo_safe.py manual-review-claimed --monitor-root", message
+        )
+        self.assertLess(
+            message.index("workflow_safe.py send-rendering"),
+            message.index("kolo_safe.py appointment-action-result"),
+        )
+
     def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
         job = self.live_job()
         job.pop("agentId")
@@ -1921,7 +1944,7 @@ class CronConfigTests(unittest.TestCase):
         target = cron_config.build_target_binding(job, Path("/workspace"), ROOT)
         self.assertEqual(target["payload"]["model"], cron_config.MODEL)
         self.assertEqual(target["payload"]["fallbacks"], [])
-        self.assertEqual(target["payload"]["timeoutSeconds"], 300)
+        self.assertEqual(target["payload"]["timeoutSeconds"], 420)
         self.assertTrue(target["payload"]["lightContext"])
         self.assertEqual(target["payload"]["toolsAllow"], cron_config.TOOLS_ALLOW)
 
@@ -2058,7 +2081,7 @@ class InboxMonitorTests(unittest.TestCase):
                 "message": cron_config.render_message(Path("/workspace"), ROOT),
                 "model": cron_config.MODEL,
                 "fallbacks": [],
-                "timeoutSeconds": 300,
+                "timeoutSeconds": 420,
                 "lightContext": True,
                 "toolsAllow": cron_config.TOOLS_ALLOW,
             },
@@ -2718,6 +2741,80 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertEqual(Path(first["path"]), destination)
             self.assertEqual(destination.read_bytes(), source.read_bytes())
             self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_rendering_wait_is_fixed_bounded_and_persistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            message_id = "rendering-wait"
+            inbox_monitor.discover_complete(
+                root,
+                [{
+                    "gmail_message_id": message_id,
+                    "thread_id": "rendering-thread",
+                    "internal_date_ms": 1_100,
+                }],
+                1_000,
+                2_000,
+            )
+            claimed = inbox_monitor.claim_next(root, claim_root, 600)
+            sleeps: list[float] = []
+
+            for count in range(1, rendering_wait.MAX_WAITS + 1):
+                result = rendering_wait.wait_once(
+                    root, claim_root, message_id, sleeper=sleeps.append
+                )
+                self.assertTrue(result["waited"])
+                self.assertEqual(result["wait_count"], count)
+                self.assertEqual(
+                    result["remaining_waits"], rendering_wait.MAX_WAITS - count
+                )
+            exhausted = rendering_wait.wait_once(
+                root, claim_root, message_id, sleeper=sleeps.append
+            )
+
+            self.assertFalse(exhausted["waited"])
+            self.assertTrue(exhausted["exhausted"])
+            self.assertEqual(
+                sleeps, [rendering_wait.WAIT_SECONDS] * rendering_wait.MAX_WAITS
+            )
+            state_path = Path(
+                claimed["work_paths"]["rendering_wait_state"]
+            )
+            self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                inbox_monitor.read_json(state_path)["wait_count"],
+                rendering_wait.MAX_WAITS,
+            )
+
+    def test_rendering_wait_rejects_a_terminal_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)
+            claim_root = Path(directory) / "claims"
+            message_id = "rendering-wait-terminal"
+            inbox_monitor.discover_complete(
+                root,
+                [{
+                    "gmail_message_id": message_id,
+                    "thread_id": "rendering-thread",
+                    "internal_date_ms": 1_100,
+                }],
+                1_000,
+                2_000,
+            )
+            claimed = inbox_monitor.claim_next(root, claim_root, 600)
+            inbox_claim.finish(
+                claim_root,
+                message_id,
+                claimed["claim"]["claim_token"],
+                "manual_review",
+                "rendering_generation_timeout",
+            )
+
+            with self.assertRaisesRegex(ValueError, "processing claim"):
+                rendering_wait.wait_once(
+                    root, claim_root, message_id, sleeper=lambda _seconds: None
+                )
 
     def test_rendering_materializer_rejects_non_media_and_non_png_sources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

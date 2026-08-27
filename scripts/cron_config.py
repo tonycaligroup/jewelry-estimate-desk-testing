@@ -13,7 +13,7 @@ from typing import Any
 
 MODEL = "litellm-fireworks/qwen-3-7-plus"
 JOB_NAME = "jed-inbox-monitor"
-TIMEOUT_SECONDS = 300
+TIMEOUT_SECONDS = 420
 TOOLS_ALLOW = ["exec", "read", "write", "image_generate"]
 
 
@@ -108,7 +108,7 @@ def validate_binding(value: Any) -> dict[str, Any]:
             "cron binding toolsAllow must be exec, read, write, and image_generate"
         )
     if payload.get("timeoutSeconds") != TIMEOUT_SECONDS:
-        raise ValueError("cron binding timeoutSeconds must be 300")
+        raise ValueError("cron binding timeoutSeconds must be 420")
     message = require_string(payload.get("message"), "payload.message")
     if "<WORKSPACE>" in message or "<BASE_DIR>" in message:
         raise ValueError("cron binding message contains unresolved path placeholders")
@@ -142,7 +142,7 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
     if payload.get("model") != MODEL or payload.get("fallbacks") != []:
         raise ValueError("cron model or fallbacks do not match the required runtime")
     if payload.get("timeoutSeconds") != TIMEOUT_SECONDS:
-        raise ValueError("cron timeoutSeconds must be 300")
+        raise ValueError("cron timeoutSeconds must be 420")
     if payload.get("lightContext") is not True:
         raise ValueError("cron lightContext must be true")
     if payload.get("toolsAllow") != TOOLS_ALLOW:

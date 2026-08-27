@@ -49,6 +49,7 @@ WORK_ARTIFACTS = {
     "customer_reply": "customer-reply.txt",
     "rendering_image_1": "rendering-1.png",
     "rendering_image_2": "rendering-2.png",
+    "rendering_wait_state": "rendering-wait.json",
     "gmail_payload": "gmail-payload.json",
     "gmail_provider_response": "gmail-provider-response.json",
     "current_state": "current-state.json",
