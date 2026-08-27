@@ -79,6 +79,8 @@ route to the pinned agent.
   original thread and RFC message headers.
 - `scripts/gmail_safe.py`: send a claimed Gmail reply with write-ahead,
   ambiguity handling, and a durable same-thread provider receipt.
+- `scripts/gmail_fetch.py`: perform paginated Gmail discovery and fetch claimed
+  messages/threads through fixed Maton requests without model-built commands.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
   key from the exact inbound Gmail message rather than a display name.
 - `scripts/workflow_safe.py`: execute complete spec-follow-up, approval-request,
@@ -201,8 +203,9 @@ every pre-activation inquiry manually.
 3. Create exactly one disabled `jed-inbox-monitor` using that message, the
    configured business-hours schedule and IANA timezone, model
    `litellm-fireworks/qwen-3-7-plus`, no fallbacks, a 300-second timeout,
-   `lightContext: true`, an isolated session, and Kolo owner announcement
-   delivery. Never enable or manually run it yet. If a job with that name
+   `lightContext: true`, `toolsAllow: ["exec", "read", "write"]`, an isolated
+   session, and Kolo owner announcement delivery. Never enable or manually run
+   it yet. If a job with that name
    already exists, stop and use the reconfiguration procedure below; never
    create a second job.
 4. Re-read the disabled job from Kolo into private JSON and derive its stable
@@ -216,9 +219,9 @@ every pre-activation inquiry manually.
    ```
 
    The binding includes job ID, agent, schedule, timezone, session, wake mode,
-   complete prompt, model, fallbacks, timeout, light-context setting, optional
-   thinking/tool allow-list fields, and delivery destination. Generated
-   timestamps and runtime counters are excluded. `enabled` is also excluded
+   complete prompt, model, fallbacks, timeout, light-context setting, exact
+   required tool allow-list, optional thinking field, and delivery destination.
+   Generated timestamps and runtime counters are excluded. `enabled` is also excluded
    because it is a lifecycle flag, but it must be false at this step and true
    only after activation.
 5. Prepare durable state under an atomic setup lock:
@@ -297,32 +300,25 @@ later discovery window from being durably recorded.
    silently with `NO_REPLY` when state is `prepared` or `reconfiguring`. Missing,
    corrupt, or unsupported state is an error and fails closed without Gmail or
    customer side effects. Never call goal tools from the isolated cron.
-   Then run `inbox_monitor.py prepare-run` and use its returned
-   `discovery_batch` path exactly. Never create a run directory yourself and
-   never substitute a platform `/tmp` or hidden workspace folder.
+   Never call `inbox_monitor.py prepare-run` directly. The deterministic Gmail
+   discovery helper owns its private run directory and batch; never create or
+   substitute a platform `/tmp` or hidden workspace folder.
 2. Run `inbox_claim.py notification-reconcile-stale
    --minimum-age-seconds 600`. It may only convert stale `pending` owner alerts
    to `uncertain`; it must never deliver or retry an alert.
-3. Capture `window_end_ms` before searching. Starting at the durable watermark,
-   query Gmail with a one-second overlap using
-   `in:inbox after:<epoch-seconds>`. Paginate within this run until
-   `nextPageToken` is absent. Never persist a Gmail page token across runs and
-   never impose a fixed ten-message limit.
-4. For every result, collect only immutable Gmail `id`, `threadId`, and integer
-   `internalDate`. Write no customer name, address, subject, or message content
-   to the discovery batch. After complete enumeration, call:
+3. Perform discovery only through the deterministic gateway helper:
 
    ```bash
-   python3 {baseDir}/scripts/inbox_monitor.py discover-complete \
-     --batch '<prepare-run discovery_batch path>' \
-     --window-start-ms '<durable-watermark>' \
-     --window-end-ms '<captured-window-end-ms>'
+   python3 {baseDir}/scripts/gmail_fetch.py discover \
+     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor'
    ```
 
-   The helper rejects pre-activation messages, inserts each provider ID
-   atomically, and advances the watermark only after every insertion is durable.
-   If Gmail pagination fails or times out, do not call `discover-complete`; the
-   watermark remains unchanged and the same window is enumerated next run.
+   It captures `window_end_ms`, applies the one-second overlap, paginates every
+   Gmail page, fetches and validates integer `internalDate`, writes only Gmail
+   IDs/thread IDs/timestamps, commits the discovery batch, and advances the
+   watermark atomically. Never use direct curl, `gws`, `python3 -c`, a shell
+   credential source, or call `discover-complete` directly. If the helper
+   fails, the watermark remains unchanged and processing must stop.
 
 ### Queue processing phase
 
@@ -366,7 +362,18 @@ For each returned message:
    --confirmed-no-external-actions`. Never put this command in the cron runbook
    or infer the confirmation from an empty legacy state file.
 2. Only for `claim.acquired:true`, fetch the full Gmail message and run the conservative
-   deterministic header classifier before involving the LLM:
+   deterministic header classifier before involving the LLM. Fetch only with:
+
+   ```bash
+   python3 {baseDir}/scripts/gmail_fetch.py fetch-claimed \
+     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+     --message-id '<gmail-id-returned-by-claim-next>'
+   ```
+
+   This writes the complete message and thread only to the authoritative
+   `work_paths.gmail_message` and `work_paths.gmail_thread`. Never construct a
+   Gmail read request or choose an output path. Then run:
 
    ```bash
    python3 {baseDir}/scripts/gmail_classify.py "$WORK/gmail-message.json"
