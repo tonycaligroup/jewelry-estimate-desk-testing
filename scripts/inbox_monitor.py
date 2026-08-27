@@ -40,6 +40,7 @@ REQUIRED_CAPABILITIES = (
 )
 WORK_ARTIFACTS = {
     "gmail_message": "gmail-message.json",
+    "gmail_thread": "gmail-thread.json",
     "route": "route.json",
     "candidate_records": "candidate-records.json",
     "inquiry_record": "inquiry-record.json",

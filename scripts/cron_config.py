@@ -14,6 +14,7 @@ from typing import Any
 MODEL = "litellm-fireworks/qwen-3-7-plus"
 JOB_NAME = "jed-inbox-monitor"
 TIMEOUT_SECONDS = 300
+TOOLS_ALLOW = ["exec", "read", "write"]
 
 
 def template_path() -> Path:
@@ -37,12 +38,15 @@ def validate_canonical_message(message: str) -> None:
     match = re.match(
         r"Run the Jewelry Estimate Desk inbox monitor exactly as follows\.\n\n"
         r"Never call create_goal or update_goal\.[\s\S]*?\n\n"
-        r"1\. Validate (.+?)/estimate-desk/shop-profile\.json\. Run `python3 (.+?)/scripts/inbox_monitor\.py status`\.",
+        r"This is a fail-closed procedure,[\s\S]*?\n\n"
+        r"1\. Run exactly `python3 (.+?)/scripts/validate_profile\.py "
+        r"(.+?)/estimate-desk/shop-profile\.json`, then exactly `python3 "
+        r"\1/scripts/inbox_monitor\.py status`\.",
         message,
     )
     if match is None:
         raise ValueError("cron binding message is not the canonical safe runbook")
-    workspace, base_dir = match.groups()
+    base_dir, workspace = match.groups()
     if not workspace.startswith("/") or not base_dir.startswith("/"):
         raise ValueError("cron binding message paths must be absolute")
     if message != render_message(Path(workspace), Path(base_dir)):
@@ -84,15 +88,18 @@ def validate_binding(value: Any) -> dict[str, Any]:
         "fallbacks",
         "timeoutSeconds",
         "lightContext",
+        "toolsAllow",
     }
     if not required_payload.issubset(payload) or not set(payload).issubset(
-        required_payload | {"thinking", "toolsAllow"}
+        required_payload | {"thinking"}
     ):
         raise ValueError("cron binding payload contains missing or unsupported fields")
     if payload.get("kind") != "agentTurn" or payload.get("model") != MODEL:
         raise ValueError("invalid cron binding payload kind or model")
     if payload.get("fallbacks") != [] or payload.get("lightContext") is not True:
         raise ValueError("cron binding requires no fallbacks and lightContext true")
+    if payload.get("toolsAllow") != TOOLS_ALLOW:
+        raise ValueError("cron binding toolsAllow must be exec, read, and write only")
     if payload.get("timeoutSeconds") != TIMEOUT_SECONDS:
         raise ValueError("cron binding timeoutSeconds must be 300")
     message = require_string(payload.get("message"), "payload.message")
@@ -131,6 +138,8 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
         raise ValueError("cron timeoutSeconds must be 300")
     if payload.get("lightContext") is not True:
         raise ValueError("cron lightContext must be true")
+    if payload.get("toolsAllow") != TOOLS_ALLOW:
+        raise ValueError("cron toolsAllow must be exec, read, and write only")
     if job.get("sessionTarget") != "isolated":
         raise ValueError("cron sessionTarget must be isolated")
     if delivery.get("mode") != "announce":
@@ -159,6 +168,7 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
             "fallbacks": [],
             "timeoutSeconds": TIMEOUT_SECONDS,
             "lightContext": True,
+            "toolsAllow": TOOLS_ALLOW,
         },
         "delivery": {
             "mode": "announce",
@@ -166,7 +176,7 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
             "to": require_string(delivery.get("to"), "delivery.to"),
         },
     }
-    for optional in ("thinking", "toolsAllow"):
+    for optional in ("thinking",):
         if optional in payload:
             projection["payload"][optional] = payload[optional]
     return validate_binding(projection)
@@ -187,8 +197,9 @@ def build_target_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str,
         "fallbacks": [],
         "timeoutSeconds": TIMEOUT_SECONDS,
         "lightContext": True,
+        "toolsAllow": TOOLS_ALLOW,
     }
-    for optional in ("thinking", "toolsAllow"):
+    for optional in ("thinking",):
         if optional in payload:
             target["payload"][optional] = payload[optional]
     return build_binding(target, workspace, base_dir)
