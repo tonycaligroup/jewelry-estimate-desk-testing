@@ -218,7 +218,8 @@ every pre-activation inquiry manually.
      --output "$WORK/cron-binding.json"
    ```
 
-   The binding includes job ID, agent, schedule, timezone, session, wake mode,
+   The binding includes job ID, agent when Kolo's native export exposes one,
+   schedule, timezone, session, wake mode,
    complete prompt, model, fallbacks, timeout, light-context setting, exact
    required tool allow-list, optional thinking field, and delivery destination.
    Generated timestamps and runtime counters are excluded. `enabled` is also excluded
@@ -249,6 +250,23 @@ every pre-activation inquiry manually.
 
 Never replace the cron or reset its activation timestamp or discovery watermark.
 Edit the existing job ID in place:
+
+If an operator already edited the disabled live cron before
+`reconfigure-prepare`, do not manually synchronize state and do not revert the
+cron merely to recreate the sequence. Use the bundled recovery command only
+after re-reading the live job into private JSON:
+
+```bash
+python3 {baseDir}/scripts/inbox_monitor.py reconfigure-adopt-disabled-live \
+  --current-cron-config "$WORK/cron-binding.json" \
+  --live-job "$WORK/live-cron.json" \
+  --workspace '<absolute-workspace>' --base-dir '{baseDir}'
+```
+
+It fails unless the live cron is disabled, canonical, the same job ID, no
+reconfiguration is pending, and the supplied prior binding still matches the
+durable bound hash. It updates only the bound cron hash; activation time,
+watermark, queue, claims, and records are preserved.
 
 1. Re-read the current live job. For legacy schema-1 state, reconstruct and
    cryptographically verify the exact historical five-field binding:

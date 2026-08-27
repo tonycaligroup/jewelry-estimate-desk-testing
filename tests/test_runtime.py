@@ -1318,6 +1318,13 @@ class InboxClaimTests(unittest.TestCase):
 
 
 class CronConfigTests(unittest.TestCase):
+    def capabilities(self) -> dict:
+        return {
+            "gmail_after_epoch": True,
+            "gmail_internal_date_ms": True,
+            "gmail_complete_pagination": True,
+        }
+
     def live_job(self) -> dict:
         return {
             "id": "5b9a4cf1-0df1-481f-8d68-bbbc4cb005bd",
@@ -1358,6 +1365,13 @@ class CronConfigTests(unittest.TestCase):
         self.assertNotIn("state", binding)
         self.assertNotIn("accountId", binding["delivery"])
 
+    def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
+        job = self.live_job()
+        job.pop("agentId")
+        binding = cron_config.build_binding(job, Path("/workspace"), ROOT)
+        self.assertNotIn("agentId", binding)
+        self.assertEqual(cron_config.validate_binding(binding), binding)
+
     def test_target_binding_repairs_old_runtime_fields(self) -> None:
         job = self.live_job()
         job["payload"].update(
@@ -1375,6 +1389,68 @@ class CronConfigTests(unittest.TestCase):
         self.assertEqual(target["payload"]["timeoutSeconds"], 300)
         self.assertTrue(target["payload"]["lightContext"])
         self.assertEqual(target["payload"]["toolsAllow"], cron_config.TOOLS_ALLOW)
+
+    def test_adopt_disabled_live_reconfiguration_preserves_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            current = cron_config.build_binding(
+                self.live_job(), Path("/workspace"), ROOT
+            )
+            inbox_monitor.prepare(root, self.capabilities(), current)
+            before = inbox_monitor.activate(root, current, 1_000)
+            live = self.live_job()
+            live.pop("agentId")
+            live["enabled"] = False
+
+            result = inbox_monitor.adopt_disabled_live_reconfiguration(
+                root, current, live, Path("/workspace"), ROOT
+            )
+
+            target = cron_config.build_binding(live, Path("/workspace"), ROOT)
+            self.assertEqual(
+                result["bound_cron_sha256"], inbox_monitor.sha256_json(target)
+            )
+            self.assertEqual(result["activation_state"], "active")
+            self.assertIsNone(result["pending_cron_sha256"])
+            self.assertEqual(
+                result["discovery_watermark_ms"], before["discovery_watermark_ms"]
+            )
+            self.assertEqual(result["activated_at_ms"], before["activated_at_ms"])
+
+    def test_adopt_live_reconfiguration_requires_disabled_same_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            current = cron_config.build_binding(
+                self.live_job(), Path("/workspace"), ROOT
+            )
+            inbox_monitor.prepare(root, self.capabilities(), current)
+            inbox_monitor.activate(root, current, 1_000)
+            live = self.live_job()
+            live.pop("agentId")
+            live["enabled"] = True
+            with self.assertRaises(ValueError):
+                inbox_monitor.adopt_disabled_live_reconfiguration(
+                    root, current, live, Path("/workspace"), ROOT
+                )
+
+    def test_adopt_live_reconfiguration_rejects_already_bound_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "monitor"
+            live = self.live_job()
+            live["enabled"] = False
+            current = cron_config.build_binding(live, Path("/workspace"), ROOT)
+            inbox_monitor.prepare(root, self.capabilities(), current)
+            inbox_monitor.activate(root, current, 1_000)
+            with self.assertRaisesRegex(ValueError, "already bound"):
+                inbox_monitor.adopt_disabled_live_reconfiguration(
+                    root, current, live, Path("/workspace"), ROOT
+                )
+            live["enabled"] = False
+            live["id"] = "different-job-id"
+            with self.assertRaises(ValueError):
+                inbox_monitor.adopt_disabled_live_reconfiguration(
+                    root, current, live, Path("/workspace"), ROOT
+                )
 
     def test_binding_rejects_any_prompt_drift(self) -> None:
         binding = cron_config.build_binding(self.live_job(), Path("/workspace"), ROOT)

@@ -54,23 +54,28 @@ def validate_canonical_message(message: str) -> None:
 
 
 def validate_binding(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {
+    required_fields = {
         "id",
         "name",
-        "agentId",
         "schedule",
         "sessionTarget",
         "wakeMode",
         "payload",
         "delivery",
-    }:
+    }
+    if (
+        not isinstance(value, dict)
+        or not required_fields.issubset(value)
+        or not set(value).issubset(required_fields | {"agentId"})
+    ):
         raise ValueError("cron binding contains missing or unsupported fields")
     if value.get("name") != JOB_NAME or value.get("sessionTarget") != "isolated":
         raise ValueError("cron binding identity or session target is invalid")
     job_id = require_string(value.get("id"), "id")
     if not re.fullmatch(r"[A-Za-z0-9-]{8,128}", job_id):
         raise ValueError("invalid cron id")
-    require_string(value.get("agentId"), "agentId")
+    if "agentId" in value:
+        require_string(value.get("agentId"), "agentId")
     require_string(value.get("wakeMode"), "wakeMode")
     schedule = value.get("schedule")
     payload = value.get("payload")
@@ -153,7 +158,6 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
     projection: dict[str, Any] = {
         "id": job_id,
         "name": JOB_NAME,
-        "agentId": require_string(job.get("agentId"), "agentId"),
         "schedule": {
             "kind": "cron",
             "expr": require_string(schedule.get("expr"), "schedule.expr"),
@@ -176,6 +180,11 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
             "to": require_string(delivery.get("to"), "delivery.to"),
         },
     }
+    # Kolo omits agentId when the cron uses the platform's default agent.
+    # Preserve and validate an explicit agent when the native export includes
+    # one, but do not invent an identity that cannot be verified from live state.
+    if "agentId" in job:
+        projection["agentId"] = require_string(job.get("agentId"), "agentId")
     for optional in ("thinking",):
         if optional in payload:
             projection["payload"][optional] = payload[optional]
