@@ -218,7 +218,8 @@ every pre-activation inquiry manually.
      --output "$WORK/cron-binding.json"
    ```
 
-   The binding includes job ID, agent, schedule, timezone, session, wake mode,
+   The binding includes job ID, agent when Kolo's native export exposes one,
+   schedule, timezone, session, wake mode,
    complete prompt, model, fallbacks, timeout, light-context setting, exact
    required tool allow-list, optional thinking field, and delivery destination.
    Generated timestamps and runtime counters are excluded. `enabled` is also excluded

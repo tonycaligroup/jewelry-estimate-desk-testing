@@ -1358,6 +1358,13 @@ class CronConfigTests(unittest.TestCase):
         self.assertNotIn("state", binding)
         self.assertNotIn("accountId", binding["delivery"])
 
+    def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
+        job = self.live_job()
+        job.pop("agentId")
+        binding = cron_config.build_binding(job, Path("/workspace"), ROOT)
+        self.assertNotIn("agentId", binding)
+        self.assertEqual(cron_config.validate_binding(binding), binding)
+
     def test_target_binding_repairs_old_runtime_fields(self) -> None:
         job = self.live_job()
         job["payload"].update(
