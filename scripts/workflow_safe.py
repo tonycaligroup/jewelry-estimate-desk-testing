@@ -204,8 +204,11 @@ def _appointment_approval_details(
 
 def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     """Create a durable appointment approval and optionally finalize the claim."""
-    record = read_object(
-        estimate_record.record_path(args.record_root, args.estimate_id)
+    record, _decision = estimate_record.post_estimate_decision(
+        args.record_root,
+        args.estimate_id,
+        args.message_id,
+        "appointment_request",
     )
     intent = read_object(args.appointment_intent)
     if args.appointment_approval.exists():
@@ -286,8 +289,11 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
-    record = read_object(
-        estimate_record.record_path(args.record_root, args.estimate_id)
+    record, _decision = estimate_record.post_estimate_decision(
+        args.record_root,
+        args.estimate_id,
+        args.message_id,
+        "rendering_request",
     )
     route_ownership.validate_record(record)
     if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
@@ -320,6 +326,76 @@ def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
     finish_processed(
         args.monitor_root, args.claim_root, args.record_root, args.message_id
     )
+    return record
+
+
+def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
+    """Mirror and safely route one persisted post-estimate decision."""
+    record, decision = estimate_record.post_estimate_decision(
+        args.record_root, args.estimate_id, args.message_id
+    )
+    mirror_record(record, args.record_output)
+    outcome = decision["outcome"]
+    intents = decision["intents"]
+    if outcome != "post_estimate_continuation":
+        reason_codes = {
+            "design_change_detected": "design_change_detected",
+            "classification_uncertain": "classification_uncertain",
+            "classification_malformed": "classification_malformed",
+        }
+        kolo_safe.manual_review_claimed(
+            args.monitor_root,
+            args.claim_root,
+            args.message_id,
+            None,
+            reason_codes[outcome],
+        )
+        return {
+            "outcome": outcome,
+            "should_finalize": True,
+            "intents": intents,
+            "next_action": "manual_review",
+        }
+    actionable = set(intents) & {"rendering_request", "appointment_request"}
+    if not actionable:
+        finish_processed(
+            args.monitor_root, args.claim_root, args.record_root, args.message_id
+        )
+        return {
+            "outcome": outcome,
+            "should_finalize": True,
+            "intents": intents,
+            "next_action": "finalize",
+        }
+    next_action = (
+        "request_appointment_approval_then_send_rendering"
+        if actionable == {"rendering_request", "appointment_request"}
+        else (
+            "request_appointment_approval"
+            if "appointment_request" in actionable
+            else "send_rendering"
+        )
+    )
+    return {
+        "outcome": outcome,
+        "should_finalize": False,
+        "intents": intents,
+        "next_action": next_action,
+    }
+
+
+def record_appointment_booked(args: argparse.Namespace) -> dict[str, Any]:
+    """Persist and mirror an immutable successful appointment receipt."""
+    before = read_object(
+        estimate_record.record_path(args.record_root, args.estimate_id)
+    )
+    record = estimate_record.record_appointment_booked(
+        args.record_root, args.estimate_id, read_object(args.receipt)
+    )
+    if before == record:
+        write_private(args.record_output, record)
+    else:
+        mirror_record(record, args.record_output)
     return record
 
 
@@ -371,6 +447,14 @@ def main(argv: list[str] | None = None) -> int:
     appointment.add_argument("--appointment-intent", type=Path, required=True)
     appointment.add_argument("--appointment-approval", type=Path, required=True)
     appointment.add_argument("--defer-finalize-for-rendering", action="store_true")
+    finalize = sub.add_parser("finalize-post-estimate")
+    add_common_paths(finalize)
+    finalize.add_argument("--monitor-root", type=Path, required=True)
+    booked = sub.add_parser("record-appointment-booked")
+    booked.add_argument("--record-root", type=Path, required=True)
+    booked.add_argument("--estimate-id", required=True)
+    booked.add_argument("--receipt", type=Path, required=True)
+    booked.add_argument("--record-output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "send-spec-followup":
@@ -381,6 +465,10 @@ def main(argv: list[str] | None = None) -> int:
             record = send_approved_estimate(args)
         elif args.command == "request-appointment-approval":
             record = request_appointment_approval(args)
+        elif args.command == "finalize-post-estimate":
+            record = finalize_post_estimate(args)
+        elif args.command == "record-appointment-booked":
+            record = record_appointment_booked(args)
         else:
             record = send_rendering(args)
         print(json.dumps(record, sort_keys=True))
