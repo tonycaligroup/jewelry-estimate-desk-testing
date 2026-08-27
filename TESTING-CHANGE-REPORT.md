@@ -1,6 +1,6 @@
 # Jewelry Estimate Desk Testing Change Report
 
-Date: 2026-08-26
+Date: 2026-08-27
 
 ## Completed in this update
 
@@ -53,10 +53,21 @@ Date: 2026-08-26
 - New inbox-monitor installations default to every five minutes during the
   owner's configured business hours. A user-requested alternate interval is
   preserved during later reconfiguration.
+- Replaced the one-shot cron chat result for Stage 1/2 appointment requests
+  with a durable Kolo approval assigned to the activating user. The approval
+  is bound to the authoritative estimate, customer email, Gmail thread, source
+  message, requested timing, and any validated calendar availability.
+- Appointment-only messages now finalize only after the approval request is
+  journaled, persisted locally, and mirrored to Kolo. Combined rendering and
+  appointment requests create the approval first, then let the existing
+  rendering transaction finalize the claim.
+- Approved appointment actions re-check live calendar availability and remain
+  in the original Gmail thread. No appointment is described as booked until
+  the calendar write succeeds.
 
 ## Verification
 
-- 152 automated runtime tests pass.
+- 168 automated runtime tests pass.
 - Python compilation passes for all scripts and tests.
 - Git whitespace validation passes.
 - No customer-facing template or instruction contains the prohibited term.
@@ -65,7 +76,10 @@ Date: 2026-08-26
   distinct rendering iterations, owner-selected cron intervals, confidential
   customer content, delegated specification choices, private activation
   binding, installer-as-approver routing, cross-document policy coherence, and
-  customer-state reset preservation/refusal boundaries.
+  customer-state reset preservation/refusal boundaries. New coverage verifies
+  durable appointment approval construction, activating-user binding,
+  write-ahead idempotency, authoritative email/thread routing, record evidence,
+  and combined rendering/appointment ordering.
 
 ## Kolo platform findings
 
@@ -86,9 +100,9 @@ Date: 2026-08-26
 
 ## Deployment state
 
-- The live inbox cron is disabled while this installer-as-approver update is
-  reviewed, packaged, and installed. Its job, schedule, claims, records, and
-  unresolved review state were left intact.
-- Re-enable it only after the installed marketplace files match the reviewed
-  GitHub commit and the live cron binding validates with `image_generate` in the
-  exact tool allow-list.
+- The durable appointment-approval change is currently source-reviewed and
+  tested in the testing-skill branch; it has not yet changed the installed Kolo
+  copy or the live cron.
+- Installation must update the testing skill from the reviewed GitHub commit
+  and rebind the existing cron prompt while preserving the user's selected
+  interval and enabled state.

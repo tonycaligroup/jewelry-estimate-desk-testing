@@ -138,6 +138,43 @@ def build_request_approval(
     ]
 
 
+def build_request_appointment_approval(
+    estimate_id: str, details: Path, session_key: str, agent_id: str = "main"
+) -> list[str]:
+    """Build one durable owner approval for a customer appointment request."""
+    estimate_id = validate_estimate_id(estimate_id)
+    session_key = validate_session_key(session_key)
+    details_object = json.loads(read_json_argument(details))
+    if details_object.get("action_type") != "appointment_booking":
+        raise ValueError("appointment approval action_type must be appointment_booking")
+    if details_object.get("estimate_id") != estimate_id:
+        raise ValueError("appointment approval estimate_id does not match")
+    payload = json.dumps(
+        details_object, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return [
+        "kolo",
+        "request-approval",
+        "--agent-id",
+        agent_id,
+        "--action",
+        f"Book appointment — {estimate_id}",
+        "--reasoning",
+        (
+            f"A customer requested an appointment for {estimate_id.upper()}. "
+            "Review the requested timing and approve the calendar action."
+        ),
+        "--risk-level",
+        "low",
+        "--details",
+        payload,
+        "--execution-payload",
+        payload,
+        "--session-key",
+        session_key,
+    ]
+
+
 def build_notify_owner(estimate_id: str, event: str = "approval-ready") -> list[str]:
     estimate_id = validate_estimate_id(estimate_id)
     try:
@@ -160,15 +197,6 @@ def build_notify_monitor(event: str) -> list[str]:
     except KeyError as exc:
         raise ValueError("invalid monitor notification event") from exc
     return ["kolo", "notify-owner", "-m", message]
-
-
-def appointment_action_result(estimate_id: str) -> str:
-    """Render the owner-visible cron result for a Stage 1/2 booking decision."""
-    estimate_id = validate_estimate_id(estimate_id)
-    return (
-        f"Appointment booking needs owner approval for {estimate_id.upper()}. "
-        "Reply in this Kolo chat to review and approve it."
-    )
 
 
 def build_record_upsert(
@@ -277,6 +305,63 @@ def request_approval_claimed(
                 command, 0, "approval request already sent\n", ""
             )
         raise ValueError(f"approval request is already {status}; refusing retry")
+    try:
+        result = run_command(command, runner=runner)
+    except (OSError, subprocess.CalledProcessError):
+        inbox_claim.finish_external_action(
+            claim_root, message_id, claim_token, action_key, "uncertain"
+        )
+        raise
+    inbox_claim.finish_external_action(
+        claim_root, message_id, claim_token, action_key, "sent"
+    )
+    return result
+
+
+def request_appointment_approval_claimed(
+    claim_root: Path,
+    message_id: str,
+    claim_token: str | None,
+    action_key: str,
+    estimate_id: str,
+    details: Path,
+    session_key: str,
+    agent_id: str = "main",
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    """Create one durable appointment approval with ambiguity tracking."""
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
+    command = build_request_appointment_approval(
+        estimate_id, details, session_key, agent_id
+    )
+    binding_material = json.dumps(
+        {
+            "agent_id": agent_id,
+            "details": json.loads(read_json_argument(details)),
+            "estimate_id": estimate_id,
+            "session_key": session_key,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    binding = "sha256:" + hashlib.sha256(binding_material).hexdigest()
+    acquired, state = inbox_claim.acquire_external_action(
+        claim_root,
+        message_id,
+        claim_token,
+        action_key,
+        "approval_request",
+        binding,
+    )
+    if not acquired:
+        status = state["external_actions"][action_key]["status"]
+        if status == "sent":
+            return subprocess.CompletedProcess(
+                command, 0, "appointment approval already sent\n", ""
+            )
+        raise ValueError(f"appointment approval is already {status}; refusing retry")
     try:
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):
@@ -450,6 +535,17 @@ def main(argv: list[str] | None = None) -> int:
     approval_claimed.add_argument("--details", type=Path, required=True)
     approval_claimed.add_argument("--session-key", required=True)
     approval_claimed.add_argument("--agent-id", default="main")
+    appointment_approval_claimed = sub.add_parser(
+        "request-appointment-approval-claimed"
+    )
+    appointment_approval_claimed.add_argument("--claim-root", type=Path, required=True)
+    appointment_approval_claimed.add_argument("--message-id", required=True)
+    appointment_approval_claimed.add_argument("--claim-token")
+    appointment_approval_claimed.add_argument("--action-key", required=True)
+    appointment_approval_claimed.add_argument("--estimate-id", required=True)
+    appointment_approval_claimed.add_argument("--details", type=Path, required=True)
+    appointment_approval_claimed.add_argument("--session-key", required=True)
+    appointment_approval_claimed.add_argument("--agent-id", default="main")
 
     notify = sub.add_parser("notify-owner")
     notify.add_argument("--estimate-id", required=True)
@@ -460,8 +556,6 @@ def main(argv: list[str] | None = None) -> int:
     notify_monitor.add_argument(
         "--event", choices=sorted(MONITOR_NOTIFICATION_MESSAGES), required=True
     )
-    appointment_result = sub.add_parser("appointment-action-result")
-    appointment_result.add_argument("--estimate-id", required=True)
     notify_claimed = sub.add_parser("notify-owner-claimed")
     notify_claimed.add_argument("--claim-root", type=Path, required=True)
     notify_claimed.add_argument("--message-id", required=True)
@@ -524,13 +618,24 @@ def main(argv: list[str] | None = None) -> int:
             if result.stdout:
                 print(result.stdout, end="")
             return 0
+        elif args.command == "request-appointment-approval-claimed":
+            result = request_appointment_approval_claimed(
+                args.claim_root,
+                args.message_id,
+                args.claim_token,
+                args.action_key,
+                args.estimate_id,
+                args.details,
+                args.session_key,
+                args.agent_id,
+            )
+            if result.stdout:
+                print(result.stdout, end="")
+            return 0
         elif args.command == "notify-owner":
             command = build_notify_owner(args.estimate_id, args.event)
         elif args.command == "notify-monitor":
             command = build_notify_monitor(args.event)
-        elif args.command == "appointment-action-result":
-            print(appointment_action_result(args.estimate_id))
-            return 0
         elif args.command == "notify-owner-claimed":
             result = notify_owner_claimed(
                 args.claim_root,

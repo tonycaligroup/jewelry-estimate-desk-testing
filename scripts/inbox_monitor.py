@@ -54,6 +54,8 @@ WORK_ARTIFACTS = {
     "gmail_provider_response": "gmail-provider-response.json",
     "current_state": "current-state.json",
     "approval_request": "approval-request.json",
+    "appointment_intent": "appointment-intent.json",
+    "appointment_approval": "appointment-approval.json",
 }
 
 

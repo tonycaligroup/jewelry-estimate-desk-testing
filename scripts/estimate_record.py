@@ -175,6 +175,7 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                 "followup_replies",
                 "thread_reviews",
                 "approval_requests",
+                "appointment_approval_requests",
                 "rendering_deliveries",
             ):
                 record = preserve_append_only(existing, record, field)
@@ -208,7 +209,9 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                 try:
                     proposed_binding = approval_guard.binding_hash(bound_state)
                 except ValueError as exc:
-                    raise ValueError("approval-bound estimate state is invalid") from exc
+                    raise ValueError(
+                        "approval-bound estimate state is invalid"
+                    ) from exc
                 if proposed_binding != existing_binding:
                     raise ValueError("approval-bound estimate state is immutable")
         write_object(path, record)
@@ -534,7 +537,9 @@ def prepare_approval_state(
             raise ValueError("approval request lacks a matching complete thread review")
         if record.get("status") == "pending_approval":
             if record.get("approval_source_message_id") != source_message_id:
-                raise ValueError("pending approval belongs to a different source message")
+                raise ValueError(
+                    "pending approval belongs to a different source message"
+                )
             state = {
                 "estimate_id": record["estimate_id"],
                 "route": record["route"],
@@ -767,6 +772,74 @@ def record_estimate_sent(
         return record
 
 
+def record_appointment_approval_requested(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    approval: dict[str, Any],
+) -> dict[str, Any]:
+    """Append durable evidence for one post-estimate appointment approval."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    required = {
+        "schema_version",
+        "action_type",
+        "estimate_id",
+        "source_message_id",
+        "customer_email",
+        "thread_id",
+        "requested_times",
+        "calendar_availability",
+    }
+    if not isinstance(approval, dict) or set(approval) != required:
+        raise ValueError("appointment approval contains missing or unsupported fields")
+    if approval.get("schema_version") != 1:
+        raise ValueError("unsupported appointment approval schema_version")
+    if approval.get("action_type") != "appointment_booking":
+        raise ValueError("appointment approval action_type must be appointment_booking")
+    if approval.get("estimate_id") != estimate_id:
+        raise ValueError("appointment approval estimate_id does not match")
+    if approval.get("source_message_id") != source_message_id:
+        raise ValueError("appointment approval source_message_id does not match")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
+            raise ValueError("appointment approval requires a sent estimate")
+        route = record["route"]
+        if approval.get("customer_email") != route["recipient"]:
+            raise ValueError("appointment approval customer email does not match route")
+        if approval.get("thread_id") != route["thread_id"]:
+            raise ValueError("appointment approval thread_id does not match route")
+        evidence = {
+            "status": "pending_approval",
+            "source_message_id_sha256": sha256_text(source_message_id),
+            "approval_sha256": canonical_sha256(approval),
+        }
+        requests = record.setdefault("appointment_approval_requests", [])
+        if not isinstance(requests, list):
+            raise ValueError("appointment_approval_requests must be an array")
+        for existing in requests:
+            if not isinstance(existing, dict):
+                raise ValueError(
+                    "appointment_approval_requests contains invalid evidence"
+                )
+            if (
+                existing.get("source_message_id_sha256")
+                != evidence["source_message_id_sha256"]
+            ):
+                continue
+            comparable = dict(existing)
+            comparable.pop("requested_at", None)
+            if comparable == evidence:
+                return record
+            raise ValueError("conflicting appointment approval for source message")
+        evidence["requested_at"] = datetime.now(timezone.utc).isoformat()
+        requests.append(evidence)
+        write_object(path, record)
+        return record
+
+
 def record_rendering_sent(
     root: Path,
     estimate_id: str,
@@ -878,6 +951,29 @@ def require_processed_evidence(
         None,
     )
     if rendering is not None:
+        return
+
+    appointment_approval = next(
+        (
+            item
+            for item in record.get("appointment_approval_requests", [])
+            if isinstance(item, dict)
+            and item.get("source_message_id_sha256") == source_hash
+            and item.get("status") == "pending_approval"
+        ),
+        None,
+    )
+    if appointment_approval is not None:
+        action_key = f"appointment_approval:{record['estimate_id']}:{message_id}"
+        action = claim_state.get("external_actions", {}).get(action_key)
+        if (
+            not isinstance(action, dict)
+            or action.get("category") != "approval_request"
+            or action.get("status") != "sent"
+        ):
+            raise ValueError(
+                "appointment request lacks a sent claimed approval request"
+            )
         return
 
     if initiating and record["status"] == "awaiting_specs":

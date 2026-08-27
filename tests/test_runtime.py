@@ -213,6 +213,15 @@ class InstructionCoherenceTests(unittest.TestCase):
         self.assertIn("Stage 3 — Let me book appointments", owner_guide)
         self.assertIn("Stage 3+ for autonomous send", customer)
 
+    def test_main_session_has_explicit_appointment_approval_handoff(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Handling approved appointment requests in the main Kolo session",
+            skill,
+        )
+        self.assertIn("Query Google Calendar again", skill)
+        self.assertIn("authoritative original thread", skill)
+
 
 class ApprovalTests(unittest.TestCase):
     def state(self) -> dict:
@@ -424,6 +433,23 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
             "proposed_price": price,
             "internal_cost_sheet": internal_cost_sheet(price),
         }
+
+    def test_appointment_details_use_authoritative_email_and_thread(self) -> None:
+        record = {
+            "schema_version": 1,
+            "estimate_id": "jed-0123456789abcdef",
+            "status": "estimate_sent",
+            "route": self.route(),
+            "inbound_timestamp_ms": 1,
+        }
+        details = workflow_safe._appointment_approval_details(
+            record,
+            "appointment-message",
+            {"requested_times": [], "calendar_availability": []},
+        )
+        self.assertEqual(details["customer_email"], "customer@example.net")
+        self.assertEqual(details["thread_id"], "approval-thread")
+        self.assertEqual(details["source_message_id"], "appointment-message")
 
     def test_preparation_uses_authoritative_route_and_specification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -996,6 +1022,35 @@ class SafeCliTests(unittest.TestCase):
                 "sent",
             )
 
+    def test_claimed_appointment_approval_is_sent_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            details = Path(directory) / "appointment.json"
+            details.write_text(json.dumps({
+                "schema_version": 1,
+                "action_type": "appointment_booking",
+                "estimate_id": "jed-0123456789abcdef",
+            }), encoding="utf-8")
+            _, claim = inbox_claim.acquire(root, "appointment-message")
+            runner = Mock(
+                return_value=subprocess.CompletedProcess([], 0, "accepted\n", "")
+            )
+            arguments = (
+                root,
+                "appointment-message",
+                claim["claim_token"],
+                "appointment_approval:jed-0123456789abcdef:appointment-message",
+                "jed-0123456789abcdef",
+                details,
+                "agent:main:kolo:test-session",
+            )
+            kolo_safe.request_appointment_approval_claimed(*arguments, runner=runner)
+            duplicate = kolo_safe.request_appointment_approval_claimed(
+                *arguments, runner=runner
+            )
+            self.assertEqual(runner.call_count, 1)
+            self.assertIn("already sent", duplicate.stdout)
+
     def test_claimed_approval_failure_is_uncertain_and_not_retried(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
@@ -1091,18 +1146,29 @@ class SafeCliTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             kolo_safe.build_notify_monitor("customer@example.com")
 
-    def test_appointment_action_result_routes_to_chat_without_customer_data(
-        self,
-    ) -> None:
-        result = kolo_safe.appointment_action_result("jed-0123456789abcdef")
-        self.assertEqual(
-            result,
-            "Appointment booking needs owner approval for "
-            "JED-0123456789ABCDEF. Reply in this Kolo chat to review and approve it.",
-        )
-        self.assertNotIn("@", result)
-        with self.assertRaises(ValueError):
-            kolo_safe.appointment_action_result("customer@example.com")
+    def test_appointment_approval_is_durable_and_owner_actionable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            details = Path(directory) / "appointment.json"
+            details.write_text(json.dumps({
+                "schema_version": 1,
+                "action_type": "appointment_booking",
+                "estimate_id": "jed-0123456789abcdef",
+                "source_message_id": "gmail-message",
+                "customer_email": "customer@example.net",
+                "thread_id": "gmail-thread",
+                "requested_times": ["Friday afternoon"],
+                "calendar_availability": [],
+            }), encoding="utf-8")
+            argv = kolo_safe.build_request_appointment_approval(
+                "jed-0123456789abcdef",
+                details,
+                "agent:main:kolo:test-session",
+            )
+        self.assertEqual(argv[:2], ["kolo", "request-approval"])
+        self.assertEqual(argv[argv.index("--risk-level") + 1], "low")
+        self.assertEqual(argv[argv.index("--agent-id") + 1], "main")
+        payload = json.loads(argv[argv.index("--execution-payload") + 1])
+        self.assertEqual(payload["action_type"], "appointment_booking")
 
     def test_claimed_owner_notification_records_sent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1889,13 +1955,16 @@ class CronConfigTests(unittest.TestCase):
         self.assertIn("owner alert before invoking", message)
         self.assertIn("never expose internal reasoning", message)
 
-    def test_cron_routes_stage_one_two_appointment_action_to_chat_result(self) -> None:
+    def test_cron_creates_durable_stage_one_two_appointment_approval(self) -> None:
         message = cron_config.render_message(Path("/workspace"), ROOT)
         self.assertIn(
-            "kolo_safe.py appointment-action-result --estimate-id '<jed-id>'",
+            "workflow_safe.py request-appointment-approval",
             message,
         )
-        self.assertIn("return its exact stdout as the final response", message)
+        self.assertIn("--appointment-intent '<work_paths.appointment_intent>'", message)
+        self.assertIn("--appointment-approval '<work_paths.appointment_approval>'", message)
+        self.assertIn("return `NO_REPLY`", message)
+        self.assertNotIn("appointment-action-result", message)
         self.assertIn(
             "Do not call `notify-owner-claimed` for that appointment action",
             message,
@@ -1918,10 +1987,9 @@ class CronConfigTests(unittest.TestCase):
         self.assertIn(
             "kolo_safe.py manual-review-claimed --monitor-root", message
         )
-        self.assertLess(
-            message.index("workflow_safe.py send-rendering"),
-            message.index("kolo_safe.py appointment-action-result"),
-        )
+        self.assertIn("--defer-finalize-for-rendering", message)
+        approval = message.index("request-appointment-approval")
+        self.assertLess(approval, message.index("send-rendering", approval))
 
     def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
         job = self.live_job()
