@@ -109,11 +109,23 @@ def send_spec_followup(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def request_approval(args: argparse.Namespace) -> dict[str, Any]:
-    current = read_object(args.current_state)
-    if current.get("estimate_id") != args.estimate_id:
-        raise ValueError("current state estimate_id does not match the command")
-    approval = approval_guard.build_request(current)
-    write_private(args.approval_request, approval)
+    candidate = read_object(args.current_state)
+    current = estimate_record.prepare_approval_state(
+        args.record_root, args.estimate_id, args.message_id, candidate
+    )
+    approval_existed = args.approval_request.exists()
+    if approval_existed:
+        approval = read_object(args.approval_request)
+    else:
+        approval = approval_guard.build_request(current)
+        estimate_record.validate_approval_request(
+            args.record_root, args.estimate_id, args.message_id, approval
+        )
+        write_private(args.approval_request, approval)
+    if approval_existed:
+        estimate_record.validate_approval_request(
+            args.record_root, args.estimate_id, args.message_id, approval
+        )
     approver = activation_binding.load(
         activation_binding.binding_path(args.monitor_root)
     )
