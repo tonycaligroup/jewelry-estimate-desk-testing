@@ -632,6 +632,7 @@ For each returned message:
    ```bash
    python3 {baseDir}/scripts/estimate_record.py record-thread-review \
      --estimate-id '<jed-id>' --snapshot "$WORK/thread-review.json" \
+     --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
      --record-root '<absolute-workspace>/estimate-desk/records' \
      --output "$WORK/current-record.json"
    ```
@@ -827,6 +828,12 @@ owner-facing pricing assumptions. Budget and event date are useful intake
 questions but are not prerequisites to an estimate. Default to shop sourcing
 unless the customer says they are supplying the stone or metal.
 
+A profile value of `defaults.stone_origin: ask_always` is not delegatable. The
+customer must explicitly choose natural or lab-grown before the specification
+gate can complete. The thread-review helper enforces this from the runtime
+profile; never replace it with `delegated_to_jeweler` or infer an origin from
+price sensitivity.
+
 For a piece without stones, stone fields are not applicable; do not report a
 misleading `x/8` score. Wholesale estimates may label customer-visible
 product/specification unknowns, but never jeweler cost or pricing assumptions.
@@ -894,8 +901,12 @@ Write `current-state.json` with:
   `Message-ID`, original subject, and existing `References` message IDs
 - `specification`: the exact priced written specification
 - `proposed_price`
-- `internal_cost_sheet`, with metal grams and unit/total cost, stone costs,
-  labor hours/rate/total, other hard costs, hard-cost total, and customer price
+- `cost_components`, containing exactly `metal_lines`, `stone_lines`,
+  `labor_lines`, and `other_hard_cost_lines`. Use these exact line shapes:
+  `{metal, quantity_grams, unit_cost}`, `{stone, quantity, unit_cost}`,
+  `{task, hours, rate}`, and `{label, total_cost}`. Do not add line totals,
+  `hard_cost_total`, or `customer_price`; the approval helper calculates and
+  inserts them deterministically into the owner-only `internal_cost_sheet`.
 - internal pricing, jeweler cost assumptions, feasibility, appointment options,
   and draft. Keep the internal pricing and assumption fields separate from the
   customer-safe specification; they are owner-only and must never be copied or
