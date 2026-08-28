@@ -475,13 +475,18 @@ For each returned message:
    python3 {baseDir}/scripts/gmail_classify.py "$WORK/gmail-message.json"
    ```
 
-   - `auto_reply`: complete as processed with no response or owner alert.
+   - `auto_reply`: complete as processed with no response or owner alert, using
+     `kolo_safe.py complete-claimed` so the helper resolves the authoritative
+     token, advances the no-side-effect phase, reconciles the queue, and cleans
+     claim work atomically.
    - `dsn_candidate`: correlate only against durable stored outbound provider
      evidence and the exact failed-recipient email. Never trust an estimate ID
      found only in message text. A verified failure becomes `manual_review` with
      reason `delivery_failed` and an event-specific owner alert. An uncorrelated
      DSN becomes `manual_review` with reason `uncorrelated_dsn`; never treat it as
-     a customer.
+     a customer. When the isolated cron has no bundled deterministic correlation
+     result, it must choose `uncorrelated_dsn` rather than inspect raw records or
+     guess.
    - `customer_or_uncertain`: derive and validate the customer route below.
    - Mailbox quota, authentication/security, or persistent system failures are
      `manual_review` with reason `system_actionable` and use the fixed generic

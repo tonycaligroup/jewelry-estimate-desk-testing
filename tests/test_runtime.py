@@ -1489,6 +1489,38 @@ class SafeCliTests(unittest.TestCase):
             self.assertEqual(stored_claim["status"], "manual_review")
             self.assertEqual(stored_claim["owner_notification"]["status"], "uncertain")
 
+    def test_complete_claimed_terminalizes_filtered_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            monitor_root = Path(directory) / "monitor"
+            claim_root = Path(directory) / "claims"
+            message_id = "gmail-auto-reply"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(monitor_root, message_id),
+                {
+                    "schema_version": 1,
+                    "gmail_message_id": message_id,
+                    "gmail_message_id_sha256": inbox_monitor.message_key(message_id),
+                    "thread_id": "thread-auto-reply",
+                    "internal_date_ms": 1_100,
+                    "discovery_status": "complete",
+                    "processing_status": "processing",
+                    "processing_started_at": "2026-08-25T00:00:00+00:00",
+                },
+            )
+            inbox_claim.acquire(claim_root, message_id)
+
+            completed = kolo_safe.complete_claimed(
+                monitor_root, claim_root, message_id, None
+            )
+
+            self.assertEqual(completed["processing_status"], "processed")
+            self.assertEqual(
+                inbox_claim.read_state(
+                    inbox_claim.claim_path(claim_root, message_id)
+                )["status"],
+                "processed",
+            )
+
     def test_stale_reconciler_resumes_only_journaled_safe_claims(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             monitor_root = Path(directory) / "monitor"
@@ -2138,6 +2170,12 @@ class CronConfigTests(unittest.TestCase):
         )
         self.assertIn("Do not read SKILL.md for either command", message)
         self.assertIn("Never record `not specified`", message)
+        self.assertIn("kolo_safe.py complete-claimed --monitor-root", message)
+        self.assertIn("with reason `uncorrelated_dsn`", message)
+        self.assertNotIn("Follow the installed SKILL.md rules", message)
+        self.assertNotIn("command in SKILL.md", message)
+        self.assertNotIn("use the installed SKILL.md", message)
+        self.assertNotIn("as defined in SKILL.md", message)
         self.assertIn("owner alert before invoking", message)
         self.assertIn("never expose internal reasoning", message)
 
@@ -4620,6 +4658,42 @@ class EstimateRecordTests(unittest.TestCase):
             ),
             ["unsupported_intent"],
         )
+
+    def test_post_estimate_malformed_review_replays_legacy_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            record["status"] = "estimate_sent"
+            record["specification"] = {"piece_type": "ring"}
+            estimate_record.persist_record(root, record)
+            snapshot = {
+                "thread_id": "gmail-thread",
+                "source_message_id": "legacy-malformed-request",
+                "message_ids": ["gmail-initial-message", "legacy-malformed-request"],
+                "missing_required_fields": [],
+                "post_estimate_artifact": {
+                    "design_change_assessment": "changed",
+                    "intents": [],
+                    "changed_fields": [],
+                },
+            }
+            reviewed = estimate_record.record_thread_review(
+                root, record["estimate_id"], snapshot
+            )
+            reviewed["thread_reviews"][-1].pop("classification_error_codes")
+            estimate_record.write_object(
+                estimate_record.record_path(root, record["estimate_id"]), reviewed
+            )
+
+            replayed = estimate_record.record_thread_review(
+                root, record["estimate_id"], snapshot
+            )
+
+            self.assertNotIn(
+                "classification_error_codes", replayed["thread_reviews"][-1]
+            )
 
     def test_post_estimate_decision_is_bound_to_latest_source_and_specification(
         self,

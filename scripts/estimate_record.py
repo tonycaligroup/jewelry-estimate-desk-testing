@@ -492,6 +492,14 @@ def record_thread_review(
             comparable.pop("recorded_at", None)
             if comparable == evidence:
                 return record
+            legacy_evidence = dict(evidence)
+            legacy_evidence.pop("classification_error_codes", None)
+            if (
+                evidence.get("outcome") == "classification_malformed"
+                and "classification_error_codes" not in comparable
+                and comparable == legacy_evidence
+            ):
+                return record
             raise ValueError("conflicting thread review for source message")
         if record["status"] != "awaiting_specs" and not post_estimate:
             raise ValueError(
