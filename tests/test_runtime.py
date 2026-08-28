@@ -218,6 +218,26 @@ class InstructionCoherenceTests(unittest.TestCase):
             "immediately run `workflow_safe.py send-spec-followup`", cron
         )
 
+    def test_cron_inlines_thread_review_identity_and_failure_handling(self) -> None:
+        cron = (ROOT / "templates" / "inbox-monitor-cron.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "`thread_id` is the nonempty `thread_id` from `work_paths.route`",
+            cron,
+        )
+        self.assertIn(
+            "`source_message_id` is the nonempty Gmail ID returned by `claim-next`",
+            cron,
+        )
+        self.assertIn(
+            "`message_ids` is every nonempty Gmail message ID from "
+            "`work_paths.gmail_thread` in chronological order",
+            cron,
+        )
+        self.assertIn("reason `invalid_thread_review`", cron)
+        self.assertIn("do not return `NO_REPLY`", cron)
+
     def test_stage_three_is_the_autonomous_booking_stage(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         owner_guide = (ROOT / "references" / "OWNER-GUIDE.md").read_text(
