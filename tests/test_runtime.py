@@ -1042,7 +1042,11 @@ class EstimateDeliveryTransitionTests(unittest.TestCase):
                 "references": [],
             }
             record = estimate_record.create_initial_record(root, route, 1)
-            specification = {"piece_type": "ring", "metal": "18k yellow gold"}
+            specification = {
+                "piece_type": "ring",
+                "metal": "18k yellow gold",
+                "setting_style": "classic band",
+            }
             estimate_record.record_thread_review(
                 root,
                 record["estimate_id"],
@@ -2112,6 +2116,8 @@ class CronConfigTests(unittest.TestCase):
 
     def test_cron_prompt_handles_delegated_specs_and_hides_internal_reasoning(self) -> None:
         message = cron_config.render_message(Path("/workspace"), ROOT)
+        self.assertIn("complete monitoring runbook", message)
+        self.assertIn("Do not read the installed SKILL.md", message)
         self.assertIn("Customer-delegated quality choices are complete", message)
         self.assertIn("Budget is optional", message)
         self.assertIn(
@@ -2125,6 +2131,13 @@ class CronConfigTests(unittest.TestCase):
         self.assertIn("explicit post-estimate customer request", message)
         self.assertIn("post-estimate continuation", message)
         self.assertIn("combined rendering-and-appointment reply", message)
+        self.assertIn(
+            '{"design_change_assessment":"unchanged","intents":'
+            '["rendering_request","appointment_request"],"changed_fields":[]}',
+            message,
+        )
+        self.assertIn("Do not read SKILL.md for either command", message)
+        self.assertIn("Never record `not specified`", message)
         self.assertIn("owner alert before invoking", message)
         self.assertIn("never expose internal reasoning", message)
 
@@ -4369,6 +4382,7 @@ class EstimateRecordTests(unittest.TestCase):
                         "stone_type": "diamond",
                         "stone_count": 5,
                         "stone_origin": "delegated_to_jeweler",
+                        "setting_style": "delegated_to_jeweler",
                     },
                     "missing_required_fields": [],
                 },
@@ -4381,11 +4395,36 @@ class EstimateRecordTests(unittest.TestCase):
 
     def test_ask_always_accepts_explicit_lab_grown_origin(self) -> None:
         missing = estimate_record.enforce_specification_policies(
-            {"stone_type": "diamond", "stone_origin": "lab-grown"},
+            {
+                "stone_type": "diamond",
+                "stone_origin": "lab-grown",
+                "setting_style": "channel-set",
+            },
             [],
             {"defaults": {"stone_origin": "ask_always"}},
         )
         self.assertEqual(missing, [])
+
+    def test_setting_style_placeholder_remains_missing(self) -> None:
+        missing = estimate_record.enforce_specification_policies(
+            {"piece_type": "wedding_band", "setting": "not specified"},
+            [],
+            {"defaults": {}},
+        )
+        self.assertEqual(missing, ["setting_style"])
+
+    def test_descriptive_or_delegated_setting_style_is_complete(self) -> None:
+        for specification in (
+            {"piece_type": "wedding_band", "style": "classic with a little flare"},
+            {"piece_type": "ring", "setting_style": "delegated_to_jeweler"},
+        ):
+            with self.subTest(specification=specification):
+                self.assertEqual(
+                    estimate_record.enforce_specification_policies(
+                        specification, [], {"defaults": {}}
+                    ),
+                    [],
+                )
 
     def test_complete_thread_review_and_approval_evidence_are_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4553,6 +4592,34 @@ class EstimateRecordTests(unittest.TestCase):
             decision = reviewed["thread_reviews"][-1]
             self.assertEqual(decision["outcome"], "classification_malformed")
             self.assertEqual(decision["intents"], [])
+            self.assertEqual(
+                decision["classification_error_codes"],
+                ["changed_without_fields"],
+            )
+
+    def test_post_estimate_uncertain_without_intents_is_valid(self) -> None:
+        self.assertEqual(
+            estimate_record.classify_post_estimate_artifact(
+                {
+                    "design_change_assessment": "uncertain",
+                    "intents": [],
+                    "changed_fields": [],
+                }
+            ),
+            ("uncertain", [], [], False),
+        )
+
+    def test_post_estimate_error_codes_do_not_store_customer_content(self) -> None:
+        self.assertEqual(
+            estimate_record.post_estimate_artifact_error_codes(
+                {
+                    "design_change_assessment": "unchanged",
+                    "intents": ["rendering_request", "unexpected_customer_text"],
+                    "changed_fields": [],
+                }
+            ),
+            ["unsupported_intent"],
+        )
 
     def test_post_estimate_decision_is_bound_to_latest_source_and_specification(
         self,
