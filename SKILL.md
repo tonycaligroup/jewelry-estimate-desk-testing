@@ -387,6 +387,28 @@ Only when the activating Kolo user explicitly requests a clean test reset:
    deleted; they do not own or route active customer work.
 4. Leave the cron disabled until the user says the next test may begin.
 
+### Resetting business setup from scratch
+
+Only when the activating Kolo user explicitly requests a complete business
+setup reset, first complete the customer-state reset above and leave the same
+cron disabled. Then run:
+
+```bash
+python3 {baseDir}/scripts/business_state_reset.py \
+  --workspace '<absolute-workspace>' --confirmed-cron-disabled
+```
+
+The helper refuses to run unless customer records, claims, queue items, and
+customer work are already empty. It replaces the runtime shop profile with the
+unconfigured bundled template, removes the activating-owner binding and private
+spot-price caches, and returns the monitor to `prepared`. It preserves the
+installed skill, durable cron binding and job identity, disabled live cron
+configuration, and Gmail account authorization. Do not delete these files or
+edit their JSON directly. After the reset, conduct the normal first-time setup
+questions, bind the current Kolo user as approver, verify the live cron binding,
+activate the monitor with a fresh forward-only watermark, and enable the cron
+only when setup is complete and the user is ready.
+
 ### Cron discovery phase
 
 Discovery and processing are separate. A processing failure must not prevent a
