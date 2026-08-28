@@ -4586,11 +4586,21 @@ class EstimateRecordTests(unittest.TestCase):
 
     def test_setting_style_placeholder_remains_missing(self) -> None:
         missing = estimate_record.enforce_specification_policies(
-            {"piece_type": "wedding_band", "setting": "not specified"},
+            {"piece_type": "ring", "setting": "not specified", "stones": "diamond"},
             [],
             {"defaults": {}},
         )
         self.assertEqual(missing, ["setting_style"])
+
+    def test_setting_style_not_required_for_no_stone_pieces(self) -> None:
+        for stones_value in ("none", "no stones", "no-stones", "n/a", ""):
+            with self.subTest(stones=stones_value):
+                missing = estimate_record.enforce_specification_policies(
+                    {"piece_type": "pendant", "stones": stones_value},
+                    [],
+                    {"defaults": {}},
+                )
+                self.assertNotIn("setting_style", missing)
 
     def test_descriptive_or_delegated_setting_style_is_complete(self) -> None:
         for specification in (
