@@ -427,11 +427,15 @@ def record_thread_review(
             specification = record.get("specification")
             if not isinstance(specification, dict) or not specification:
                 raise ValueError("sent estimate is missing its approved specification")
+            classification_error_codes = post_estimate_artifact_error_codes(
+                snapshot.get("post_estimate_artifact")
+            )
             assessment, intents, changed_fields, malformed = (
                 classify_post_estimate_artifact(snapshot.get("post_estimate_artifact"))
             )
             if missing:
                 malformed = True
+                classification_error_codes.append("unexpected_missing_fields")
             if malformed:
                 outcome = "classification_malformed"
                 assessment = "uncertain"
@@ -469,6 +473,10 @@ def record_thread_review(
                     "changed_fields": changed_fields,
                 }
             )
+            if malformed:
+                evidence["classification_error_codes"] = sorted(
+                    set(classification_error_codes)
+                )
         reviews = record.setdefault("thread_reviews", [])
         if not isinstance(reviews, list):
             raise ValueError("thread_reviews must be an array")
@@ -483,6 +491,14 @@ def record_thread_review(
             comparable = dict(existing)
             comparable.pop("recorded_at", None)
             if comparable == evidence:
+                return record
+            legacy_evidence = dict(evidence)
+            legacy_evidence.pop("classification_error_codes", None)
+            if (
+                evidence.get("outcome") == "classification_malformed"
+                and "classification_error_codes" not in comparable
+                and comparable == legacy_evidence
+            ):
                 return record
             raise ValueError("conflicting thread review for source message")
         if record["status"] != "awaiting_specs" and not post_estimate:
@@ -505,12 +521,33 @@ def enforce_specification_policies(
     shop_profile: dict[str, Any] | None,
 ) -> list[str]:
     """Apply profile fields that the model may not treat as delegatable."""
+    result = set(missing)
+    placeholder_values = {
+        "",
+        "n/a",
+        "not applicable",
+        "not specified",
+        "tbd",
+        "to be determined",
+        "unknown",
+        "unspecified",
+    }
+    style_values = [
+        specification.get(key)
+        for key in ("setting_style", "setting", "style", "design_style")
+    ]
+    has_setting_style = any(
+        isinstance(value, str)
+        and value.strip().lower().replace("_", " ") not in placeholder_values
+        for value in style_values
+    ) or any(isinstance(value, dict) and bool(value) for value in style_values)
+    if not has_setting_style:
+        result.add("setting_style")
     if shop_profile is None:
-        return list(missing)
+        return sorted(result)
     defaults = shop_profile.get("defaults")
     if not isinstance(defaults, dict):
         raise ValueError("shop profile defaults must be an object")
-    result = set(missing)
     if defaults.get("stone_origin") == "ask_always":
         stone_origin = specification.get("stone_origin")
         normalized = (
@@ -541,43 +578,71 @@ def enforce_specification_policies(
     return sorted(result)
 
 
-def classify_post_estimate_artifact(
-    value: Any,
-) -> tuple[str, list[str], list[str], bool]:
-    """Return a normalized fail-closed post-estimate intent classification."""
-    if not isinstance(value, dict) or set(value) != {
+def post_estimate_artifact_error_codes(value: Any) -> list[str]:
+    """Return privacy-safe structural reasons for a malformed classification."""
+    if not isinstance(value, dict):
+        return ["not_object"]
+    expected_keys = {
         "design_change_assessment",
         "intents",
         "changed_fields",
-    }:
-        return "uncertain", [], [], True
+    }
+    errors: list[str] = []
+    if set(value) != expected_keys:
+        errors.append("unexpected_keys")
     assessment = value.get("design_change_assessment")
     intents = value.get("intents")
     changed_fields = value.get("changed_fields")
-    malformed = (
-        assessment not in POST_ESTIMATE_ASSESSMENTS
-        or not isinstance(intents, list)
-        or any(not isinstance(intent, str) for intent in intents)
-        or len(set(intents)) != len(intents)
-        or any(intent not in POST_ESTIMATE_INTENTS for intent in intents)
-        or not isinstance(changed_fields, list)
-        or any(not isinstance(field, str) for field in changed_fields)
-        or len(set(changed_fields)) != len(changed_fields)
-        or any(
-            not isinstance(field, str)
-            or not field
+    if assessment not in POST_ESTIMATE_ASSESSMENTS:
+        errors.append("invalid_assessment")
+    if not isinstance(intents, list):
+        errors.append("intents_not_array")
+    else:
+        if any(not isinstance(intent, str) for intent in intents):
+            errors.append("intent_not_string")
+        string_intents = [intent for intent in intents if isinstance(intent, str)]
+        if len(set(string_intents)) != len(string_intents):
+            errors.append("duplicate_intents")
+        if any(intent not in POST_ESTIMATE_INTENTS for intent in string_intents):
+            errors.append("unsupported_intent")
+    if not isinstance(changed_fields, list):
+        errors.append("changed_fields_not_array")
+    else:
+        if any(not isinstance(field, str) for field in changed_fields):
+            errors.append("changed_field_not_string")
+        string_fields = [field for field in changed_fields if isinstance(field, str)]
+        if len(set(string_fields)) != len(string_fields):
+            errors.append("duplicate_changed_fields")
+        if any(
+            not field
             or len(field) > 80
             or any(
                 character not in "abcdefghijklmnopqrstuvwxyz0123456789_.-"
                 for character in field
             )
-            for field in changed_fields
-        )
-        or (assessment == "changed" and not changed_fields)
-        or (assessment != "changed" and bool(changed_fields))
-    )
-    if malformed:
+            for field in string_fields
+        ):
+            errors.append("invalid_changed_field")
+        if assessment == "changed" and not changed_fields:
+            errors.append("changed_without_fields")
+        if assessment in {"unchanged", "uncertain"} and changed_fields:
+            errors.append("fields_without_changed")
+    return errors
+
+
+def classify_post_estimate_artifact(
+    value: Any,
+) -> tuple[str, list[str], list[str], bool]:
+    """Return a normalized fail-closed post-estimate intent classification."""
+    if post_estimate_artifact_error_codes(value):
         return "uncertain", [], [], True
+    assert isinstance(value, dict)
+    assessment = value.get("design_change_assessment")
+    intents = value.get("intents")
+    changed_fields = value.get("changed_fields")
+    assert isinstance(assessment, str)
+    assert isinstance(intents, list)
+    assert isinstance(changed_fields, list)
     return assessment, sorted(intents), sorted(changed_fields), False
 
 

@@ -475,13 +475,18 @@ For each returned message:
    python3 {baseDir}/scripts/gmail_classify.py "$WORK/gmail-message.json"
    ```
 
-   - `auto_reply`: complete as processed with no response or owner alert.
+   - `auto_reply`: complete as processed with no response or owner alert, using
+     `kolo_safe.py complete-claimed` so the helper resolves the authoritative
+     token, advances the no-side-effect phase, reconciles the queue, and cleans
+     claim work atomically.
    - `dsn_candidate`: correlate only against durable stored outbound provider
      evidence and the exact failed-recipient email. Never trust an estimate ID
      found only in message text. A verified failure becomes `manual_review` with
      reason `delivery_failed` and an event-specific owner alert. An uncorrelated
      DSN becomes `manual_review` with reason `uncorrelated_dsn`; never treat it as
-     a customer.
+     a customer. When the isolated cron has no bundled deterministic correlation
+     result, it must choose `uncorrelated_dsn` rather than inspect raw records or
+     guess.
    - `customer_or_uncertain`: derive and validate the customer route below.
    - Mailbox quota, authentication/security, or persistent system failures are
      `manual_review` with reason `system_actionable` and use the fixed generic
@@ -624,7 +629,10 @@ For each returned message:
      `rendering_request`, and `appointment_request`, and `changed_fields`.
      `changed_fields` must be nonempty only for `changed`; use `uncertain`
      whenever the newest customer wording might alter the approved design but
-     cannot be mapped confidently to a specification field.
+     cannot be mapped confidently to a specification field. Include every
+     explicit intent. A combined unchanged rendering-and-appointment request
+     is exactly `{"design_change_assessment":"unchanged","intents":
+     ["rendering_request","appointment_request"],"changed_fields":[]}`.
 
    Persist this review before drafting, pricing, requesting approval, or
    finalizing:
@@ -655,6 +663,8 @@ For each returned message:
    This command mirrors the review, finalizes acknowledgements, terminalizes
    changed, uncertain, or malformed classifications to manual review, and
    returns the only allowed next action for rendering and appointment intents.
+   Malformed evidence stores only bounded structural error codes, never the
+   raw model artifact or customer content.
    Do not retry a deterministic classification with rewritten JSON. The later
    appointment and rendering commands revalidate that the persisted decision
    belongs to the same estimate and claimed Gmail message before acting. Do not
@@ -821,6 +831,11 @@ Before sending a retail estimate, require all applicable fields:
 - Metal, karat, and color.
 - Finger size for rings; length/dimensions for chains, bracelets, or pendants.
 - Piece type and quantity and setting/style.
+
+A descriptive design phrase such as `classic band`, `solitaire`, or
+`channel-set` satisfies setting/style, as does an explicit delegation to the
+jeweler. Placeholder values such as `not specified`, `unspecified`, `unknown`,
+`tbd`, or `n/a` never satisfy it; the helper keeps `setting_style` missing.
 
 Color, clarity, cut, finish, and similar quality choices are complete when the
 customer explicitly delegates them to the jeweler; use shop defaults only as

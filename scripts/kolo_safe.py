@@ -472,6 +472,27 @@ def manual_review_claimed(
     return queue_item, result
 
 
+def complete_claimed(
+    monitor_root: Path,
+    claim_root: Path,
+    message_id: str,
+    claim_token: str | None,
+) -> dict[str, Any]:
+    """Terminalize a deterministically filtered message without side effects."""
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
+    inbox_claim.advance_phase(
+        claim_root, message_id, claim_token, "ready_to_finalize"
+    )
+    return inbox_monitor.finalize_item(
+        monitor_root,
+        message_id,
+        claim_root,
+        claim_token,
+        "processed",
+    )
+
+
 def reconcile_stale_claims(
     monitor_root: Path,
     claim_root: Path,
@@ -579,6 +600,11 @@ def main(argv: list[str] | None = None) -> int:
     manual_review_parser.add_argument("--message-id", required=True)
     manual_review_parser.add_argument("--claim-token")
     manual_review_parser.add_argument("--reason-code", required=True)
+    complete_parser = sub.add_parser("complete-claimed")
+    complete_parser.add_argument("--monitor-root", type=Path, required=True)
+    complete_parser.add_argument("--claim-root", type=Path, required=True)
+    complete_parser.add_argument("--message-id", required=True)
+    complete_parser.add_argument("--claim-token")
     stale_parser = sub.add_parser("reconcile-stale-claims")
     stale_parser.add_argument("--monitor-root", type=Path, required=True)
     stale_parser.add_argument("--claim-root", type=Path, required=True)
@@ -678,6 +704,19 @@ def main(argv: list[str] | None = None) -> int:
                         "notification_status": notification["status"],
                         "delivery_receipt_available": False,
                     },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        elif args.command == "complete-claimed":
+            print(
+                json.dumps(
+                    complete_claimed(
+                        args.monitor_root,
+                        args.claim_root,
+                        args.message_id,
+                        args.claim_token,
+                    ),
                     sort_keys=True,
                 )
             )
