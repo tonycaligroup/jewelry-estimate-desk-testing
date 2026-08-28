@@ -2114,6 +2114,14 @@ class CronConfigTests(unittest.TestCase):
         message = cron_config.render_message(Path("/workspace"), ROOT)
         self.assertIn("Customer-delegated quality choices are complete", message)
         self.assertIn("Budget is optional", message)
+        self.assertIn(
+            "the only authorized next steps are to write `cost_components` and call",
+            message,
+        )
+        self.assertIn(
+            "do not query the calendar, generate renderings, or ask the owner what to build",
+            message,
+        )
         self.assertIn("explicit post-estimate customer request", message)
         self.assertIn("post-estimate continuation", message)
         self.assertIn("combined rendering-and-appointment reply", message)
