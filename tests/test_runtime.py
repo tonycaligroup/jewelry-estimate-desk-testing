@@ -2267,6 +2267,12 @@ class CronConfigTests(unittest.TestCase):
         self.assertIn("with reason `uncorrelated_dsn`", message)
         self.assertIn("run the documented `spot_price.py` flow", message)
         self.assertIn("reason `invalid_cost_components`", message)
+        self.assertIn(
+            "unless both `scheduling.calendar` and at least one "
+            "`scheduling.windows` entry are configured",
+            message,
+        )
+        self.assertIn("Never invent `--window-days` for `calendar_query.py`", message)
         self.assertNotIn("Do not read the installed SKILL.md", message)
         self.assertIn("owner alert before invoking", message)
         self.assertIn("never expose internal reasoning", message)
@@ -3090,6 +3096,18 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertEqual(
                 Path(result["work_paths"]["rendering_image_1"]),
                 expected / "rendering-1.png",
+            )
+            self.assertEqual(
+                Path(result["work_paths"]["calendar_receipt"]),
+                expected / "calendar-receipt.json",
+            )
+            self.assertEqual(
+                Path(result["work_paths"]["calendar_candidate_slots"]),
+                expected / "calendar-candidate-slots.json",
+            )
+            self.assertEqual(
+                Path(result["work_paths"]["calendar_options"]),
+                expected / "calendar-options.json",
             )
 
     def test_native_rendering_is_materialized_only_into_claim_work(self) -> None:
@@ -4534,6 +4552,37 @@ class EstimateRecordTests(unittest.TestCase):
             {"defaults": {"stone_origin": "ask_always"}},
         )
         self.assertEqual(missing, [])
+
+    def test_ask_always_skips_origin_for_structured_no_stone_values(self) -> None:
+        profile = {"defaults": {"stone_origin": "ask_always"}}
+        for key, value in (
+            ("stones", "none"),
+            ("stones", "no stones"),
+            ("stones", False),
+            ("stones", []),
+            ("stone_type", "not applicable"),
+            ("stone_count", 0),
+        ):
+            with self.subTest(key=key, value=value):
+                missing = estimate_record.enforce_specification_policies(
+                    {key: value, "setting_style": "classic dome"}, [], profile
+                )
+                self.assertNotIn("stone_origin", missing)
+
+    def test_ask_always_requires_origin_for_structured_stone_values(self) -> None:
+        profile = {"defaults": {"stone_origin": "ask_always"}}
+        for key, value in (
+            ("stones", "diamond"),
+            ("stones", True),
+            ("stones", [{"type": "diamond"}]),
+            ("stone_type", "diamond"),
+            ("stone_count", 1),
+        ):
+            with self.subTest(key=key, value=value):
+                missing = estimate_record.enforce_specification_policies(
+                    {key: value, "setting_style": "solitaire"}, [], profile
+                )
+                self.assertIn("stone_origin", missing)
 
     def test_setting_style_placeholder_remains_missing(self) -> None:
         missing = estimate_record.enforce_specification_policies(

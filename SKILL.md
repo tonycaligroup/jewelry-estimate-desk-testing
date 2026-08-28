@@ -881,9 +881,36 @@ Inbox monitoring step 6. A fact supplied in the initiating inquiry or any
 later customer reply is known and must not be requested again.
 
 When fields are missing, use `templates/spec-gate-email.md`: one friendly,
-price-free, batched request; do not re-ask known facts; offer two real open
-slots with timezone only after `appointment_options.py` validates a fresh live
-calendar receipt created by `calendar_query.py`. At Stage 1, draft it. At Stage 2 or 3, send it automatically
+price-free, batched request; do not re-ask known facts. Offer two real open
+slots with timezone only when `scheduling.calendar` is configured and
+`scheduling.windows` contains declared availability. Otherwise omit appointment
+slots from the specification request and do not call `calendar_query.py` or
+treat their absence as an error. When both are configured, run exactly:
+
+```bash
+python3 {baseDir}/scripts/calendar_query.py \
+  --time-min '<ISO timestamp with timezone>' \
+  --time-max '<later ISO timestamp with timezone>' \
+  --timezone '<profile scheduling.timezone>' \
+  --calendar-id '<profile scheduling.calendar>' \
+  --output '<work_paths.calendar_receipt>'
+```
+
+`calendar_query.py` does not support `--window-days`. Write candidate slots
+derived only from the declared windows inside those query bounds to
+`work_paths.calendar_candidate_slots`, then run exactly:
+
+```bash
+python3 {baseDir}/scripts/appointment_options.py \
+  '<work_paths.calendar_receipt>' \
+  '<work_paths.calendar_candidate_slots>' \
+  '<work_paths.calendar_options>' \
+  --timezone '<profile scheduling.timezone>' \
+  --window-days '<profile scheduling.meeting_offer_window_days>'
+```
+
+Use slots only from the validated `work_paths.calendar_options`. At Stage 1,
+draft the specification request. At Stage 2 or 3, send it automatically
 with `workflow_safe.py send-spec-followup`; never ask the owner whether to
 draft, send, or continue routing.
 For Gmail, send it only through the Email reply invariant above.
