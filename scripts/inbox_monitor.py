@@ -56,6 +56,9 @@ WORK_ARTIFACTS = {
     "approval_request": "approval-request.json",
     "appointment_intent": "appointment-intent.json",
     "appointment_approval": "appointment-approval.json",
+    "calendar_receipt": "calendar-receipt.json",
+    "calendar_candidate_slots": "calendar-candidate-slots.json",
+    "calendar_options": "calendar-options.json",
 }
 
 

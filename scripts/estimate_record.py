@@ -555,15 +555,41 @@ def enforce_specification_policies(
             if isinstance(stone_origin, str)
             else ""
         )
+        no_stone_values = {
+            "",
+            "0",
+            "false",
+            "n/a",
+            "no",
+            "no-stones",
+            "none",
+            "not-applicable",
+        }
+
+        def indicates_stones(value: Any) -> bool:
+            if isinstance(value, str):
+                normalized_value = (
+                    value.strip().lower().replace("_", "-").replace(" ", "-")
+                )
+                return normalized_value not in no_stone_values
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (list, dict)):
+                return bool(value)
+            if isinstance(value, (int, float)):
+                return value > 0
+            return False
+
         stone_type = specification.get("stone_type")
+        stones = specification.get("stones")
         has_stones = (
-            isinstance(stone_type, str)
-            and stone_type.strip().lower()
-            not in {"", "none", "no-stones", "not-applicable", "n/a"}
-        ) or bool(specification.get("stones")) or (
-            isinstance(specification.get("stone_count"), (int, float))
-            and not isinstance(specification.get("stone_count"), bool)
-            and specification["stone_count"] > 0
+            indicates_stones(stone_type)
+            or indicates_stones(stones)
+            or (
+                isinstance(specification.get("stone_count"), (int, float))
+                and not isinstance(specification.get("stone_count"), bool)
+                and specification["stone_count"] > 0
+            )
         )
         explicit_origins = {
             "natural",
