@@ -2168,8 +2168,11 @@ class CronConfigTests(unittest.TestCase):
 
     def test_cron_prompt_handles_delegated_specs_and_hides_internal_reasoning(self) -> None:
         message = cron_config.render_message(Path("/workspace"), ROOT)
-        self.assertIn("complete monitoring runbook", message)
-        self.assertIn("Do not read the installed SKILL.md", message)
+        self.assertIn(
+            "read the installed jewelry-estimate-desk-testing SKILL.md completely",
+            message,
+        )
+        self.assertIn("authoritative workflow", message)
         self.assertIn("Customer-delegated quality choices are complete", message)
         self.assertIn("Budget is optional", message)
         self.assertIn(
@@ -2188,14 +2191,13 @@ class CronConfigTests(unittest.TestCase):
             '["rendering_request","appointment_request"],"changed_fields":[]}',
             message,
         )
-        self.assertIn("Do not read SKILL.md for either command", message)
+        self.assertIn("Use these reproduced commands exactly", message)
         self.assertIn("Never record `not specified`", message)
         self.assertIn("kolo_safe.py complete-claimed --monitor-root", message)
         self.assertIn("with reason `uncorrelated_dsn`", message)
-        self.assertNotIn("Follow the installed SKILL.md rules", message)
-        self.assertNotIn("command in SKILL.md", message)
-        self.assertNotIn("use the installed SKILL.md", message)
-        self.assertNotIn("as defined in SKILL.md", message)
+        self.assertIn("run the documented `spot_price.py` flow", message)
+        self.assertIn("reason `invalid_cost_components`", message)
+        self.assertNotIn("Do not read the installed SKILL.md", message)
         self.assertIn("owner alert before invoking", message)
         self.assertIn("never expose internal reasoning", message)
 
