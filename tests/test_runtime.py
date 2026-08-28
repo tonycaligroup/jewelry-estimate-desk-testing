@@ -1492,7 +1492,10 @@ class SafeCliTests(unittest.TestCase):
             stored = inbox_claim.read_state(
                 inbox_claim.claim_path(root, "gmail-monitor-review")
             )
-            self.assertEqual(stored["owner_notification"]["status"], "sent")
+            self.assertEqual(
+                stored["manual_review_notification"]["status"], "sent"
+            )
+            self.assertNotIn("owner_notification", stored)
             message = runner.call_args.args[0][-1]
             self.assertIn("unresolved manual-review item", message)
             self.assertIn("Ask Kolo", message)
@@ -1537,7 +1540,59 @@ class SafeCliTests(unittest.TestCase):
             stored = inbox_claim.read_state(
                 inbox_claim.claim_path(root, "gmail-monitor-uncertain")
             )
-            self.assertEqual(stored["owner_notification"]["status"], "uncertain")
+            self.assertEqual(
+                stored["manual_review_notification"]["status"], "uncertain"
+            )
+
+    def test_manual_review_notification_coexists_with_customer_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            monitor_root = Path(directory) / "monitor"
+            claim_root = Path(directory) / "claims"
+            message_id = "gmail-notification-slots"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(monitor_root, message_id),
+                {
+                    "schema_version": 1,
+                    "gmail_message_id": message_id,
+                    "gmail_message_id_sha256": inbox_monitor.message_key(message_id),
+                    "thread_id": "thread-notification-slots",
+                    "internal_date_ms": 1_100,
+                    "discovery_status": "complete",
+                    "processing_status": "processing",
+                    "processing_started_at": "2026-08-25T00:00:00+00:00",
+                },
+            )
+            _, claim = inbox_claim.acquire(claim_root, message_id)
+            runner = Mock(
+                return_value=subprocess.CompletedProcess([], 0, "accepted\n", "")
+            )
+            kolo_safe.notify_owner_claimed(
+                claim_root,
+                message_id,
+                claim["claim_token"],
+                f"customer_replied:jed-0123456789abcdef:{message_id}",
+                "jed-0123456789abcdef",
+                "customer-replied",
+                runner=runner,
+            )
+
+            kolo_safe.manual_review_claimed(
+                monitor_root,
+                claim_root,
+                message_id,
+                claim["claim_token"],
+                "classification_uncertain",
+                runner=runner,
+            )
+
+            stored = inbox_claim.read_state(
+                inbox_claim.claim_path(claim_root, message_id)
+            )
+            self.assertEqual(stored["owner_notification"]["status"], "sent")
+            self.assertEqual(
+                stored["manual_review_notification"]["status"], "sent"
+            )
+            self.assertEqual(runner.call_count, 2)
 
     def test_manual_review_is_durable_before_owner_notification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1577,7 +1632,9 @@ class SafeCliTests(unittest.TestCase):
             self.assertEqual(queue["processing_status"], "manual_review")
             self.assertEqual(queue["reason_code"], "missing_thread_ownership")
             self.assertEqual(stored_claim["status"], "manual_review")
-            self.assertEqual(stored_claim["owner_notification"]["status"], "uncertain")
+            self.assertEqual(
+                stored_claim["manual_review_notification"]["status"], "uncertain"
+            )
 
     def test_complete_claimed_terminalizes_filtered_message(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2185,6 +2242,42 @@ class InboxClaimTests(unittest.TestCase):
             self.assertEqual(
                 inbox_claim.read_state(sent_path)["owner_notification"]["status"],
                 "sent",
+            )
+
+    def test_stale_reconcile_covers_both_notification_slots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            now = datetime(2026, 8, 26, 18, 0, tzinfo=timezone.utc)
+            _, claim = inbox_claim.acquire(root, "both-notification-slots")
+            inbox_claim.begin_notification(
+                root,
+                "both-notification-slots",
+                claim["claim_token"],
+                "customer_replied:jed-0123456789abcdef:both-notification-slots",
+            )
+            inbox_claim.begin_notification(
+                root,
+                "both-notification-slots",
+                claim["claim_token"],
+                "manual_review:classification_uncertain:both-notification-slots",
+                notification_field="manual_review_notification",
+            )
+            path = inbox_claim.claim_path(root, "both-notification-slots")
+            state = inbox_claim.read_state(path)
+            stale_time = (now - timedelta(seconds=601)).isoformat()
+            state["owner_notification"]["updated_at"] = stale_time
+            state["manual_review_notification"]["updated_at"] = stale_time
+            inbox_claim.write_state(path, state)
+
+            result = inbox_claim.reconcile_stale_notifications(root, 600, now)
+
+            self.assertEqual(
+                result, {"claims_scanned": 1, "pending": 2, "reconciled": 2}
+            )
+            stored = inbox_claim.read_state(path)
+            self.assertEqual(stored["owner_notification"]["status"], "uncertain")
+            self.assertEqual(
+                stored["manual_review_notification"]["status"], "uncertain"
             )
 
 
