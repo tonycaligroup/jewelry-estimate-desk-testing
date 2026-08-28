@@ -73,6 +73,23 @@ def internal_cost_sheet(customer_price: float = 4200) -> dict:
     }
 
 
+def cost_components() -> dict:
+    return {
+        "metal_lines": [
+            {
+                "metal": "18k yellow gold",
+                "quantity_grams": 10,
+                "unit_cost": 60,
+            }
+        ],
+        "stone_lines": [
+            {"stone": "oval diamond", "quantity": 1, "unit_cost": 2000}
+        ],
+        "labor_lines": [{"task": "bench labor", "hours": 5, "rate": 100}],
+        "other_hard_cost_lines": [],
+    }
+
+
 def valid_profile() -> dict:
     return {
         "schema_version": 1,
@@ -300,6 +317,18 @@ class ApprovalTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertTrue(any("changed" in error for error in errors))
 
+    def test_cost_components_build_the_exact_owner_only_schema(self) -> None:
+        sheet = approval_guard.build_internal_cost_sheet(cost_components(), 4200)
+        self.assertEqual(sheet, internal_cost_sheet())
+        self.assertEqual(sheet["metal_lines"][0]["total_cost"], 600)
+        self.assertEqual(sheet["hard_cost_total"], 3100)
+
+    def test_cost_component_schema_fails_closed(self) -> None:
+        malformed = cost_components()
+        malformed["metal"] = malformed.pop("metal_lines")
+        with self.assertRaisesRegex(ValueError, "cost_components contains"):
+            approval_guard.build_internal_cost_sheet(malformed, 4200)
+
 
 class ActivationBindingTests(unittest.TestCase):
     def test_activating_user_is_bound_privately_and_loaded_for_approval(self) -> None:
@@ -468,6 +497,23 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
             estimate_record.validate_approval_request(
                 record_root, record["estimate_id"], source_message_id, approval
             )
+
+    def test_preparation_builds_cost_sheet_from_components(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            record_root = Path(directory) / "records"
+            source_message_id = "latest-reply"
+            record = self.reviewed_record(record_root, source_message_id)
+            candidate = self.candidate(record["estimate_id"])
+            candidate.pop("internal_cost_sheet")
+            candidate["cost_components"] = cost_components()
+            state = estimate_record.prepare_approval_state(
+                record_root,
+                record["estimate_id"],
+                source_message_id,
+                candidate,
+            )
+            self.assertEqual(state["internal_cost_sheet"], internal_cost_sheet(2500))
+            self.assertNotIn("cost_components", state)
 
     def test_invalid_existing_artifact_is_rejected_before_kolo(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4295,6 +4341,43 @@ class EstimateRecordTests(unittest.TestCase):
                 estimate_record.record_thread_review(
                     root, record["estimate_id"], missing_initial
                 )
+
+    def test_ask_always_stone_origin_cannot_be_delegated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(
+                root, self.route(), 1_787_760_000_000
+            )
+            profile = {"defaults": {"stone_origin": "ask_always"}}
+            reviewed = estimate_record.record_thread_review(
+                root,
+                record["estimate_id"],
+                {
+                    "thread_id": "gmail-thread",
+                    "source_message_id": "customer-reply",
+                    "message_ids": ["gmail-initial-message", "customer-reply"],
+                    "specification": {
+                        "piece_type": "wedding_band",
+                        "stone_type": "diamond",
+                        "stone_count": 5,
+                        "stone_origin": "delegated_to_jeweler",
+                    },
+                    "missing_required_fields": [],
+                },
+                profile,
+            )
+            self.assertEqual(reviewed["missing_required_fields"], ["stone_origin"])
+            self.assertEqual(
+                reviewed["thread_reviews"][-1]["outcome"], "awaiting_specs"
+            )
+
+    def test_ask_always_accepts_explicit_lab_grown_origin(self) -> None:
+        missing = estimate_record.enforce_specification_policies(
+            {"stone_type": "diamond", "stone_origin": "lab-grown"},
+            [],
+            {"defaults": {"stone_origin": "ask_always"}},
+        )
+        self.assertEqual(missing, [])
 
     def test_complete_thread_review_and_approval_evidence_are_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

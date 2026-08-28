@@ -379,6 +379,7 @@ def record_thread_review(
     root: Path,
     estimate_id: str,
     snapshot: dict[str, Any],
+    shop_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a privacy-minimal full-thread specification review."""
     thread_id = validate_provider_id(snapshot.get("thread_id"), "thread_id")
@@ -446,6 +447,9 @@ def record_thread_review(
             specification = snapshot.get("specification")
             if not isinstance(specification, dict) or not specification:
                 raise ValueError("specification must be a non-empty object")
+            missing = enforce_specification_policies(
+                specification, missing, shop_profile
+            )
             outcome = "awaiting_specs" if missing else "specs_complete"
         evidence = {
             "source_message_id_sha256": sha256_text(source_message_id),
@@ -493,6 +497,48 @@ def record_thread_review(
             record["status"] = "awaiting_specs"
         write_object(path, record)
         return record
+
+
+def enforce_specification_policies(
+    specification: dict[str, Any],
+    missing: list[str],
+    shop_profile: dict[str, Any] | None,
+) -> list[str]:
+    """Apply profile fields that the model may not treat as delegatable."""
+    if shop_profile is None:
+        return list(missing)
+    defaults = shop_profile.get("defaults")
+    if not isinstance(defaults, dict):
+        raise ValueError("shop profile defaults must be an object")
+    result = set(missing)
+    if defaults.get("stone_origin") == "ask_always":
+        stone_origin = specification.get("stone_origin")
+        normalized = (
+            stone_origin.strip().lower().replace("_", "-").replace(" ", "-")
+            if isinstance(stone_origin, str)
+            else ""
+        )
+        stone_type = specification.get("stone_type")
+        has_stones = (
+            isinstance(stone_type, str)
+            and stone_type.strip().lower()
+            not in {"", "none", "no-stones", "not-applicable", "n/a"}
+        ) or bool(specification.get("stones")) or (
+            isinstance(specification.get("stone_count"), (int, float))
+            and not isinstance(specification.get("stone_count"), bool)
+            and specification["stone_count"] > 0
+        )
+        explicit_origins = {
+            "natural",
+            "lab",
+            "lab-grown",
+            "lab-created",
+            "laboratory-grown",
+            "laboratory-created",
+        }
+        if has_stones and normalized not in explicit_origins:
+            result.add("stone_origin")
+    return sorted(result)
 
 
 def classify_post_estimate_artifact(
@@ -769,13 +815,24 @@ def prepare_approval_state(
         if record.get("status") != "awaiting_specs":
             raise ValueError("approval preparation requires awaiting_specs status")
         state = dict(candidate)
+        cost_components = candidate.get("cost_components")
+        internal_cost_sheet = candidate.get("internal_cost_sheet")
+        if cost_components is not None:
+            if internal_cost_sheet is not None:
+                raise ValueError(
+                    "current state must contain cost_components or internal_cost_sheet, not both"
+                )
+            internal_cost_sheet = approval_guard.build_internal_cost_sheet(
+                cost_components, candidate.get("proposed_price")
+            )
+            state.pop("cost_components", None)
         state.update(
             {
                 "estimate_id": record["estimate_id"],
                 "route": record["route"],
                 "specification": record.get("specification"),
                 "proposed_price": candidate.get("proposed_price"),
-                "internal_cost_sheet": candidate.get("internal_cost_sheet"),
+                "internal_cost_sheet": internal_cost_sheet,
             }
         )
         approval_guard.binding_payload(state)
@@ -1331,6 +1388,7 @@ def main(argv: list[str] | None = None) -> int:
     thread_review = sub.add_parser("record-thread-review")
     thread_review.add_argument("--estimate-id", required=True)
     thread_review.add_argument("--snapshot", type=Path, required=True)
+    thread_review.add_argument("--shop-profile", type=Path, required=True)
     thread_review.add_argument(
         "--record-root", type=Path, default=default_record_root()
     )
@@ -1385,7 +1443,10 @@ def main(argv: list[str] | None = None) -> int:
                 write_object(args.output, record)
         elif args.command == "record-thread-review":
             record = record_thread_review(
-                args.record_root, args.estimate_id, read_object(args.snapshot)
+                args.record_root,
+                args.estimate_id,
+                read_object(args.snapshot),
+                read_object(args.shop_profile),
             )
             if args.output is not None:
                 write_object(args.output, record)

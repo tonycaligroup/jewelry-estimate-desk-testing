@@ -21,6 +21,12 @@ BINDING_FIELDS = (
     "internal_cost_sheet",
 )
 ESTIMATE_ID_RE = re.compile(r"^jed-[0-9a-f]{16}$")
+COST_COMPONENT_FIELDS = {
+    "metal_lines",
+    "stone_lines",
+    "labor_lines",
+    "other_hard_cost_lines",
+}
 
 
 def canonical_json(value: Any) -> str:
@@ -48,6 +54,62 @@ def _money(value: Any, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
         raise ValueError(f"{field} must be a non-negative number")
     return float(value)
+
+
+def build_internal_cost_sheet(
+    components: Any, proposed_price: float
+) -> dict[str, Any]:
+    """Build the exact approval schema from model-authored cost components."""
+    if not isinstance(components, dict) or set(components) != COST_COMPONENT_FIELDS:
+        raise ValueError("cost_components contains missing or unsupported fields")
+    line_specs = {
+        "metal_lines": ("metal", "quantity_grams", "unit_cost"),
+        "stone_lines": ("stone", "quantity", "unit_cost"),
+        "labor_lines": ("task", "hours", "rate"),
+        "other_hard_cost_lines": ("label", "total_cost"),
+    }
+    result: dict[str, Any] = {}
+    hard_cost_total = 0.0
+    for group, fields in line_specs.items():
+        lines = components[group]
+        if not isinstance(lines, list):
+            raise ValueError(f"cost_components.{group} must be an array")
+        built_lines: list[dict[str, Any]] = []
+        for index, line in enumerate(lines):
+            if not isinstance(line, dict) or set(line) != set(fields):
+                raise ValueError(
+                    f"cost_components.{group}[{index}] contains missing or unsupported fields"
+                )
+            label = line[fields[0]]
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(
+                    f"cost_components.{group}[{index}].{fields[0]} must be text"
+                )
+            built = dict(line)
+            if group == "other_hard_cost_lines":
+                total = _money(
+                    line["total_cost"],
+                    f"cost_components.{group}[{index}].total_cost",
+                )
+            else:
+                quantity_field, unit_field = fields[1], fields[2]
+                quantity = _money(
+                    line[quantity_field],
+                    f"cost_components.{group}[{index}].{quantity_field}",
+                )
+                unit_cost = _money(
+                    line[unit_field],
+                    f"cost_components.{group}[{index}].{unit_field}",
+                )
+                total = round(quantity * unit_cost, 2)
+                built["total_cost"] = total
+            hard_cost_total = round(hard_cost_total + total, 2)
+            built_lines.append(built)
+        result[group] = built_lines
+    result["hard_cost_total"] = hard_cost_total
+    result["customer_price"] = _money(proposed_price, "proposed_price")
+    validate_internal_cost_sheet(result, proposed_price)
+    return result
 
 
 def validate_internal_cost_sheet(value: Any, proposed_price: float) -> dict[str, Any]:
