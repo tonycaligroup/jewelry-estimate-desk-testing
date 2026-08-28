@@ -422,10 +422,14 @@ def notify_monitor_claimed(
         claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
     command = build_notify_monitor(event)
     acquired, state = inbox_claim.acquire_notification(
-        claim_root, message_id, claim_token, notification_key
+        claim_root,
+        message_id,
+        claim_token,
+        notification_key,
+        notification_field="manual_review_notification",
     )
     if not acquired:
-        status = state["owner_notification"]["status"]
+        status = state["manual_review_notification"]["status"]
         return subprocess.CompletedProcess(
             command, 0, f"notification already {status}\n", ""
         )
@@ -433,12 +437,22 @@ def notify_monitor_claimed(
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):
         inbox_claim.finish_notification(
-            claim_root, message_id, claim_token, "uncertain"
+            claim_root,
+            message_id,
+            claim_token,
+            "uncertain",
+            notification_field="manual_review_notification",
         )
         raise
     # `sent` records successful CLI acceptance. Kolo exposes no independent
     # user-visible delivery receipt for this command.
-    inbox_claim.finish_notification(claim_root, message_id, claim_token, "sent")
+    inbox_claim.finish_notification(
+        claim_root,
+        message_id,
+        claim_token,
+        "sent",
+        notification_field="manual_review_notification",
+    )
     return result
 
 
@@ -695,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             notification = inbox_claim.read_state(
                 inbox_claim.claim_path(args.claim_root, args.message_id)
-            )["owner_notification"]
+            )["manual_review_notification"]
             print(
                 json.dumps(
                     {

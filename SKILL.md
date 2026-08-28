@@ -693,7 +693,9 @@ For each returned message:
    re-ask any field present anywhere in the thread.
 
    If `missing_required_fields` is nonempty, follow the specification-request
-   branch and persist its same-source send receipt. If it is empty, continue
+   branch and persist its same-source send receipt. Treat that returned list as
+   authoritative: never rewrite or retry the same source-message thread review
+   to clear, replace, or invent a returned missing field. If it is empty, continue
    through internal pricing and the claimed owner-approval request in the same
    run. Notification alone is never a completed customer reply.
 7. Complete normal branches only through `workflow_safe.py`; do not split

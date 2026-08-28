@@ -27,6 +27,7 @@ from typing import Any, Iterator
 SCHEMA_VERSION = 1
 TERMINAL_STATUSES = {"processed", "manual_review"}
 NOTIFICATION_STATUSES = {"pending", "sent", "failed_pre_delivery", "uncertain"}
+NOTIFICATION_FIELDS = ("owner_notification", "manual_review_notification")
 PROCESSING_PHASES = {
     "claimed": 0,
     "routed": 1,
@@ -102,6 +103,7 @@ def validate_state(state: Any) -> dict[str, Any]:
         "finished_at",
         "reason_code",
         "owner_notification",
+        "manual_review_notification",
         "processing_phase",
         "phase_entered_at",
         "last_progress_at",
@@ -139,23 +141,29 @@ def validate_state(state: Any) -> dict[str, Any]:
         )
     ):
         raise ValueError("invalid claim reason_code")
-    notification = state.get("owner_notification")
-    if notification is not None:
+    for notification_field in NOTIFICATION_FIELDS:
+        notification = state.get(notification_field)
+        if notification is None:
+            continue
         if not isinstance(notification, dict):
-            raise ValueError("owner_notification must be an object")
+            raise ValueError(f"{notification_field} must be an object")
         if set(notification) != {"key", "status", "attempts", "updated_at"}:
             raise ValueError(
-                "owner_notification contains missing or unsupported fields"
+                f"{notification_field} contains missing or unsupported fields"
             )
         if notification.get("status") not in NOTIFICATION_STATUSES:
-            raise ValueError("invalid owner notification status")
+            raise ValueError(f"invalid {notification_field} status")
         if not isinstance(notification.get("key"), str):
-            raise ValueError("invalid owner notification key")
+            raise ValueError(f"invalid {notification_field} key")
         if (
             type(notification.get("attempts")) is not int
             or notification["attempts"] < 1
         ):
-            raise ValueError("invalid owner notification attempts")
+            raise ValueError(f"invalid {notification_field} attempts")
+        if not isinstance(notification.get("updated_at"), str) or not notification[
+            "updated_at"
+        ]:
+            raise ValueError(f"invalid {notification_field} updated_at")
     phase = state.get("processing_phase")
     if phase is not None and phase not in PROCESSING_PHASES:
         raise ValueError("invalid processing phase")
@@ -339,12 +347,13 @@ def state_timestamp(state: dict[str, Any]) -> datetime:
 
 
 def has_ambiguous_external_action(state: dict[str, Any]) -> bool:
-    notification = state.get("owner_notification")
-    if isinstance(notification, dict) and notification.get("status") in {
-        "pending",
-        "uncertain",
-    }:
-        return True
+    for notification_field in NOTIFICATION_FIELDS:
+        notification = state.get(notification_field)
+        if isinstance(notification, dict) and notification.get("status") in {
+            "pending",
+            "uncertain",
+        }:
+            return True
     return any(
         action.get("status") in {"pending", "uncertain"}
         for action in state.get("external_actions", {}).values()
@@ -439,7 +448,11 @@ def authorize_legacy_resume(
             raise ValueError(
                 "legacy claim is not stale enough for manual authorization"
             )
-        if state.get("owner_notification") is not None or state.get("external_actions"):
+        if (
+            state.get("owner_notification") is not None
+            or state.get("manual_review_notification") is not None
+            or state.get("external_actions")
+        ):
             raise ValueError(
                 "legacy claim contains action evidence; manual review required"
             )
@@ -627,8 +640,15 @@ def finish(
 
 
 def acquire_notification(
-    root: Path, message_id: str, token: str, notification_key: str
+    root: Path,
+    message_id: str,
+    token: str,
+    notification_key: str,
+    *,
+    notification_field: str = "owner_notification",
 ) -> tuple[bool, dict[str, Any]]:
+    if notification_field not in NOTIFICATION_FIELDS:
+        raise ValueError("invalid notification field")
     path = claim_path(root, message_id)
     with state_lock(path):
         state = read_state(path)
@@ -643,7 +663,7 @@ def acquire_notification(
             )
         ):
             raise ValueError("invalid notification key")
-        prior = state.get("owner_notification")
+        prior = state.get(notification_field)
         attempts = 1
         if prior is not None:
             if prior.get("key") != notification_key:
@@ -662,7 +682,7 @@ def acquire_notification(
             else:
                 raise ValueError(f"notification is already {prior.get('status')}")
         now = datetime.now(timezone.utc).isoformat()
-        state["owner_notification"] = {
+        state[notification_field] = {
             "key": notification_key,
             "status": "pending",
             "attempts": attempts,
@@ -674,19 +694,37 @@ def acquire_notification(
 
 
 def begin_notification(
-    root: Path, message_id: str, token: str, notification_key: str
+    root: Path,
+    message_id: str,
+    token: str,
+    notification_key: str,
+    *,
+    notification_field: str = "owner_notification",
 ) -> dict[str, Any]:
-    acquired, state = acquire_notification(root, message_id, token, notification_key)
+    acquired, state = acquire_notification(
+        root,
+        message_id,
+        token,
+        notification_key,
+        notification_field=notification_field,
+    )
     if not acquired:
         raise ValueError(
-            f"notification is already {state['owner_notification']['status']}"
+            f"notification is already {state[notification_field]['status']}"
         )
     return state
 
 
 def finish_notification(
-    root: Path, message_id: str, token: str, status: str
+    root: Path,
+    message_id: str,
+    token: str,
+    status: str,
+    *,
+    notification_field: str = "owner_notification",
 ) -> dict[str, Any]:
+    if notification_field not in NOTIFICATION_FIELDS:
+        raise ValueError("invalid notification field")
     if status not in {"sent", "failed_pre_delivery", "uncertain"}:
         raise ValueError("invalid terminal notification status")
     path = claim_path(root, message_id)
@@ -694,7 +732,7 @@ def finish_notification(
         state = read_state(path)
         if state.get("claim_token") != token:
             raise ValueError("claim token does not match")
-        notification = state.get("owner_notification")
+        notification = state.get(notification_field)
         if (
             not isinstance(notification, dict)
             or notification.get("status") != "pending"
@@ -708,11 +746,18 @@ def finish_notification(
         return state
 
 
-def reconcile_notification(root: Path, message_id: str) -> dict[str, Any]:
+def reconcile_notification(
+    root: Path,
+    message_id: str,
+    *,
+    notification_field: str = "owner_notification",
+) -> dict[str, Any]:
+    if notification_field not in NOTIFICATION_FIELDS:
+        raise ValueError("invalid notification field")
     path = claim_path(root, message_id)
     with state_lock(path):
         state = read_state(path)
-        notification = state.get("owner_notification")
+        notification = state.get(notification_field)
         if isinstance(notification, dict) and notification.get("status") == "pending":
             notification["status"] = "uncertain"
             notification["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -740,26 +785,34 @@ def reconcile_stale_notifications(
         with state_lock(path):
             state = read_state(path)
             summary["claims_scanned"] += 1
-            notification = state.get("owner_notification")
-            if (
-                not isinstance(notification, dict)
-                or notification.get("status") != "pending"
-            ):
-                continue
-            summary["pending"] += 1
-            try:
-                updated_at = datetime.fromisoformat(notification["updated_at"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError("invalid owner notification updated_at") from exc
-            if updated_at.tzinfo is None:
-                raise ValueError("owner notification updated_at must include timezone")
-            if (current - updated_at).total_seconds() < minimum_age_seconds:
-                continue
-            notification["status"] = "uncertain"
-            notification["updated_at"] = current.isoformat()
-            state["last_progress_at"] = notification["updated_at"]
-            write_state(path, state)
-            summary["reconciled"] += 1
+            changed = False
+            for notification_field in NOTIFICATION_FIELDS:
+                notification = state.get(notification_field)
+                if (
+                    not isinstance(notification, dict)
+                    or notification.get("status") != "pending"
+                ):
+                    continue
+                summary["pending"] += 1
+                try:
+                    updated_at = datetime.fromisoformat(notification["updated_at"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"invalid {notification_field} updated_at"
+                    ) from exc
+                if updated_at.tzinfo is None:
+                    raise ValueError(
+                        f"{notification_field} updated_at must include timezone"
+                    )
+                if (current - updated_at).total_seconds() < minimum_age_seconds:
+                    continue
+                notification["status"] = "uncertain"
+                notification["updated_at"] = current.isoformat()
+                state["last_progress_at"] = notification["updated_at"]
+                summary["reconciled"] += 1
+                changed = True
+            if changed:
+                write_state(path, state)
     return summary
 
 
