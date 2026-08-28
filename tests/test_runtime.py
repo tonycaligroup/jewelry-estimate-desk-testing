@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
 import activation_binding
+import business_state_reset
 import customer_content_guard
 import cron_config
 import customer_state_reset
@@ -882,6 +883,75 @@ class CustomerStateResetTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unexpected reset target"):
                 customer_state_reset.reset(root, now_ms=2_000)
             self.assertTrue(list((desk / "records").glob("jed-*.json")))
+
+
+class BusinessStateResetTests(unittest.TestCase):
+    def build_workspace(self, root: Path) -> Path:
+        desk = root / "estimate-desk"
+        desk.mkdir(parents=True)
+        (desk / "shop-profile.json").write_text(
+            json.dumps(valid_profile()), encoding="utf-8"
+        )
+        monitor_root = desk / "inbox-monitor"
+        activation_binding.create(
+            activation_binding.binding_path(monitor_root),
+            "agent:main:kolo:direct:test-owner",
+        )
+        inbox_monitor.atomic_write_json(
+            monitor_root / "monitor-state.json",
+            {
+                "schema_version": 2,
+                "activation_state": "active",
+                "bound_cron_sha256": "sha256:bound",
+                "pending_cron_sha256": None,
+                "capabilities": {
+                    "gmail_after_epoch": True,
+                    "gmail_internal_date_ms": True,
+                    "gmail_complete_pagination": True,
+                },
+                "activated_at_ms": 1_000,
+                "discovery_watermark_ms": 1_500,
+            },
+        )
+        inbox_monitor.atomic_write_json(
+            desk / "work" / "cron-binding.json", {"id": "cron-test"}
+        )
+        inbox_monitor.atomic_write_json(desk / "spot-cache.json", {"prices": {}})
+        return desk
+
+    def test_reset_restores_fresh_setup_and_preserves_cron_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desk = self.build_workspace(root)
+            result = business_state_reset.reset(root)
+
+            self.assertTrue(result["business_state_reset"])
+            self.assertEqual(result["activation_state"], "prepared")
+            self.assertFalse((desk / "work" / "activation-binding.json").exists())
+            self.assertTrue((desk / "work" / "cron-binding.json").exists())
+            self.assertFalse((desk / "spot-cache.json").exists())
+            profile = json.loads((desk / "shop-profile.json").read_text())
+            self.assertEqual(profile["shop"]["name"], "")
+            state = inbox_monitor.load_monitor_state(desk / "inbox-monitor")
+            self.assertEqual(state["activation_state"], "prepared")
+            self.assertEqual(state["bound_cron_sha256"], "sha256:bound")
+            self.assertIsNone(state["activated_at_ms"])
+            self.assertIsNone(state["discovery_watermark_ms"])
+
+    def test_reset_refuses_customer_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desk = self.build_workspace(root)
+            inbox_monitor.atomic_write_json(
+                desk / "records" / "jed-active.json", {"estimate_id": "bad"}
+            )
+            with self.assertRaises((ValueError, KeyError)):
+                business_state_reset.reset(root)
+            self.assertTrue((desk / "work" / "activation-binding.json").exists())
+            self.assertNotEqual(
+                json.loads((desk / "shop-profile.json").read_text())["shop"]["name"],
+                "",
+            )
 
 
 class PricingAndSchedulingTests(unittest.TestCase):
