@@ -66,6 +66,9 @@ route to the pinned agent.
   test while preserving shop, pricing, approval, cron, and watermark state.
 - `scripts/approval_guard.py`: create opaque estimate IDs, bind approvals to
   route and specification, and reject changed execution state.
+- `scripts/cost_components.py`: build the approval cost sheet skeleton from the
+  record and rate card, and finalize it into the exact state the approval
+  helper accepts, so the model only supplies quantities.
 - `scripts/kolo_safe.py`: request approvals, notify the owner, upsert records,
   and write idempotent audit events without a shell.
 - `scripts/inbox_claim.py`: prevent overlapping processing in a shared Kolo
@@ -981,7 +984,44 @@ an opaque ID:
 python3 {baseDir}/scripts/approval_guard.py new-id
 ```
 
-Write `current-state.json` with:
+Do not author the cost sheet by hand. Run the pricing helper, which reads the
+authoritative record's specification, resolves every rate from the shop's
+card, attaches the spot price evidence, and computes every unit cost exactly
+as the approval validators do:
+
+```bash
+python3 {baseDir}/scripts/cost_components.py prepare \
+  --record-root '<absolute-workspace>/estimate-desk/records' \
+  --estimate-id '<jed-id>' \
+  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
+  --spot-evidence "$WORK/spot-evidence.json" \
+  --output "$WORK/cost-skeleton.json"
+```
+
+Pass `--spot-evidence` (the `spot_price.py --output` file) whenever
+`pricing.spot_metal` is enabled; omit it otherwise. Read the skeleton and fill
+only the fields it lists under `fill`: finished grams, bench hours, and any
+missing carat weight. Add fee lines by copying entries from `fee_catalog`, and
+accent-stone lines by copying `stone_catalog` entries with a quantity. Never
+edit a `rate_key`, `unit_cost`, `spot_price_per_gram`, `purity`, or `rate`
+that the helper filled, and never read the scripts' source to work out a
+format. If `unresolved` is not empty, the shop has no single rate for that
+line: fail closed to manual review with reason `invalid_cost_components` and
+let the owner add the rate. Then finalize:
+
+```bash
+python3 {baseDir}/scripts/cost_components.py finalize \
+  --input "$WORK/cost-skeleton.json" \
+  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
+  --output "$WORK/current-state.json"
+```
+
+`finalize` re-derives every rate from the card, computes the proposed price
+with the configured pricing model, and writes the exact `current-state.json`
+that `request-approval` accepts. If it refuses, fix only the quantity or line
+it names; do not retry by rewriting rates or the price.
+
+For reference, `current-state.json` contains:
 
 - `estimate_id`
 - `route`: original channel, mailbox, recipient email, email-derived
