@@ -79,8 +79,10 @@ route to the pinned agent.
   estimate records used as the authoritative inbox-routing index.
 - `scripts/cron_config.py`: render the fixed cron message and bind durable
   monitor state to the complete behavior-bearing live Kolo cron configuration.
-- `scripts/gmail_classify.py`: conservatively identify delivery-status and
-  automatic-reply messages from deterministic Gmail headers.
+- `scripts/gmail_classify.py`: from deterministic Gmail headers alone, set
+  aside mail no customer wrote (bounces, automatic replies, calendar
+  invitations and RSVPs, automated notifications, mailing-list mail, and
+  mail from the shop's own domain) so it never becomes an estimate.
 - `scripts/customer_content_guard.py`: reject owner-only jeweler cost and
   pricing assumptions from any customer-facing text before sending.
 - `scripts/route_ownership.py`: prove thread ownership from an exact route,
@@ -313,8 +315,10 @@ For each returned message:
    resumed claim runs the same command again; a resumed initiating message comes
    back as `new_inquiry` with reason `initiating_claim_resumed`.
 
-   The command also terminalizes the deterministic exits itself: `auto_reply`
-   completes as processed with no response or owner alert; `dsn_candidate`
+   The command also terminalizes the deterministic exits itself: `auto_reply`,
+   `calendar_event`, `automated_notification`, `bulk_mail`, and
+   `internal_sender` complete as processed with no record, no response, and
+   no owner alert; `dsn_candidate`
    becomes manual review with reason `uncorrelated_dsn` (never treat a bounce
    as a customer, and never trust an estimate ID found only in message text);
    an unsupported classification becomes `uncertain_classification`; and every
@@ -596,7 +600,19 @@ metadata, but it must never select an estimate, identity, recipient, or thread.*
 
 ## Phase 1: triage
 
-Read the full inbound message and attachments. Route requests as follows:
+Read the full inbound message and attachments. First decide whether it is a
+quote request at all. The header classifier removes machine mail before
+anything is read, but a person can write to the shop about anything, and
+intake opens a record before the thread is read. When the record is still
+`awaiting_specs` and the thread asks for no custom piece, replica, redesign,
+remount, or repair (a supplier, marketing, a personal note, a job
+application, an unrelated question), run `workflow_safe.py not-an-inquiry`
+with the claimed Gmail ID, the estimate ID, a fixed reason
+(`not_a_quote_request`, `vendor_or_marketing`, `personal_or_internal`, or
+`unrelated`), and `--record-output`. It retires that record as
+`not_an_inquiry`, mirrors it, and finalizes the claim with no customer reply
+and no owner alert. Escalations (anger, legal, payment, appraisal) are never
+`not-an-inquiry`; they remain manual review. Route the rest as follows:
 
 | Request | Route |
 |---|---|
@@ -1091,7 +1107,7 @@ stop and mark dormant.
 
 To retire one record the shop will not pursue (opened in error, a duplicate of
 another thread, superseded, withdrawn by the customer before any price was
-sent, or a test artifact), run `scripts/estimate_record.py retire` with
+sent, not an inquiry, or a test artifact), run `scripts/estimate_record.py retire` with
 `--estimate-id`, `--reason`, and an optional `--note`. It moves that single
 record to `dormant`, stores the reason and previous status under `retirement`,
 and changes no claim, queue item, watermark, or other record. It refuses records

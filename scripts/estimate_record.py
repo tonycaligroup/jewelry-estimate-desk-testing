@@ -1105,6 +1105,7 @@ RETIREMENT_REASONS = {
     "superseded_by_another_estimate",
     "customer_withdrew",
     "test_artifact",
+    "not_an_inquiry",
 }
 
 

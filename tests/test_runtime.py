@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import base64
@@ -4464,6 +4465,113 @@ class GmailClassificationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gmail_classify.classify(message)
 
+    def test_calendar_invitation_is_closed_by_mime_part(self) -> None:
+        message = self.message(
+            [
+                {"name": "From", "value": "Sam Coworker <sam@shop.example>"},
+                {"name": "Subject", "value": "Kolo Builders Meeting"},
+            ]
+        )
+        message["payload"]["mimeType"] = "multipart/mixed"
+        message["payload"]["parts"] = [
+            {"mimeType": "multipart/alternative", "parts": [
+                {"mimeType": "text/plain"},
+                {"mimeType": "text/calendar; charset=UTF-8; method=REQUEST"},
+            ]},
+            {"mimeType": "application/ics"},
+        ]
+        result = gmail_classify.classify(message)
+        self.assertEqual(result["classification"], "calendar_event")
+        self.assertEqual(result["reason_code"], "calendar_headers")
+
+    def test_calendar_subject_prefixes_are_closed_but_plain_words_are_not(self) -> None:
+        for subject in (
+            "Invitation: Kolo Builders Meeting @ Wed Sep 2, 2026",
+            "Updated invitation: Kolo On Boarding @ Mon Aug 17",
+            "Accepted: Consultation @ Fri Sep 4",
+            "Re: Cancelled event: Ring review",
+        ):
+            result = gmail_classify.classify(
+                self.message([
+                    {"name": "From", "value": "customer@example.net"},
+                    {"name": "Subject", "value": subject},
+                ])
+            )
+            self.assertEqual(result["classification"], "calendar_event", subject)
+        result = gmail_classify.classify(
+            self.message([
+                {"name": "From", "value": "customer@example.net"},
+                {"name": "Subject", "value": "Invitation ring for my sister"},
+            ])
+        )
+        self.assertEqual(result["classification"], "customer_or_uncertain")
+
+    def test_google_machine_senders_are_closed_but_forms_receipts_are_not(self) -> None:
+        result = gmail_classify.classify(
+            self.message([
+                {"name": "From", "value": "Gemini <gemini-notes@google.com>"},
+                {"name": "Subject", "value": "Notes: Kolo Builders Meeting Sep 2, 2026"},
+            ])
+        )
+        self.assertEqual(result["classification"], "automated_notification")
+        result = gmail_classify.classify(
+            self.message([
+                {"name": "From", "value": "Google Forms <forms-receipts-noreply@google.com>"},
+                {"name": "Subject", "value": "Custom ring request"},
+            ])
+        )
+        self.assertEqual(result["classification"], "customer_or_uncertain")
+
+    def test_list_mail_is_closed(self) -> None:
+        result = gmail_classify.classify(
+            self.message([
+                {"name": "From", "value": "news@supplier.example"},
+                {"name": "Subject", "value": "September gold prices"},
+                {"name": "List-Unsubscribe", "value": "<https://supplier.example/u>"},
+            ])
+        )
+        self.assertEqual(result["classification"], "bulk_mail")
+        result = gmail_classify.classify(
+            self.message([
+                {"name": "From", "value": "news@supplier.example"},
+                {"name": "Subject", "value": "September gold prices"},
+                {"name": "Precedence", "value": "bulk"},
+            ])
+        )
+        self.assertEqual(result["classification"], "bulk_mail")
+
+    def test_same_domain_coworker_is_internal_unless_domain_is_public(self) -> None:
+        coworker = self.message([
+            {"name": "From", "value": "Sam Coworker <sam@shop.example>"},
+            {"name": "Subject", "value": "lunch?"},
+        ])
+        self.assertEqual(
+            gmail_classify.classify(coworker, "tony@shop.example")["classification"],
+            "internal_sender",
+        )
+        self.assertEqual(
+            gmail_classify.classify(coworker)["classification"], "customer_or_uncertain"
+        )
+        gmail_customer = self.message([
+            {"name": "From", "value": "pat@gmail.com"},
+            {"name": "Subject", "value": "ring quote"},
+        ])
+        self.assertEqual(
+            gmail_classify.classify(gmail_customer, "shop@gmail.com")["classification"],
+            "customer_or_uncertain",
+        )
+
+    def test_bounce_and_auto_reply_still_win_over_later_rules(self) -> None:
+        result = gmail_classify.classify(
+            self.message([
+                {"name": "From", "value": "sam@shop.example"},
+                {"name": "Subject", "value": "Automatic reply: Invitation: lunch"},
+                {"name": "Auto-Submitted", "value": "auto-replied"},
+            ]),
+            "tony@shop.example",
+        )
+        self.assertEqual(result["classification"], "auto_reply")
+
 
 class RouteOwnershipTests(unittest.TestCase):
     def route(self) -> dict:
@@ -6080,6 +6188,82 @@ class IntakeTests(unittest.TestCase):
             item = inbox_monitor.load_queue_item(args.monitor_root, "inquiry-1")
             self.assertEqual(item["processing_status"], "processed")
             self.assertEqual(list(args.record_root.glob("jed-*.json")) if args.record_root.exists() else [], [])
+
+    def test_calendar_invitation_is_closed_without_a_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(
+                directory,
+                sender="sam@coworker.example",
+                Subject="Invitation: Kolo Builders Meeting @ Wed Sep 2, 2026",
+            )
+            with (
+                patch.object(workflow_safe, "mirror_record") as mirror,
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed") as notify,
+            ):
+                result = workflow_safe.intake(args)
+            self.assertEqual(result["classification"], "calendar_event")
+            self.assertEqual(result["outcome"], "calendar_event_completed")
+            self.assertEqual(result["next_action"], "done")
+            mirror.assert_not_called()
+            notify.assert_not_called()
+            item = inbox_monitor.load_queue_item(args.monitor_root, "inquiry-1")
+            self.assertEqual(item["processing_status"], "processed")
+            self.assertEqual(list(args.record_root.glob("jed-*.json")) if args.record_root.exists() else [], [])
+
+    def test_not_an_inquiry_retires_the_fresh_record_and_finalizes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, paths = self.claimed(directory)
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                opened = workflow_safe.intake(args)
+            self.assertEqual(opened["next_action"], "review_thread")
+            close = argparse.Namespace(
+                monitor_root=args.monitor_root,
+                claim_root=args.claim_root,
+                record_root=args.record_root,
+                message_id="inquiry-1",
+                estimate_id=opened["estimate_id"],
+                reason="vendor_or_marketing",
+                record_output=Path(directory) / "closed.json",
+            )
+            with patch.object(workflow_safe, "mirror_record") as mirror:
+                result = workflow_safe.not_an_inquiry(close)
+            self.assertEqual(result["outcome"], "not_an_inquiry_completed")
+            self.assertEqual(result["status"], "dormant")
+            mirror.assert_called_once()
+            record = json.loads(
+                estimate_record.record_path(args.record_root, opened["estimate_id"]).read_text()
+            )
+            self.assertEqual(record["status"], "dormant")
+            self.assertEqual(record["retirement"]["reason"], "not_an_inquiry")
+            self.assertEqual(record["retirement"]["note"], "triage: vendor_or_marketing")
+            item = inbox_monitor.load_queue_item(args.monitor_root, "inquiry-1")
+            self.assertEqual(item["processing_status"], "processed")
+            close.reason = "bogus"
+            with self.assertRaises(ValueError):
+                workflow_safe.not_an_inquiry(close)
+
+    def test_not_an_inquiry_refuses_records_it_did_not_open(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(directory)
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                opened = workflow_safe.intake(args)
+            close = argparse.Namespace(
+                monitor_root=args.monitor_root,
+                claim_root=args.claim_root,
+                record_root=args.record_root,
+                message_id="some-other-message",
+                estimate_id=opened["estimate_id"],
+                reason="unrelated",
+                record_output=Path(directory) / "closed.json",
+            )
+            with self.assertRaises(ValueError):
+                workflow_safe.not_an_inquiry(close)
 
     def test_bounce_and_identity_guard_become_manual_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
