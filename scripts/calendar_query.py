@@ -40,6 +40,32 @@ def canonical_hash(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def require_readable_calendar(calendar: Any) -> dict[str, Any]:
+    """Reject a free/busy calendar the provider could not actually read.
+
+    Google returns ``{"errors": [...], "busy": []}`` when a calendar is missing
+    or not permitted. An empty busy array is a valid list, so without this check
+    an unreadable calendar is indistinguishable from a completely free one and
+    every proposed slot would appear available.
+    """
+    if not isinstance(calendar, dict):
+        raise ValueError("calendar response lacks the requested calendar")
+    errors = calendar.get("errors")
+    if errors:
+        reasons = (
+            ", ".join(
+                str(error.get("reason", "unknown"))
+                for error in errors
+                if isinstance(error, dict)
+            )
+            or "unknown"
+        )
+        raise ValueError(f"calendar could not be read by the provider: {reasons}")
+    if not isinstance(calendar.get("busy"), list):
+        raise ValueError("calendar response lacks the requested calendar busy array")
+    return calendar
+
+
 def write_private(path: Path, value: dict[str, Any]) -> None:
     parent_existed = path.parent.exists()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -110,8 +136,7 @@ def query_freebusy(
         raise ValueError("calendar response timeMax does not match the query")
     calendars = body.get("calendars")
     calendar = calendars.get(calendar_id) if isinstance(calendars, dict) else None
-    if not isinstance(calendar, dict) or not isinstance(calendar.get("busy"), list):
-        raise ValueError("calendar response lacks the requested calendar busy array")
+    require_readable_calendar(calendar)
     return {
         "schema_version": 1,
         "provider": "google_calendar_freebusy",

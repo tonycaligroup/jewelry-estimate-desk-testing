@@ -47,7 +47,14 @@ import spot_price
 import workflow_safe
 
 
-def internal_cost_sheet(customer_price: float = 4200) -> dict:
+SHOP_MARKUP = 1.25
+
+
+def shop_profile(markup: float = SHOP_MARKUP) -> dict:
+    return {"pricing": {"model": "cost_plus_multiplier", "markup_multiplier": markup}}
+
+
+def internal_cost_sheet(customer_price: float = 4200, labor_hours: float = 5) -> dict:
     return {
         "metal_lines": [
             {
@@ -66,10 +73,15 @@ def internal_cost_sheet(customer_price: float = 4200) -> dict:
             }
         ],
         "labor_lines": [
-            {"task": "bench labor", "hours": 5, "rate": 100, "total_cost": 500}
+            {
+                "task": "bench labor",
+                "hours": labor_hours,
+                "rate": 100,
+                "total_cost": labor_hours * 100,
+            }
         ],
         "other_hard_cost_lines": [],
-        "hard_cost_total": 3100,
+        "hard_cost_total": 2600 + labor_hours * 100,
         "customer_price": customer_price,
     }
 
@@ -378,11 +390,15 @@ class ActivationBindingTests(unittest.TestCase):
                             "mailbox": "sales@example.com",
                         },
                         "specification": {"piece": "ring"},
-                        "proposed_price": 4200,
-                        "internal_cost_sheet": internal_cost_sheet(),
+                        "proposed_price": 3875,
+                        "internal_cost_sheet": internal_cost_sheet(3875),
                     }
                 ),
                 encoding="utf-8",
+            )
+            shop_profile_path = root / "shop-profile.json"
+            shop_profile_path.write_text(
+                json.dumps(shop_profile()), encoding="utf-8"
             )
             args = type(
                 "Args",
@@ -396,6 +412,7 @@ class ActivationBindingTests(unittest.TestCase):
                     "current_state": current_state,
                     "approval_request": approval_request,
                     "record_output": root / "record.json",
+                    "shop_profile": shop_profile_path,
                 },
             )()
             with (
@@ -472,7 +489,9 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
             },
         )
 
-    def candidate(self, estimate_id: str, price: float = 2_500) -> dict:
+    def candidate(
+        self, estimate_id: str, price: float = 3_875, labor_hours: float = 5
+    ) -> dict:
         later_route = self.route()
         later_route["gmail_message_id"] = "latest-reply"
         later_route["original_message_id"] = "<latest@example.net>"
@@ -481,7 +500,7 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
             "route": later_route,
             "specification": {"piece_type": "wrong-model-specification"},
             "proposed_price": price,
-            "internal_cost_sheet": internal_cost_sheet(price),
+            "internal_cost_sheet": internal_cost_sheet(price, labor_hours),
         }
 
     def test_appointment_details_use_authoritative_email_and_thread(self) -> None:
@@ -511,6 +530,7 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                 record["estimate_id"],
                 source_message_id,
                 self.candidate(record["estimate_id"]),
+                shop_profile(),
             )
             self.assertEqual(state["route"], self.route())
             self.assertEqual(state["specification"], self.specification())
@@ -532,8 +552,9 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                 record["estimate_id"],
                 source_message_id,
                 candidate,
+                shop_profile(),
             )
-            self.assertEqual(state["internal_cost_sheet"], internal_cost_sheet(2500))
+            self.assertEqual(state["internal_cost_sheet"], internal_cost_sheet(3875))
             self.assertNotIn("cost_components", state)
 
     def test_invalid_existing_artifact_is_rejected_before_kolo(self) -> None:
@@ -553,6 +574,10 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            shop_profile_path = root / "shop-profile.json"
+            shop_profile_path.write_text(
+                json.dumps(shop_profile()), encoding="utf-8"
+            )
             args = type(
                 "Args",
                 (),
@@ -565,6 +590,7 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                     "current_state": current_state,
                     "approval_request": approval_request,
                     "record_output": root / "record.json",
+                    "shop_profile": shop_profile_path,
                 },
             )()
             with patch.object(
@@ -592,6 +618,10 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                 json.dumps(self.candidate(record["estimate_id"])), encoding="utf-8"
             )
             approval_request = root / "approval-request.json"
+            shop_profile_path = root / "shop-profile.json"
+            shop_profile_path.write_text(
+                json.dumps(shop_profile()), encoding="utf-8"
+            )
             args = type(
                 "Args",
                 (),
@@ -604,6 +634,7 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                     "current_state": current_state,
                     "approval_request": approval_request,
                     "record_output": root / "record.json",
+                    "shop_profile": shop_profile_path,
                 },
             )()
             runner = Mock(
@@ -633,7 +664,7 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
 
             frozen = approval_request.read_bytes()
             current_state.write_text(
-                json.dumps(self.candidate(record["estimate_id"], 2_750)),
+                json.dumps(self.candidate(record["estimate_id"], 4_000, 6)),
                 encoding="utf-8",
             )
             with (
@@ -650,7 +681,7 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
             self.assertEqual(runner.call_count, 1)
             self.assertEqual(approval_request.read_bytes(), frozen)
             self.assertEqual(completed["status"], "pending_approval")
-            self.assertEqual(completed["proposed_price"], 2_500)
+            self.assertEqual(completed["proposed_price"], 3_875)
             action_key = (
                 f"approval_request:{record['estimate_id']}:{source_message_id}"
             )
@@ -5155,6 +5186,162 @@ class EstimateRecordTests(unittest.TestCase):
                     [image],
                     {"id": "render-send", "threadId": "wrong-thread"},
                 )
+
+
+
+class ReviewFindingRegressionTests(unittest.TestCase):
+    """Regressions for defects found by independent review of the skill source."""
+
+    def message(self, headers: list[tuple[str, str]]) -> dict:
+        return {
+            "payload": {
+                "headers": [{"name": name, "value": value} for name, value in headers]
+            }
+        }
+
+    # Finding 1: sender-set suppression headers are not auto-reply evidence.
+    def test_suppression_header_does_not_discard_a_customer_inquiry(self) -> None:
+        result = gmail_classify.classify(
+            self.message(
+                [
+                    ("From", "Michael Park <mpark@contoso.com>"),
+                    ("Subject", "Custom engagement ring - 1ct halo"),
+                    ("X-Auto-Response-Suppress", "DR, OOF, AutoReply"),
+                ]
+            )
+        )
+        self.assertEqual(result["classification"], "customer_or_uncertain")
+
+    def test_contact_form_inquiry_stays_routable(self) -> None:
+        result = gmail_classify.classify(
+            self.message(
+                [
+                    ("From", "forms@shop-notifications.example"),
+                    ("Subject", "New website inquiry"),
+                    ("Auto-Submitted", "auto-generated"),
+                ]
+            )
+        )
+        self.assertEqual(result["classification"], "customer_or_uncertain")
+
+    def test_bounce_without_daemon_sender_is_still_a_dsn(self) -> None:
+        result = gmail_classify.classify(
+            self.message(
+                [
+                    ("From", "Mail Delivery System <bounces@mail.example.net>"),
+                    ("Subject", "Undeliverable: Your estimate"),
+                    (
+                        "Content-Type",
+                        'multipart/report; report-type=delivery-status; boundary="x"',
+                    ),
+                ]
+            )
+        )
+        self.assertEqual(result["classification"], "dsn_candidate")
+
+    def test_auto_replied_keyword_with_parameters_is_still_an_auto_reply(self) -> None:
+        result = gmail_classify.classify(
+            self.message(
+                [
+                    ("From", "customer@example.net"),
+                    ("Subject", "Re: your estimate"),
+                    ("Auto-Submitted", "auto-replied; owner=mailer"),
+                ]
+            )
+        )
+        self.assertEqual(result["classification"], "auto_reply")
+
+    # Finding 2: an unreadable calendar must never read as free.
+    def freebusy_receipt(self, calendars: dict) -> dict:
+        response_body = {
+            "kind": "calendar#freeBusy",
+            "timeMin": "2026-08-26T12:00:00+00:00",
+            "timeMax": "2026-09-02T12:00:00+00:00",
+            "calendars": calendars,
+        }
+        return {
+            "schema_version": 1,
+            "provider": "google_calendar_freebusy",
+            "provider_request_id": "a0e07f06b462404d8861020bb82caad3",
+            "response_date": "Wed, 26 Aug 2026 12:00:00 +0000",
+            "query": {
+                "timeMin": "2026-08-26T12:00:00+00:00",
+                "timeMax": "2026-09-02T12:00:00+00:00",
+                "timeZone": "America/Los_Angeles",
+                "items": [{"id": "primary"}],
+            },
+            "response_body_sha256": calendar_query.canonical_hash(response_body),
+            "response_body": response_body,
+        }
+
+    def slots(self) -> list[dict]:
+        return [
+            {"start": "2026-08-28T17:00:00+00:00", "end": "2026-08-28T17:30:00+00:00"},
+            {"start": "2026-08-29T18:00:00+00:00", "end": "2026-08-29T18:30:00+00:00"},
+        ]
+
+    def test_unreadable_calendar_is_not_treated_as_free(self) -> None:
+        now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+        receipt = self.freebusy_receipt(
+            {"primary": {"errors": [{"domain": "global", "reason": "notFound"}], "busy": []}}
+        )
+        with self.assertRaisesRegex(ValueError, "could not be read"):
+            appointment_options.build_options(
+                receipt, self.slots(), "America/Los_Angeles", 7, now
+            )
+
+    def test_readable_free_calendar_still_produces_options(self) -> None:
+        now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+        receipt = self.freebusy_receipt({"primary": {"errors": [], "busy": []}})
+        result = appointment_options.build_options(
+            receipt, self.slots(), "America/Los_Angeles", 7, now
+        )
+        self.assertEqual(len(result["options"]), 2)
+
+    def test_calendar_query_rejects_an_unreadable_calendar(self) -> None:
+        with self.assertRaisesRegex(ValueError, "could not be read"):
+            calendar_query.require_readable_calendar(
+                {"errors": [{"reason": "forbidden"}], "busy": []}
+            )
+
+    # Finding 3: the configured pricing model is authoritative, not the model's
+    # arithmetic.
+    def test_price_must_equal_the_configured_pricing_model(self) -> None:
+        sheet = internal_cost_sheet(3875)
+        estimate_record.enforce_configured_price(sheet, 3875, shop_profile())
+        with self.assertRaisesRegex(ValueError, "configured pricing model"):
+            estimate_record.enforce_configured_price(sheet, 4200, shop_profile())
+
+    def test_missing_shop_profile_refuses_approval_preparation(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires the shop profile"):
+            estimate_record.enforce_configured_price(internal_cost_sheet(3875), 3875, None)
+
+    # Finding 4: a cost line must multiply out to its own total.
+    def test_cost_line_total_must_match_quantity_times_unit_cost(self) -> None:
+        sheet = internal_cost_sheet(3875)
+        sheet["metal_lines"][0]["total_cost"] = 25
+        sheet["hard_cost_total"] = 2525
+        sheet["customer_price"] = 3875
+        with self.assertRaisesRegex(ValueError, "does not equal quantity_grams"):
+            approval_guard.validate_internal_cost_sheet(sheet, 3875)
+
+    def test_consistent_cost_lines_are_accepted(self) -> None:
+        approval_guard.validate_internal_cost_sheet(internal_cost_sheet(3875), 3875)
+
+    # Finding 5: writing a receipt must not re-permission a directory it did not
+    # create.
+    def test_receipt_write_preserves_existing_directory_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            shared = Path(directory) / "shared"
+            shared.mkdir()
+            os.chmod(shared, 0o755)
+            gmail_safe.write_private_json(
+                shared / "receipt.json", {"id": "m1", "threadId": "t1"}
+            )
+            self.assertEqual(shared.stat().st_mode & 0o777, 0o755)
+            created = Path(directory) / "fresh" / "receipt.json"
+            gmail_safe.write_private_json(created, {"id": "m1", "threadId": "t1"})
+            self.assertEqual(created.parent.stat().st_mode & 0o777, 0o700)
 
 
 if __name__ == "__main__":

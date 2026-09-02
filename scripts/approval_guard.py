@@ -149,6 +149,20 @@ def validate_internal_cost_sheet(value: Any, proposed_price: float) -> dict[str,
                 )
             for field in fields[1:]:
                 _money(line[field], f"internal_cost_sheet.{group}[{index}].{field}")
+            # A hand-authored sheet must not state a line total that its own
+            # quantity and unit cost do not produce. Without this the owner can
+            # approve, and the binding can lock in, a breakdown whose lines do
+            # not multiply out.
+            if len(fields) == 4:
+                quantity_field, unit_field = fields[1], fields[2]
+                expected_total = round(
+                    float(line[quantity_field]) * float(line[unit_field]), 2
+                )
+                if abs(float(line["total_cost"]) - expected_total) > 0.01:
+                    raise ValueError(
+                        f"internal_cost_sheet.{group}[{index}].total_cost does not "
+                        f"equal {quantity_field} times {unit_field}"
+                    )
             calculated += float(line["total_cost"])
     hard_cost_total = _money(
         value["hard_cost_total"], "internal_cost_sheet.hard_cost_total"

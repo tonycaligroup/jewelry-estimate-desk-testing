@@ -18,6 +18,7 @@ from typing import Any, Iterator
 
 import route_ownership
 import approval_guard
+import pricing_model
 
 
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -862,11 +863,34 @@ def _validate_approval_request(
     }
 
 
+def enforce_configured_price(
+    internal_cost_sheet: dict[str, Any],
+    proposed_price: Any,
+    shop_profile: dict[str, Any] | None,
+) -> None:
+    """Require the bound price to be the configured pricing model's output.
+
+    Without this the customer price is whatever arithmetic the model performed,
+    and the binding hash then locks that number in as if it were authoritative.
+    """
+    if shop_profile is None:
+        raise ValueError("approval preparation requires the shop profile")
+    expected = pricing_model.quote_price(
+        internal_cost_sheet["hard_cost_total"], shop_profile.get("pricing")
+    )
+    if abs(float(proposed_price) - expected) > 0.01:
+        raise ValueError(
+            "proposed_price does not match the configured pricing model "
+            f"(expected {expected:.2f})"
+        )
+
+
 def prepare_approval_state(
     root: Path,
     estimate_id: str,
     source_message_id: str,
     candidate: dict[str, Any],
+    shop_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Bind model-produced pricing to the record's immutable route and specs."""
     source_message_id = validate_provider_id(source_message_id, "source_message_id")
@@ -927,6 +951,9 @@ def prepare_approval_state(
             }
         )
         approval_guard.binding_payload(state)
+        enforce_configured_price(
+            state["internal_cost_sheet"], state["proposed_price"], shop_profile
+        )
         return state
 
 
