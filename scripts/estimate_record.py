@@ -246,6 +246,7 @@ def lookup_thread(root: Path, route: dict[str, Any]) -> list[dict[str, Any]]:
     thread_id = route.get("thread_id")
     if not isinstance(thread_id, str) or not thread_id:
         raise ValueError("route.thread_id must be non-empty text")
+    identity_key = route.get("identity_key")
     if not root.exists():
         return []
     candidates: list[dict[str, Any]] = []
@@ -253,9 +254,17 @@ def lookup_thread(root: Path, route: dict[str, Any]) -> list[dict[str, Any]]:
         for path in sorted(root.glob("jed-*.json")):
             record = read_object(path)
             record_route = record.get("route")
-            if (
-                isinstance(record_route, dict)
-                and record_route.get("thread_id") == thread_id
+            if not isinstance(record_route, dict):
+                continue
+            if record_route.get("thread_id") == thread_id:
+                candidates.append(record)
+            elif (
+                # Also surface in-flight work for the same customer on another
+                # thread, so route_ownership can refuse to fork the estimate.
+                isinstance(identity_key, str)
+                and identity_key
+                and record_route.get("identity_key") == identity_key
+                and record.get("status") in route_ownership.ACTIVE_STATUSES
             ):
                 candidates.append(record)
     return candidates

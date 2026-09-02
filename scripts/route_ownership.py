@@ -14,6 +14,15 @@ import inbox_claim
 
 
 ESTIMATE_ID_RE = re.compile(r"^jed-[0-9a-f]{16}$")
+# A record in one of these states represents work still in flight for a
+# customer. A terminal record must never block a genuinely new inquiry.
+ACTIVE_STATUSES = {
+    "awaiting_specs",
+    "pending_approval",
+    "estimate_sent",
+    "appointment_booked",
+    "approved",
+}
 VALID_STATUSES = {
     "awaiting_specs",
     "pending_approval",
@@ -72,6 +81,26 @@ def decide(
 
     matches = [record for record in valid_records if record["route"]["thread_id"] == thread_id]
     if not matches:
+        # Ownership is keyed on the thread, so a customer whose reply loses its
+        # threading headers arrives looking like a brand-new inquiry. Creating a
+        # second estimate would run two quotes for one job with no owner alert,
+        # so an active estimate for the same customer identity stops here.
+        active_elsewhere = sorted(
+            (
+                record
+                for record in valid_records
+                if record["route"]["identity_key"] == identity_key
+                and record["route"]["thread_id"] != thread_id
+                and record["status"] in ACTIVE_STATUSES
+            ),
+            key=lambda record: record["estimate_id"],
+        )
+        if active_elsewhere:
+            return {
+                "decision": "manual_review",
+                "reason_code": "identity_has_active_estimate_on_another_thread",
+                "estimate_id": active_elsewhere[0]["estimate_id"],
+            }
         if thread_message_count == 1:
             return {"decision": "new_inquiry", "reason_code": "first_thread_message"}
         if thread_message_count is not None:

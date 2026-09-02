@@ -883,6 +883,75 @@ def list_manual_reviews(root: Path) -> list[dict[str, Any]]:
     )
 
 
+def run_report(root: Path, claim_root: Path | None = None) -> dict[str, Any]:
+    """Derive the owner-facing run summary from durable state alone.
+
+    The announcement a cron run delivers is otherwise composed by the model, so
+    a run can report an outcome it never observed. Everything here is read from
+    the queue and the claim journal, so the summary cannot be invented and can
+    be checked against the same files afterwards.
+    """
+    items = all_queue_items(root)
+    counts = {
+        state: sum(1 for item in items if item["processing_status"] == state)
+        for state in sorted(PROCESSING_STATES)
+    }
+    reviews = list_manual_reviews(root)
+    uncertain_notifications = 0
+    uncertain_actions = 0
+    if claim_root is not None:
+        for item in items:
+            try:
+                state = inbox_claim.read_state(
+                    inbox_claim.claim_path(claim_root, item["gmail_message_id"])
+                )
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            for field in inbox_claim.NOTIFICATION_FIELDS:
+                notification = state.get(field)
+                if (
+                    isinstance(notification, dict)
+                    and notification.get("status") == "uncertain"
+                ):
+                    uncertain_notifications += 1
+            actions = state.get("external_actions")
+            if isinstance(actions, dict):
+                uncertain_actions += sum(
+                    1
+                    for action in actions.values()
+                    if isinstance(action, dict) and action.get("status") == "uncertain"
+                )
+
+    settled = counts["processing"] == 0
+    lines: list[str] = []
+    if not settled:
+        lines.append(
+            f"{counts['processing']} claimed item(s) still processing; "
+            "this run did not settle."
+        )
+    if reviews:
+        codes = ", ".join(sorted({review["reason_code"] for review in reviews}))
+        lines.append(f"{len(reviews)} item(s) awaiting manual review ({codes}).")
+        lines.append("Ask Kolo to show unresolved Jewelry Estimate Desk reviews.")
+    if uncertain_notifications:
+        lines.append(
+            f"{uncertain_notifications} owner alert(s) recorded as uncertain."
+        )
+    if uncertain_actions:
+        lines.append(
+            f"{uncertain_actions} external action(s) recorded as uncertain."
+        )
+    return {
+        "schema_version": 1,
+        "settled": settled,
+        "counts": counts,
+        "manual_reviews": reviews,
+        "uncertain_notifications": uncertain_notifications,
+        "uncertain_external_actions": uncertain_actions,
+        "message": "\n".join(lines) if lines else "NO_REPLY",
+    }
+
+
 def resolve_manual_review(root: Path, review_key: str) -> dict[str, Any]:
     if not isinstance(review_key, str) or not re.fullmatch(r"[0-9a-f]{64}", review_key):
         raise ValueError("review_key must be a lowercase SHA-256 value")
@@ -988,6 +1057,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     claim_next_parser.add_argument("--stale-after-seconds", type=int, default=600)
     sub.add_parser("assert-settled")
+    report_parser = sub.add_parser("run-report")
+    report_parser.add_argument("--claim-root", type=Path)
     sub.add_parser("manual-reviews")
     resolve_review_parser = sub.add_parser("resolve-manual-review")
     resolve_review_parser.add_argument("--review-key", required=True)
@@ -1057,6 +1128,8 @@ def main(argv: list[str] | None = None) -> int:
             result = claim_next(args.root, args.claim_root, args.stale_after_seconds)
         elif args.command == "assert-settled":
             result = assert_settled(args.root)
+        elif args.command == "run-report":
+            result = run_report(args.root, args.claim_root)
         elif args.command == "manual-reviews":
             result = list_manual_reviews(args.root)
         elif args.command == "resolve-manual-review":

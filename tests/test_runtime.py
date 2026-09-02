@@ -3944,6 +3944,73 @@ class InboxMonitorTests(unittest.TestCase):
                 3_000,
             )
 
+    # --- machine-generated run report -------------------------------------
+    def queued_root(self, directory: str) -> Path:
+        root = self.active_root(directory)
+        inbox_monitor.discover_complete(
+            root,
+            [
+                {
+                    "gmail_message_id": "msg-a",
+                    "thread_id": "thread-a",
+                    "internal_date_ms": 1_100,
+                },
+                {
+                    "gmail_message_id": "msg-b",
+                    "thread_id": "thread-b",
+                    "internal_date_ms": 1_200,
+                },
+            ],
+            1_000,
+            2_000,
+        )
+        return root
+
+    def test_run_report_is_silent_when_nothing_needs_the_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = inbox_monitor.run_report(self.active_root(directory))
+            self.assertTrue(report["settled"])
+            self.assertEqual(report["message"], "NO_REPLY")
+            self.assertEqual(report["counts"]["processing"], 0)
+
+    def test_run_report_counts_unclaimed_work_without_claiming_settlement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = inbox_monitor.run_report(self.queued_root(directory))
+            self.assertTrue(report["settled"])
+            self.assertEqual(report["counts"]["unclaimed"], 2)
+            self.assertEqual(report["message"], "NO_REPLY")
+
+    def test_run_report_reports_manual_reviews_from_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.queued_root(directory)
+            item = inbox_monitor.load_queue_item(root, "msg-a")
+            item["processing_status"] = "manual_review"
+            item["discovery_status"] = "complete"
+            item["review_status"] = "open"
+            item["reason_code"] = "uncertain_classification"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-a"), item
+            )
+            report = inbox_monitor.run_report(root)
+            self.assertEqual(len(report["manual_reviews"]), 1)
+            self.assertIn("uncertain_classification", report["message"])
+            self.assertIn("1 item(s) awaiting manual review", report["message"])
+            self.assertIn("unresolved Jewelry Estimate Desk reviews", report["message"])
+
+    def test_run_report_refuses_to_call_an_unsettled_run_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.queued_root(directory)
+            item = inbox_monitor.load_queue_item(root, "msg-a")
+            item["processing_status"] = "processing"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-a"), item
+            )
+            report = inbox_monitor.run_report(root)
+            self.assertFalse(report["settled"])
+            self.assertNotEqual(report["message"], "NO_REPLY")
+            self.assertIn("did not settle", report["message"])
+
+
 
 class GmailSafeTests(unittest.TestCase):
     def payload(self, directory: str, thread_id: str = "thread-safe") -> Path:
@@ -5327,6 +5394,80 @@ class ReviewFindingRegressionTests(unittest.TestCase):
 
     def test_consistent_cost_lines_are_accepted(self) -> None:
         approval_guard.validate_internal_cost_sheet(internal_cost_sheet(3875), 3875)
+
+    # Finding 5 follow-up: ownership is keyed on thread, so a reply that loses
+    # its threading headers must not silently fork a second estimate.
+    def owned_record(
+        self, estimate_id: str, thread_id: str, identity: str,
+        status: str = "awaiting_specs",
+    ) -> dict:
+        return {
+            "schema_version": 1,
+            "estimate_id": estimate_id,
+            "status": status,
+            "route": {
+                "thread_id": thread_id,
+                "identity_key": identity,
+                "gmail_message_id": f"msg-{thread_id}",
+            },
+        }
+
+    def test_same_customer_on_a_new_thread_stops_for_the_owner(self) -> None:
+        existing = self.owned_record("jed-" + "a" * 16, "thread-1", "sha256:customer")
+        result = route_ownership.decide(
+            {"thread_id": "thread-2", "identity_key": "sha256:customer"},
+            [existing],
+            Path("/nonexistent"),
+            1,
+        )
+        self.assertEqual(result["decision"], "manual_review")
+        self.assertEqual(
+            result["reason_code"], "identity_has_active_estimate_on_another_thread"
+        )
+        self.assertEqual(result["estimate_id"], "jed-" + "a" * 16)
+
+    def test_a_finished_estimate_does_not_block_a_genuine_new_inquiry(self) -> None:
+        for status in ("declined", "dormant", "manual_review"):
+            existing = self.owned_record(
+                "jed-" + "a" * 16, "thread-1", "sha256:customer", status
+            )
+            result = route_ownership.decide(
+                {"thread_id": "thread-2", "identity_key": "sha256:customer"},
+                [existing],
+                Path("/nonexistent"),
+                1,
+            )
+            self.assertEqual(result["decision"], "new_inquiry", status)
+
+    def test_a_different_customer_is_unaffected(self) -> None:
+        existing = self.owned_record("jed-" + "a" * 16, "thread-1", "sha256:someone")
+        result = route_ownership.decide(
+            {"thread_id": "thread-2", "identity_key": "sha256:customer"},
+            [existing],
+            Path("/nonexistent"),
+            1,
+        )
+        self.assertEqual(result["decision"], "new_inquiry")
+
+    def test_lookup_thread_surfaces_active_work_on_other_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            root.mkdir()
+            for name, record in (
+                ("a", self.owned_record("jed-" + "a" * 16, "thread-1", "sha256:customer")),
+                ("b", self.owned_record("jed-" + "b" * 16, "thread-9", "sha256:someone")),
+                ("c", self.owned_record(
+                    "jed-" + "c" * 16, "thread-8", "sha256:customer", "declined")),
+            ):
+                (root / f"{record['estimate_id']}.json").write_text(
+                    json.dumps(record), encoding="utf-8"
+                )
+            found = estimate_record.lookup_thread(
+                root, {"thread_id": "thread-2", "identity_key": "sha256:customer"}
+            )
+            self.assertEqual(
+                [record["estimate_id"] for record in found], ["jed-" + "a" * 16]
+            )
 
     # Finding 5: writing a receipt must not re-permission a directory it did not
     # create.
