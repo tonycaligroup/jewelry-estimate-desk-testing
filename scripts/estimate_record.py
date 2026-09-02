@@ -894,6 +894,101 @@ def enforce_configured_price(
         )
 
 
+SPOT_METALS = {"gold", "silver", "platinum", "palladium"}
+
+
+def _card_rate(card: Any, rate_key: Any, label: str) -> float:
+    """Resolve one rate from the shop's configured card, or refuse."""
+    if not isinstance(rate_key, str) or not rate_key.strip():
+        raise ValueError(f"{label} must name the rate_key it priced from")
+    if not isinstance(card, dict) or rate_key not in card:
+        raise ValueError(
+            f"{label} rate_key '{rate_key}' is not in the shop's configured rates; "
+            "escalate for a rate rather than pricing without one"
+        )
+    rate = card[rate_key]
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or rate < 0:
+        raise ValueError(f"configured rate for '{rate_key}' is not a usable number")
+    return float(rate)
+
+
+def enforce_rate_provenance(
+    internal_cost_sheet: dict[str, Any],
+    pricing: Any,
+    spot_evidence: Any = None,
+) -> None:
+    """Require every unit cost to come from the shop's rates, not from the model.
+
+    Arithmetic and the pricing model are already enforced, so a fabricated rate
+    otherwise yields a perfectly consistent and perfectly fictional estimate.
+    """
+    if not isinstance(pricing, dict):
+        raise ValueError("shop profile is missing its pricing block")
+    spot = pricing.get("spot_metal")
+    spot_enabled = isinstance(spot, dict) and spot.get("enabled") is True
+
+    for index, line in enumerate(internal_cost_sheet["stone_lines"]):
+        label = f"internal_cost_sheet.stone_lines[{index}]"
+        rate = _card_rate(pricing.get("stones_per_carat"), line.get("rate_key"), label)
+        if abs(float(line["unit_cost"]) - rate) > 0.01:
+            raise ValueError(f"{label}.unit_cost does not equal its configured rate")
+
+    for index, line in enumerate(internal_cost_sheet["other_hard_cost_lines"]):
+        label = f"internal_cost_sheet.other_hard_cost_lines[{index}]"
+        rate = _card_rate(pricing.get("fees"), line.get("rate_key"), label)
+        if abs(float(line["total_cost"]) - rate) > 0.01:
+            raise ValueError(f"{label}.total_cost does not equal its configured fee")
+
+    bench = pricing.get("bench_labor_per_hour")
+    for index, line in enumerate(internal_cost_sheet["labor_lines"]):
+        label = f"internal_cost_sheet.labor_lines[{index}]"
+        if isinstance(bench, bool) or not isinstance(bench, (int, float)):
+            raise ValueError(
+                f"{label} cannot be priced: bench_labor_per_hour is not configured"
+            )
+        if abs(float(line["rate"]) - float(bench)) > 0.01:
+            raise ValueError(f"{label}.rate does not equal bench_labor_per_hour")
+
+    for index, line in enumerate(internal_cost_sheet["metal_lines"]):
+        label = f"internal_cost_sheet.metal_lines[{index}]"
+        if not spot_enabled:
+            rate = _card_rate(
+                pricing.get("metal_per_gram"), line.get("rate_key"), label
+            )
+            if abs(float(line["unit_cost"]) - rate) > 0.01:
+                raise ValueError(
+                    f"{label}.unit_cost does not equal its configured rate"
+                )
+            continue
+        # Spot pricing is enabled, so the line prices from live metal rather
+        # than the card and must show the inputs it used.
+        rate_key = line.get("rate_key")
+        if rate_key not in SPOT_METALS:
+            raise ValueError(
+                f"{label}.rate_key must name a spot metal while spot pricing is enabled"
+            )
+        for field in ("spot_price_per_gram", "purity"):
+            if field not in line:
+                raise ValueError(f"{label} must include {field} when priced from spot")
+        purity = float(line["purity"])
+        if not 0 < purity <= 1:
+            raise ValueError(f"{label}.purity must be greater than 0 and at most 1")
+        quoted = float(line["spot_price_per_gram"])
+        prices = spot_evidence.get("prices") if isinstance(spot_evidence, dict) else None
+        if not isinstance(prices, dict) or rate_key not in prices:
+            raise ValueError(
+                f"{label} priced from spot without spot price evidence for {rate_key}"
+            )
+        if abs(quoted - float(prices[rate_key])) > 0.01:
+            raise ValueError(
+                f"{label}.spot_price_per_gram does not match the recorded spot evidence"
+            )
+        if abs(float(line["unit_cost"]) - round(quoted * purity, 2)) > 0.01:
+            raise ValueError(
+                f"{label}.unit_cost does not equal spot_price_per_gram times purity"
+            )
+
+
 def prepare_approval_state(
     root: Path,
     estimate_id: str,
@@ -962,6 +1057,11 @@ def prepare_approval_state(
         approval_guard.binding_payload(state)
         enforce_configured_price(
             state["internal_cost_sheet"], state["proposed_price"], shop_profile
+        )
+        enforce_rate_provenance(
+            state["internal_cost_sheet"],
+            (shop_profile or {}).get("pricing"),
+            candidate.get("spot_price_evidence"),
         )
         return state
 

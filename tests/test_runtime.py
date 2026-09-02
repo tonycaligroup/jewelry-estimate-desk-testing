@@ -51,7 +51,17 @@ SHOP_MARKUP = 1.25
 
 
 def shop_profile(markup: float = SHOP_MARKUP) -> dict:
-    return {"pricing": {"model": "cost_plus_multiplier", "markup_multiplier": markup}}
+    return {
+        "pricing": {
+            "model": "cost_plus_multiplier",
+            "markup_multiplier": markup,
+            "spot_metal": {"enabled": False},
+            "metal_per_gram": {"yellow_gold_18k": 60},
+            "stones_per_carat": {"oval_diamond": 2000},
+            "bench_labor_per_hour": 100,
+            "fees": {"shipping": 50},
+        }
+    }
 
 
 def internal_cost_sheet(customer_price: float = 4200, labor_hours: float = 5) -> dict:
@@ -59,6 +69,7 @@ def internal_cost_sheet(customer_price: float = 4200, labor_hours: float = 5) ->
         "metal_lines": [
             {
                 "metal": "18k yellow gold",
+                "rate_key": "yellow_gold_18k",
                 "quantity_grams": 10,
                 "unit_cost": 60,
                 "total_cost": 600,
@@ -67,6 +78,7 @@ def internal_cost_sheet(customer_price: float = 4200, labor_hours: float = 5) ->
         "stone_lines": [
             {
                 "stone": "oval diamond",
+                "rate_key": "oval_diamond",
                 "quantity": 1,
                 "unit_cost": 2000,
                 "total_cost": 2000,
@@ -91,12 +103,18 @@ def cost_components() -> dict:
         "metal_lines": [
             {
                 "metal": "18k yellow gold",
+                "rate_key": "yellow_gold_18k",
                 "quantity_grams": 10,
                 "unit_cost": 60,
             }
         ],
         "stone_lines": [
-            {"stone": "oval diamond", "quantity": 1, "unit_cost": 2000}
+            {
+                "stone": "oval diamond",
+                "rate_key": "oval_diamond",
+                "quantity": 1,
+                "unit_cost": 2000,
+            }
         ],
         "labor_lines": [{"task": "bench labor", "hours": 5, "rate": 100}],
         "other_hard_cost_lines": [],
@@ -3997,6 +4015,55 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertIn("1 item(s) awaiting manual review", report["message"])
             self.assertIn("unresolved Jewelry Estimate Desk reviews", report["message"])
 
+    def test_announced_report_does_not_repeat_itself_every_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.queued_root(directory)
+            item = inbox_monitor.load_queue_item(root, "msg-a")
+            item["processing_status"] = "manual_review"
+            item["discovery_status"] = "complete"
+            item["review_status"] = "open"
+            item["reason_code"] = "invalid_cost_components"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-a"), item
+            )
+            first = inbox_monitor.run_report(root, announce=True)
+            self.assertIn("invalid_cost_components", first["message"])
+            self.assertFalse(first["repeat"])
+
+            second = inbox_monitor.run_report(root, announce=True)
+            self.assertEqual(second["message"], "NO_REPLY")
+            self.assertTrue(second["repeat"])
+            self.assertEqual(len(second["manual_reviews"]), 1)
+
+            # A second, different review is new information and must announce.
+            other = inbox_monitor.load_queue_item(root, "msg-b")
+            other["processing_status"] = "manual_review"
+            other["discovery_status"] = "complete"
+            other["review_status"] = "open"
+            other["reason_code"] = "uncertain_classification"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-b"), other
+            )
+            third = inbox_monitor.run_report(root, announce=True)
+            self.assertFalse(third["repeat"])
+            self.assertIn("uncertain_classification", third["message"])
+
+    def test_reading_the_report_without_announcing_never_suppresses(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.queued_root(directory)
+            item = inbox_monitor.load_queue_item(root, "msg-a")
+            item["processing_status"] = "manual_review"
+            item["discovery_status"] = "complete"
+            item["review_status"] = "open"
+            item["reason_code"] = "invalid_cost_components"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-a"), item
+            )
+            for _ in range(3):
+                report = inbox_monitor.run_report(root)
+                self.assertIn("invalid_cost_components", report["message"])
+                self.assertFalse(report["repeat"])
+
     def test_run_report_refuses_to_call_an_unsettled_run_clean(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.queued_root(directory)
@@ -5394,6 +5461,84 @@ class ReviewFindingRegressionTests(unittest.TestCase):
 
     def test_consistent_cost_lines_are_accepted(self) -> None:
         approval_guard.validate_internal_cost_sheet(internal_cost_sheet(3875), 3875)
+
+    # Finding 7: arithmetic and the pricing model are enforced, so a fabricated
+    # unit cost otherwise yields a consistent and entirely fictional estimate.
+    def test_invented_stone_rate_is_refused(self) -> None:
+        sheet = internal_cost_sheet(3875)
+        sheet["stone_lines"][0]["rate_key"] = "lab_grown_sapphire"
+        with self.assertRaisesRegex(ValueError, "not in the shop's configured rates"):
+            estimate_record.enforce_rate_provenance(
+                sheet, shop_profile()["pricing"]
+            )
+
+    def test_rate_key_must_be_named(self) -> None:
+        sheet = internal_cost_sheet(3875)
+        del sheet["stone_lines"][0]["rate_key"]
+        with self.assertRaisesRegex(ValueError, "must name the rate_key"):
+            estimate_record.enforce_rate_provenance(
+                sheet, shop_profile()["pricing"]
+            )
+
+    def test_unit_cost_must_equal_the_configured_rate(self) -> None:
+        sheet = internal_cost_sheet(3875)
+        sheet["stone_lines"][0]["unit_cost"] = 100
+        sheet["stone_lines"][0]["total_cost"] = 100
+        with self.assertRaisesRegex(ValueError, "does not equal its configured rate"):
+            estimate_record.enforce_rate_provenance(
+                sheet, shop_profile()["pricing"]
+            )
+
+    def test_labor_rate_must_equal_the_configured_bench_rate(self) -> None:
+        sheet = internal_cost_sheet(3875)
+        sheet["labor_lines"][0]["rate"] = 42
+        with self.assertRaisesRegex(ValueError, "bench_labor_per_hour"):
+            estimate_record.enforce_rate_provenance(
+                sheet, shop_profile()["pricing"]
+            )
+
+    def test_configured_rates_are_accepted(self) -> None:
+        estimate_record.enforce_rate_provenance(
+            internal_cost_sheet(3875), shop_profile()["pricing"]
+        )
+
+    def spot_sheet(self) -> dict:
+        sheet = internal_cost_sheet(3875)
+        sheet["metal_lines"][0].update(
+            {
+                "rate_key": "gold",
+                "spot_price_per_gram": 80.0,
+                "purity": 0.75,
+                "unit_cost": 60.0,
+            }
+        )
+        return sheet
+
+    def spot_pricing(self) -> dict:
+        pricing = shop_profile()["pricing"]
+        pricing["spot_metal"] = {"enabled": True}
+        return pricing
+
+    def test_spot_metal_must_reconcile_against_recorded_evidence(self) -> None:
+        estimate_record.enforce_rate_provenance(
+            self.spot_sheet(), self.spot_pricing(), {"prices": {"gold": 80.0}}
+        )
+        with self.assertRaisesRegex(ValueError, "spot price evidence"):
+            estimate_record.enforce_rate_provenance(
+                self.spot_sheet(), self.spot_pricing(), {"prices": {}}
+            )
+        with self.assertRaisesRegex(ValueError, "does not match the recorded spot"):
+            estimate_record.enforce_rate_provenance(
+                self.spot_sheet(), self.spot_pricing(), {"prices": {"gold": 140.0}}
+            )
+
+    def test_spot_metal_unit_cost_must_equal_spot_times_purity(self) -> None:
+        sheet = self.spot_sheet()
+        sheet["metal_lines"][0]["unit_cost"] = 105.0
+        with self.assertRaisesRegex(ValueError, "times purity"):
+            estimate_record.enforce_rate_provenance(
+                sheet, self.spot_pricing(), {"prices": {"gold": 80.0}}
+            )
 
     # Finding 5 follow-up: ownership is keyed on thread, so a reply that loses
     # its threading headers must not silently fork a second estimate.

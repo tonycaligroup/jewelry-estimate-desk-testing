@@ -757,9 +757,14 @@ For each returned message:
    it yourself:
 
    ```bash
-   python3 {baseDir}/scripts/inbox_monitor.py run-report \
+   python3 {baseDir}/scripts/inbox_monitor.py run-report --announce \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims'
    ```
+
+   `--announce` suppresses a report identical to the last one announced, so an
+   open review is raised once rather than every few minutes. A `NO_REPLY`
+   message means there is nothing new to tell the owner, not that nothing is
+   outstanding.
 
    Deliver its `message` field verbatim as the entire announcement. Do not
    compose, summarize, reword, or add to it, and never announce an outcome that
@@ -983,8 +988,18 @@ Write `current-state.json` with:
 - `proposed_price`
 - `cost_components`, containing exactly `metal_lines`, `stone_lines`,
   `labor_lines`, and `other_hard_cost_lines`. Use these exact line shapes:
-  `{metal, quantity_grams, unit_cost}`, `{stone, quantity, unit_cost}`,
-  `{task, hours, rate}`, and `{label, total_cost}`. Do not add line totals,
+  `{metal, rate_key, quantity_grams, unit_cost}`,
+  `{stone, rate_key, quantity, unit_cost}`, `{task, hours, rate}`, and
+  `{label, rate_key, total_cost}`. Every `rate_key` must name an entry the
+  owner configured in `pricing`: `metal_per_gram`, `stones_per_carat`, and
+  `fees` respectively, and the unit cost must equal that configured rate.
+  Labor `rate` must equal `bench_labor_per_hour`. When `pricing.spot_metal` is
+  enabled a metal line instead uses `rate_key` naming the spot metal plus
+  `spot_price_per_gram` and `purity`, and its `unit_cost` must equal
+  `spot_price_per_gram` times `purity`, with the spot figure matching the
+  recorded spot price evidence. If a required rate is not configured, never
+  substitute, estimate, or infer one: fail closed to manual review with reason
+  `invalid_cost_components` and let the owner add the rate. Do not add line totals,
   `hard_cost_total`, or `customer_price`; the approval helper calculates and
   inserts them deterministically into the owner-only `internal_cost_sheet`.
 - internal pricing, jeweler cost assumptions, feasibility, appointment options,

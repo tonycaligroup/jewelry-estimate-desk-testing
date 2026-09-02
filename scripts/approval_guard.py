@@ -68,6 +68,12 @@ def build_internal_cost_sheet(
         "labor_lines": ("task", "hours", "rate"),
         "other_hard_cost_lines": ("label", "total_cost"),
     }
+    optional_fields = {
+        "metal_lines": ("rate_key", "spot_price_per_gram", "purity"),
+        "stone_lines": ("rate_key",),
+        "labor_lines": (),
+        "other_hard_cost_lines": ("rate_key",),
+    }
     result: dict[str, Any] = {}
     hard_cost_total = 0.0
     for group, fields in line_specs.items():
@@ -76,7 +82,12 @@ def build_internal_cost_sheet(
             raise ValueError(f"cost_components.{group} must be an array")
         built_lines: list[dict[str, Any]] = []
         for index, line in enumerate(lines):
-            if not isinstance(line, dict) or set(line) != set(fields):
+            allowed = set(fields) | set(optional_fields[group])
+            if (
+                not isinstance(line, dict)
+                or not set(fields) <= set(line)
+                or not set(line) <= allowed
+            ):
                 raise ValueError(
                     f"cost_components.{group}[{index}] contains missing or unsupported fields"
                 )
@@ -132,13 +143,26 @@ def validate_internal_cost_sheet(value: Any, proposed_price: float) -> dict[str,
         "labor_lines": ("task", "hours", "rate", "total_cost"),
         "other_hard_cost_lines": ("label", "total_cost"),
     }
+    # Provenance fields are carried through so the rate a line claims to have
+    # used is bound with the approval and can be re-checked afterwards.
+    provenance_fields = {
+        "metal_lines": ("rate_key", "spot_price_per_gram", "purity"),
+        "stone_lines": ("rate_key",),
+        "labor_lines": (),
+        "other_hard_cost_lines": ("rate_key",),
+    }
     calculated = 0.0
     for group, fields in line_specs.items():
         lines = value[group]
         if not isinstance(lines, list):
             raise ValueError(f"internal_cost_sheet.{group} must be an array")
         for index, line in enumerate(lines):
-            if not isinstance(line, dict) or set(line) != set(fields):
+            allowed = set(fields) | set(provenance_fields[group])
+            if (
+                not isinstance(line, dict)
+                or not set(fields) <= set(line)
+                or not set(line) <= allowed
+            ):
                 raise ValueError(
                     f"internal_cost_sheet.{group}[{index}] contains missing or unsupported fields"
                 )
@@ -149,6 +173,15 @@ def validate_internal_cost_sheet(value: Any, proposed_price: float) -> dict[str,
                 )
             for field in fields[1:]:
                 _money(line[field], f"internal_cost_sheet.{group}[{index}].{field}")
+            for field in ("spot_price_per_gram", "purity"):
+                if field in line:
+                    _money(line[field], f"internal_cost_sheet.{group}[{index}].{field}")
+            if "rate_key" in line and (
+                not isinstance(line["rate_key"], str) or not line["rate_key"].strip()
+            ):
+                raise ValueError(
+                    f"internal_cost_sheet.{group}[{index}].rate_key must be text"
+                )
             # A hand-authored sheet must not state a line total that its own
             # quantity and unit cost do not produce. Without this the owner can
             # approve, and the binding can lock in, a breakdown whose lines do
