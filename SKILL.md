@@ -753,6 +753,20 @@ For each returned message:
    A nonzero result means the run is incomplete. Never return `ok` or
    `NO_REPLY` while any queue item remains `processing`.
 
+   Then derive the owner-facing summary from durable state rather than writing
+   it yourself:
+
+   ```bash
+   python3 {baseDir}/scripts/inbox_monitor.py run-report \
+     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims'
+   ```
+
+   Deliver its `message` field verbatim as the entire announcement. Do not
+   compose, summarize, reword, or add to it, and never announce an outcome that
+   did not come from this command. A run that reports something it did not
+   observe is worse than a run that fails, because the owner and every later
+   session treat the announcement as evidence.
+
    When the owner asks to see those reviews, run:
 
    ```bash
