@@ -5323,6 +5323,238 @@ class EstimateRecordTests(unittest.TestCase):
 
 
 
+class EstimateRetirementTests(unittest.TestCase):
+    def route(self, thread_id: str = "gmail-thread", message_id: str = "gmail-initial-message") -> dict:
+        return {
+            "channel": "gmail",
+            "mailbox": "sales@example.com",
+            "recipient": "customer@example.net",
+            "identity_key": gmail_route.email_identity_key("customer@example.net"),
+            "gmail_message_id": message_id,
+            "thread_id": thread_id,
+            "original_message_id": f"<{message_id}@example.net>",
+            "original_subject": "Custom ring inquiry",
+            "references": [],
+        }
+
+    def force_status(self, root: Path, estimate_id: str, status: str) -> str:
+        path = estimate_record.record_path(root, estimate_id)
+        record = estimate_record.read_object(path)
+        record["status"] = status
+        estimate_record.write_object(path, record)
+        return path.read_text(encoding="utf-8")
+
+    def test_retire_moves_one_record_to_dormant_and_records_why(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(root, self.route(), 1_000)
+            other = estimate_record.create_initial_record(
+                root, self.route("other-thread", "other-message"), 2_000
+            )
+            other_path = estimate_record.record_path(root, other["estimate_id"])
+            other_before = other_path.read_text(encoding="utf-8")
+            before = datetime.now(timezone.utc)
+            retired = estimate_record.retire(
+                root,
+                record["estimate_id"],
+                "created_in_error",
+                note="Opened from a forwarded newsletter",
+            )
+            self.assertEqual(retired["status"], "dormant")
+            retirement = retired["retirement"]
+            self.assertEqual(retirement["reason"], "created_in_error")
+            self.assertEqual(retirement["previous_status"], "awaiting_specs")
+            self.assertEqual(retirement["note"], "Opened from a forwarded newsletter")
+            retired_at = datetime.fromisoformat(retirement["retired_at"])
+            self.assertGreaterEqual(retired_at, before.replace(microsecond=0))
+            self.assertLessEqual(retired_at, datetime.now(timezone.utc))
+            expected = dict(record)
+            expected["status"] = "dormant"
+            expected["retirement"] = retirement
+            self.assertEqual(retired, expected)
+            persisted = estimate_record.read_object(
+                estimate_record.record_path(root, record["estimate_id"])
+            )
+            self.assertEqual(persisted, retired)
+            route_ownership.validate_record(persisted)
+            self.assertEqual(other_path.read_text(encoding="utf-8"), other_before)
+
+    def test_retire_omits_empty_note_and_allows_pending_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            route = self.route()
+            record = estimate_record.create_initial_record(root, route, 1_000)
+            specification = {
+                "piece_type": "ring",
+                "metal": "18k yellow gold",
+                "setting_style": "classic band",
+            }
+            estimate_record.record_thread_review(
+                root,
+                record["estimate_id"],
+                {
+                    "thread_id": route["thread_id"],
+                    "source_message_id": "reply-message",
+                    "message_ids": [route["gmail_message_id"], "reply-message"],
+                    "specification": specification,
+                    "missing_required_fields": [],
+                },
+            )
+            request = approval_guard.build_request(
+                {
+                    "estimate_id": record["estimate_id"],
+                    "route": route,
+                    "specification": specification,
+                    "proposed_price": 4200,
+                    "internal_cost_sheet": internal_cost_sheet(),
+                }
+            )
+            pending = estimate_record.record_approval_requested(
+                root, record["estimate_id"], "reply-message", request
+            )
+            self.assertEqual(pending["status"], "pending_approval")
+            retired = estimate_record.retire(
+                root, record["estimate_id"], "customer_withdrew"
+            )
+            self.assertEqual(retired["status"], "dormant")
+            self.assertEqual(retired["retirement"]["previous_status"], "pending_approval")
+            self.assertNotIn("note", retired["retirement"])
+            self.assertEqual(retired["approval_requests"], pending["approval_requests"])
+            self.assertEqual(
+                retired["approval_binding_hash"], pending["approval_binding_hash"]
+            )
+
+    def test_retired_record_no_longer_blocks_a_new_thread_for_the_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            claim_root = Path(directory) / "claims"
+            record = estimate_record.create_initial_record(root, self.route(), 1_000)
+            new_route = self.route("fresh-thread", "fresh-message")
+            blocked = route_ownership.decide(
+                new_route, [record], claim_root, thread_message_count=1
+            )
+            self.assertEqual(
+                blocked["reason_code"], "identity_has_active_estimate_on_another_thread"
+            )
+            retired = estimate_record.retire(
+                root, record["estimate_id"], "duplicate_of_another_thread"
+            )
+            cleared = route_ownership.decide(
+                new_route, [retired], claim_root, thread_message_count=1
+            )
+            self.assertEqual(cleared, {"decision": "new_inquiry", "reason_code": "first_thread_message"})
+
+    def test_retire_refuses_terminal_records_and_leaves_them_untouched(self) -> None:
+        for status in ("declined", "manual_review", "dormant"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "records"
+                record = estimate_record.create_initial_record(root, self.route(), 1_000)
+                before = self.force_status(root, record["estimate_id"], status)
+                with self.assertRaisesRegex(ValueError, "already terminal"):
+                    estimate_record.retire(root, record["estimate_id"], "test_artifact")
+                path = estimate_record.record_path(root, record["estimate_id"])
+                self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_retire_is_not_repeatable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(root, self.route(), 1_000)
+            estimate_record.retire(root, record["estimate_id"], "test_artifact")
+            path = estimate_record.record_path(root, record["estimate_id"])
+            before = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "already terminal"):
+                estimate_record.retire(root, record["estimate_id"], "created_in_error")
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_retire_refuses_records_the_customer_has_already_seen(self) -> None:
+        for status in ("estimate_sent", "appointment_booked", "approved"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "records"
+                record = estimate_record.create_initial_record(root, self.route(), 1_000)
+                before = self.force_status(root, record["estimate_id"], status)
+                with self.assertRaisesRegex(ValueError, "already been told"):
+                    estimate_record.retire(
+                        root, record["estimate_id"], "customer_withdrew"
+                    )
+                path = estimate_record.record_path(root, record["estimate_id"])
+                self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_retire_rejects_bad_arguments_before_touching_the_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = estimate_record.create_initial_record(root, self.route(), 1_000)
+            path = estimate_record.record_path(root, record["estimate_id"])
+            before = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "reason must be one of"):
+                estimate_record.retire(root, record["estimate_id"], "changed_my_mind")
+            with self.assertRaisesRegex(ValueError, "at most 400"):
+                estimate_record.retire(
+                    root, record["estimate_id"], "test_artifact", note="x" * 401
+                )
+            with self.assertRaisesRegex(ValueError, "at most 400"):
+                estimate_record.retire(
+                    root, record["estimate_id"], "test_artifact", note=["not text"]
+                )
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+            with self.assertRaises(FileNotFoundError):
+                estimate_record.retire(root, "jed-0123456789abcdef", "test_artifact")
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_retire_cli_writes_output_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            output = Path(directory) / "retired.json"
+            record = estimate_record.create_initial_record(root, self.route(), 1_000)
+            stdout = io.StringIO()
+            with patch("sys.stdout", stdout):
+                code = estimate_record.main(
+                    [
+                        "retire",
+                        "--estimate-id",
+                        record["estimate_id"],
+                        "--reason",
+                        "superseded_by_another_estimate",
+                        "--note",
+                        "See the newer thread",
+                        "--record-root",
+                        str(root),
+                        "--output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(code, 0)
+            printed = json.loads(stdout.getvalue())
+            self.assertEqual(printed["status"], "dormant")
+            self.assertEqual(printed["retirement"]["note"], "See the newer thread")
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), printed)
+            self.assertEqual(
+                estimate_record.read_object(
+                    estimate_record.record_path(root, record["estimate_id"])
+                ),
+                printed,
+            )
+            stderr = io.StringIO()
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", stderr):
+                code = estimate_record.main(
+                    [
+                        "retire",
+                        "--estimate-id",
+                        record["estimate_id"],
+                        "--reason",
+                        "test_artifact",
+                        "--record-root",
+                        str(root),
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("already terminal", json.loads(stderr.getvalue())["error"])
+            with self.assertRaises(SystemExit):
+                with patch("sys.stderr", io.StringIO()):
+                    estimate_record.main(
+                        ["retire", "--estimate-id", record["estimate_id"], "--record-root", str(root)]
+                    )
+
+
 class ReviewFindingRegressionTests(unittest.TestCase):
     """Regressions for defects found by independent review of the skill source."""
 

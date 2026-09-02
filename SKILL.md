@@ -1302,6 +1302,17 @@ Statuses are `awaiting_specs`, `pending_approval`, `estimate_sent`,
 For day-3 and day-7 follow-ups, read `references/nudge-workflow.md`. After day 7,
 stop and mark dormant.
 
+To retire one record the shop will not pursue (opened in error, a duplicate of
+another thread, superseded, withdrawn by the customer before any price was
+sent, or a test artifact), run `scripts/estimate_record.py retire` with
+`--estimate-id`, `--reason`, and an optional `--note`. It moves that single
+record to `dormant`, stores the reason and previous status under `retirement`,
+and changes no claim, queue item, watermark, or other record. It refuses records
+that are already terminal and refuses `estimate_sent`, `appointment_booked`, and
+`approved` records: once the customer has been told a price, resolve it with the
+customer rather than by changing the record. Mirror the retired record through
+`scripts/kolo_safe.py record-upsert` afterwards, as with any other update.
+
 Delete the private temporary directory after records are durably written. Keep
 workspace inbox-claim sentinels as deduplication state; do not delete or
 auto-steal them.
