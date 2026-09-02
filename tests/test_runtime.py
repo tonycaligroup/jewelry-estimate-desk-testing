@@ -40,6 +40,7 @@ import route_ownership
 import validate_profile
 import appointment_options
 import calendar_query
+import cost_components as pricing_helper
 import pricing_model
 import rendering_materialize
 import rendering_wait
@@ -5596,6 +5597,279 @@ class EstimateRetirementTests(unittest.TestCase):
                     estimate_record.main(
                         ["retire", "--estimate-id", record["estimate_id"], "--record-root", str(root)]
                     )
+
+
+class CostComponentsTests(unittest.TestCase):
+    """The pricing helper resolves every rate so the model only fills quantities."""
+
+    def spot_profile(self) -> dict:
+        return {
+            "pricing": {
+                "model": "cost_plus_multiplier",
+                "markup_multiplier": 2.0,
+                "spot_metal": {"enabled": True, "provider": "stackerscan", "unit": "gram"},
+                "metal_per_gram": {},
+                "stones_per_carat": {
+                    "lab_grown_sapphire": 120,
+                    "lab_grown_diamond": 300,
+                    "lab_grown_diamond_melee": 100,
+                },
+                "bench_labor_per_hour": 42,
+                "fees": {"complex_prong_setting": 40, "cad": 100, "shipping": 50},
+            }
+        }
+
+    def evidence(self) -> dict:
+        return {
+            "schema_version": 1,
+            "provider": "stackerscan",
+            "currency": "USD",
+            "unit": "gram",
+            "prices": {"gold": 140.49486503685338},
+            "provider_timestamp": 1788366121,
+            "fetched_at_epoch": 1788366847,
+        }
+
+    def nested_specification(self) -> dict:
+        return {
+            "center_stone": {
+                "carat": 0.75,
+                "clarity": "eye-clean",
+                "color": "rich royal blue",
+                "shape": "round brilliant cut",
+                "stone_origin": "lab-grown",
+                "stone_type": "sapphire",
+            },
+            "chain": {"length_inches": 18},
+            "metal": {"color": "white", "karat": "14K", "metal": "gold"},
+            "piece_type": "pendant",
+            "quantity": 1,
+            "setting_style": "halo setting",
+        }
+
+    def flat_specification(self) -> dict:
+        return {
+            "piece_type": "pendant",
+            "quantity": 1,
+            "setting_style": "halo setting",
+            "center_stone_type": "sapphire",
+            "stone_origin": "lab-grown",
+            "center_stone_carat": 0.75,
+            "center_stone_shape": "round brilliant cut",
+            "metal": "white gold",
+            "karat": "14K",
+            "metal_color": "white",
+            "chain": "18 inches",
+            "stone_sourcing": "shop sourcing",
+        }
+
+    def reviewed_record(self, root: Path, specification: dict) -> dict:
+        route = {
+            "channel": "gmail",
+            "mailbox": "shop@example.com",
+            "recipient": "customer@example.net",
+            "identity_key": gmail_route.email_identity_key("customer@example.net"),
+            "gmail_message_id": "inquiry-message",
+            "thread_id": "inquiry-thread",
+            "original_message_id": "<inquiry@example.net>",
+            "original_subject": "Quote request",
+            "references": [],
+        }
+        record = estimate_record.create_initial_record(root, route, 1_000)
+        return estimate_record.record_thread_review(
+            root,
+            record["estimate_id"],
+            {
+                "thread_id": "inquiry-thread",
+                "source_message_id": "inquiry-message",
+                "message_ids": ["inquiry-message"],
+                "specification": specification,
+                "missing_required_fields": [],
+            },
+        )
+
+    def test_prepare_resolves_every_rate_from_spot_and_card(self) -> None:
+        for specification in (self.nested_specification(), self.flat_specification()):
+            with self.subTest(shape=list(specification)[0]), tempfile.TemporaryDirectory() as directory:
+                record = self.reviewed_record(Path(directory) / "records", specification)
+                skeleton = pricing_helper.prepare(
+                    record, self.spot_profile(), self.evidence()
+                )
+                metal = skeleton["cost_components"]["metal_lines"][0]
+                self.assertEqual(metal["metal"], "14K white gold")
+                self.assertEqual(metal["rate_key"], "gold")
+                self.assertEqual(metal["purity"], 0.583)
+                self.assertEqual(metal["spot_price_per_gram"], 140.49486503685338)
+                self.assertEqual(metal["unit_cost"], 81.91)
+                self.assertIsNone(metal["quantity_grams"])
+                stone = skeleton["cost_components"]["stone_lines"][0]
+                self.assertEqual(stone["rate_key"], "lab_grown_sapphire")
+                self.assertEqual(stone["quantity"], 0.75)
+                self.assertEqual(stone["unit_cost"], 120.0)
+                labor = skeleton["cost_components"]["labor_lines"][0]
+                self.assertEqual(labor["rate"], 42.0)
+                self.assertIsNone(labor["hours"])
+                self.assertEqual(skeleton["cost_components"]["other_hard_cost_lines"], [])
+                self.assertEqual(skeleton["unresolved"], [])
+                self.assertEqual(
+                    sorted(skeleton["fill"]),
+                    ["labor_lines[0].hours", "metal_lines[0].quantity_grams"],
+                )
+                self.assertIn(
+                    {"label": "complex prong setting", "rate_key": "complex_prong_setting", "total_cost": 40.0},
+                    skeleton["fee_catalog"],
+                )
+                self.assertEqual(skeleton["spot_price_evidence"], self.evidence())
+                self.assertEqual(skeleton["estimate_id"], record["estimate_id"])
+                self.assertEqual(skeleton["route"], record["route"])
+                self.assertEqual(skeleton["specification"], specification)
+
+    def test_prepare_leaves_ambiguous_rates_unresolved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            specification = self.nested_specification()
+            specification["center_stone"]["stone_type"] = "diamond"
+            record = self.reviewed_record(Path(directory) / "records", specification)
+            skeleton = pricing_helper.prepare(record, self.spot_profile(), self.evidence())
+            stone = skeleton["cost_components"]["stone_lines"][0]
+            self.assertIsNone(stone["rate_key"])
+            self.assertIsNone(stone["unit_cost"])
+            self.assertEqual(
+                skeleton["unresolved"][0]["candidates"],
+                ["lab_grown_diamond", "lab_grown_diamond_melee"],
+            )
+            filled = json.loads(json.dumps(skeleton))
+            filled["cost_components"]["metal_lines"][0]["quantity_grams"] = 7
+            filled["cost_components"]["labor_lines"][0]["hours"] = 8
+            with self.assertRaisesRegex(ValueError, "unresolved rates remain"):
+                pricing_helper.finalize(filled, self.spot_profile())
+
+    def test_prepare_requires_spot_evidence_when_spot_is_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            record = self.reviewed_record(Path(directory) / "records", self.nested_specification())
+            with self.assertRaisesRegex(ValueError, "spot price evidence"):
+                pricing_helper.prepare(record, self.spot_profile(), None)
+            troy = self.evidence()
+            troy["unit"] = "troy_oz"
+            with self.assertRaisesRegex(ValueError, "per gram"):
+                pricing_helper.prepare(record, self.spot_profile(), troy)
+
+    def test_prepare_resolves_card_metal_when_spot_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            specification = {
+                "piece_type": "ring",
+                "metal": "18k yellow gold",
+                "center_stone": "oval diamond, 1 ct",
+                "setting_style": "classic band",
+            }
+            record = self.reviewed_record(Path(directory) / "records", specification)
+            skeleton = pricing_helper.prepare(record, shop_profile(), None)
+            metal = skeleton["cost_components"]["metal_lines"][0]
+            self.assertEqual(metal["rate_key"], "yellow_gold_18k")
+            self.assertEqual(metal["unit_cost"], 60.0)
+            self.assertNotIn("spot_price_per_gram", metal)
+            stone = skeleton["cost_components"]["stone_lines"][0]
+            self.assertEqual(stone["rate_key"], "oval_diamond")
+            self.assertEqual(stone["quantity"], 1.0)
+            self.assertEqual(stone["unit_cost"], 2000.0)
+            self.assertNotIn("spot_price_evidence", skeleton)
+            self.assertEqual(skeleton["metal_catalog"], [{"rate_key": "yellow_gold_18k", "rate": 60}])
+
+    def test_finalize_normalizes_rates_and_derives_the_price(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            record = self.reviewed_record(root, self.nested_specification())
+            skeleton = pricing_helper.prepare(record, self.spot_profile(), self.evidence())
+            filled = json.loads(json.dumps(skeleton))
+            components = filled["cost_components"]
+            components["metal_lines"][0]["quantity_grams"] = 7.0
+            # A model that recomputes the unit cost with full precision, or
+            # writes its own price, must not be able to drift the binding.
+            components["metal_lines"][0]["unit_cost"] = 81.9084625964843
+            components["labor_lines"][0]["hours"] = 8
+            components["other_hard_cost_lines"].append(
+                {"label": "halo prong setting", "rate_key": "complex_prong_setting", "total_cost": 39}
+            )
+            filled["proposed_price"] = 3689.18
+            state = pricing_helper.finalize(filled, self.spot_profile())
+            self.assertEqual(
+                sorted(state),
+                ["cost_components", "estimate_id", "proposed_price", "route", "specification", "spot_price_evidence"],
+            )
+            metal = state["cost_components"]["metal_lines"][0]
+            self.assertEqual(metal["unit_cost"], 81.91)
+            self.assertEqual(state["cost_components"]["other_hard_cost_lines"][0]["total_cost"], 40.0)
+            # 7 x 81.91 + 0.75 x 120 + 8 x 42 + 40 = 1039.37, doubled.
+            self.assertEqual(state["proposed_price"], 2078.74)
+            current = estimate_record.prepare_approval_state(
+                root, record["estimate_id"], "inquiry-message", state, self.spot_profile()
+            )
+            self.assertEqual(current["proposed_price"], 2078.74)
+            self.assertEqual(current["internal_cost_sheet"]["hard_cost_total"], 1039.37)
+            self.assertEqual(
+                current["internal_cost_sheet"]["stone_lines"][0]["rate_key"],
+                "lab_grown_sapphire",
+            )
+            approval_guard.build_request(current)
+
+    def test_finalize_refuses_unfilled_or_foreign_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            record = self.reviewed_record(Path(directory) / "records", self.nested_specification())
+            skeleton = pricing_helper.prepare(record, self.spot_profile(), self.evidence())
+            with self.assertRaisesRegex(ValueError, "quantity_grams must be filled"):
+                pricing_helper.finalize(skeleton, self.spot_profile())
+            filled = json.loads(json.dumps(skeleton))
+            filled["cost_components"]["metal_lines"][0]["quantity_grams"] = 7
+            filled["cost_components"]["labor_lines"][0]["hours"] = 8
+            filled["cost_components"]["stone_lines"][0]["rate_key"] = "sapphire_market_rate"
+            with self.assertRaisesRegex(ValueError, "not in the shop's configured rates"):
+                pricing_helper.finalize(filled, self.spot_profile())
+            filled["cost_components"]["stone_lines"][0]["rate_key"] = "lab_grown_sapphire"
+            filled["cost_components"]["metal_lines"][0]["rate_key"] = "white_gold"
+            with self.assertRaisesRegex(ValueError, "must name a spot metal"):
+                pricing_helper.finalize(filled, self.spot_profile())
+
+    def test_cli_prepare_and_finalize_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "records"
+            record = self.reviewed_record(root, self.flat_specification())
+            profile = base / "shop-profile.json"
+            profile.write_text(json.dumps(self.spot_profile()), encoding="utf-8")
+            evidence = base / "spot-evidence.json"
+            evidence.write_text(json.dumps(self.evidence()), encoding="utf-8")
+            skeleton_path = base / "cost-skeleton.json"
+            with patch("sys.stdout", io.StringIO()) as stdout:
+                code = pricing_helper.main([
+                    "prepare", "--record-root", str(root), "--estimate-id", record["estimate_id"],
+                    "--shop-profile", str(profile), "--spot-evidence", str(evidence),
+                    "--output", str(skeleton_path),
+                ])
+            self.assertEqual(code, 0)
+            summary = json.loads(stdout.getvalue())
+            self.assertEqual(summary["unresolved"], [])
+            self.assertEqual(summary["fill"], ["labor_lines[0].hours", "metal_lines[0].quantity_grams"])
+            skeleton = json.loads(skeleton_path.read_text(encoding="utf-8"))
+            skeleton["cost_components"]["metal_lines"][0]["quantity_grams"] = 7
+            skeleton["cost_components"]["labor_lines"][0]["hours"] = 8
+            skeleton_path.write_text(json.dumps(skeleton), encoding="utf-8")
+            state_path = base / "current-state.json"
+            with patch("sys.stdout", io.StringIO()) as stdout:
+                code = pricing_helper.main([
+                    "finalize", "--input", str(skeleton_path),
+                    "--shop-profile", str(profile), "--output", str(state_path),
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout.getvalue())["proposed_price"], 1998.74)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["proposed_price"], 1998.74)
+            self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()) as stderr:
+                code = pricing_helper.main([
+                    "prepare", "--record-root", str(root), "--estimate-id", record["estimate_id"],
+                    "--shop-profile", str(profile), "--output", str(skeleton_path),
+                ])
+            self.assertEqual(code, 2)
+            self.assertIn("spot price evidence", json.loads(stderr.getvalue())["error"])
 
 
 class ReviewFindingRegressionTests(unittest.TestCase):
