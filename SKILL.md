@@ -53,7 +53,7 @@ and delivery commitment behind owner approval.
    user explicitly resumes the workflow.
 
 Run this skill through the dedicated Kolo agent pinned to
-`litellm-fireworks/qwen-3-7-plus`, with no fallback. Monitoring crons must use
+`litellm-fireworks/glm-5-3`, with no fallback. Monitoring crons must use
 the same model and `--fallbacks ""`. If Kolo cannot verify the model, stop and
 route to the pinned agent.
 
@@ -235,7 +235,7 @@ every pre-activation inquiry manually.
    IANA timezone. If the owner requests another interval, use and preserve that
    interval instead; never silently reset an existing owner-selected schedule.
    Use model
-   `litellm-fireworks/qwen-3-7-plus`, no fallbacks, a 420-second timeout,
+   `litellm-fireworks/glm-5-3`, no fallbacks, a 420-second timeout,
    `lightContext: true`,
    `toolsAllow: ["exec", "read", "write", "image_generate"]`, an isolated
    session, and Kolo owner announcement delivery. Never enable or manually run

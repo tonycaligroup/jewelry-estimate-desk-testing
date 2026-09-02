@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-MODEL = "litellm-fireworks/qwen-3-7-plus"
+MODEL = "litellm-fireworks/glm-5-3"
 JOB_NAME = "jed-inbox-monitor"
 TIMEOUT_SECONDS = 420
 TOOLS_ALLOW = ["exec", "read", "write", "image_generate"]
