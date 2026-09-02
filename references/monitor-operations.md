@@ -49,7 +49,7 @@ every pre-activation inquiry manually.
    IANA timezone. If the owner requests another interval, use and preserve that
    interval instead; never silently reset an existing owner-selected schedule.
    Use model
-   `litellm-fireworks/glm-5-3`, no fallbacks, a 420-second timeout,
+   `litellm-fireworks/glm-5-3`, no fallbacks, a 900-second timeout,
    `lightContext: true`,
    `toolsAllow: ["exec", "read", "write", "image_generate"]`, an isolated
    session, and Kolo owner announcement delivery. Never enable or manually run
