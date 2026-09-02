@@ -2358,7 +2358,7 @@ class CronConfigTests(unittest.TestCase):
                 "message": cron_config.render_message(Path("/workspace"), ROOT),
                 "model": cron_config.MODEL,
                 "fallbacks": [],
-                "timeoutSeconds": 420,
+                "timeoutSeconds": 900,
                 "lightContext": True,
                 "toolsAllow": cron_config.TOOLS_ALLOW,
             },
@@ -2481,7 +2481,8 @@ class CronConfigTests(unittest.TestCase):
         target = cron_config.build_target_binding(job, Path("/workspace"), ROOT)
         self.assertEqual(target["payload"]["model"], cron_config.MODEL)
         self.assertEqual(target["payload"]["fallbacks"], [])
-        self.assertEqual(target["payload"]["timeoutSeconds"], 420)
+        self.assertEqual(target["payload"]["timeoutSeconds"], cron_config.TIMEOUT_SECONDS)
+        self.assertEqual(cron_config.TIMEOUT_SECONDS, 900)
         self.assertTrue(target["payload"]["lightContext"])
         self.assertEqual(target["payload"]["toolsAllow"], cron_config.TOOLS_ALLOW)
 
@@ -2618,7 +2619,7 @@ class InboxMonitorTests(unittest.TestCase):
                 "message": cron_config.render_message(Path("/workspace"), ROOT),
                 "model": cron_config.MODEL,
                 "fallbacks": [],
-                "timeoutSeconds": 420,
+                "timeoutSeconds": 900,
                 "lightContext": True,
                 "toolsAllow": cron_config.TOOLS_ALLOW,
             },
