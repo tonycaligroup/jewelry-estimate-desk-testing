@@ -6,8 +6,26 @@ business does; this document says which part of the system does each step,
 what the platform provides, and in what order the change is built. Where the
 two disagree, `WORKFLOW.md` wins.
 
-Status: proposed design, 2 September 2026. Nothing below is built yet except
-where marked "exists today".
+Status: proposed design, 2 September 2026, revised the same day after a
+platform review by Kolo (thread "Kolo CLI Architecture Review Summary").
+Nothing below is built yet except where marked "exists today".
+
+### Why split the job at all
+
+Measured on the production pod on 2 September 2026:
+
+| Run | Lane time | Model turns |
+|---|---|---|
+| Empty inbox tick, current design | 19 s | 8 |
+| One inquiry, current design | about 6 min | 52 |
+| Each model turn carries | about 24k tokens of context, 13k of it the SKILL.md read | |
+
+Every tick today starts a model session and reads the whole skill even when
+there is no mail. One timeout covers discovery plus every inquiry found, so
+ticks stacked behind a long run and expired (all four timeouts on 2
+September were this). Splitting makes empty ticks free, gives each inquiry
+its own clock, and lets the model prompt shrink to one branch, which is what
+allows a faster model to be trusted.
 
 ---
 
@@ -73,6 +91,11 @@ environment and no model. On each tick it:
 All of steps 1 to 6 exist today as deterministic helpers and are already
 bundled behind one intake command; the watcher composes them.
 
+If creating a worker job fails, the claim stays open and is retried on the
+next tick; after three failures the watcher files a review item and alerts
+the owner. The watcher never drops an inquiry silently. Its announced output
+is bounded with an explicit output limit so nothing is truncated.
+
 ### 2.2 Worker job (new)
 
 A one-shot isolated agent job created by the watcher, self-deleting on
@@ -126,20 +149,34 @@ delivered payload. That command:
 `send-approved-estimate` exists today and already does most of the estimate
 case; booking and rendering delivery move into the same executor.
 
+Expiry: every brief carries `approval_valid_until` (the estimate's validity
+date). An approval that arrives after it is refused by the executor, which
+files a fresh brief with re-priced figures instead of sending. An edited
+price is treated the same way as a stale binding: new brief, no send.
+
 ### 2.5 Follow-ups (new; documented but not built today)
 
-The watcher reads records with a next-action date. On day 3 and day 7 after
-an estimate or a question email, it drafts the nudge from the template with
-the record's facts, checks that nothing newer has happened, and either files
-it as a brief (Stage 1) or sends it deterministically (Stage 2 and 3). After
-day 7 it marks the record dormant. No model is needed for a nudge.
+On day 3 and day 7 after an estimate or a question email, a nudge is drafted
+from the template with the record's facts, after checking that nothing newer
+has happened on the record, and is either filed as a brief (Stage 1) or sent
+deterministically (Stage 2 and 3). After day 7 the record is marked dormant.
+No model is needed for a nudge.
+
+Two ways to schedule it; the feasibility tests decide which:
+
+- The watcher reads records with a `next_action_at` date on every tick (one
+  scheduler, no extra jobs).
+- Or, as Kolo suggested, the executor creates one-shot command jobs at the
+  day-3 and day-7 timestamps when the estimate is sent (uses the platform
+  scheduler as intended, but leaves two jobs per estimate to clean up).
 
 ### 2.6 Review tasks (new)
 
-Every manual-review item also becomes a task on the Kolo task board,
-assigned to the owner, titled with the privacy-safe review key and reason,
-with a due date. Resolving the review closes the task. The owner keeps the
-"show my unresolved reviews" chat query as well.
+The Kolo task board becomes the primary place the owner sees manual reviews.
+Every review item becomes a task assigned to the owner, titled with the
+privacy-safe review key and reason, with a due date; resolving the review
+closes the task. The "show my unresolved reviews" chat query stays as a
+secondary path only.
 
 ### 2.7 Records, evidence, and audit (exists today)
 
@@ -165,9 +202,9 @@ Verified on the production pod on 2 September 2026 unless marked otherwise.
 
 | Fact | Status | Used by |
 |---|---|---|
-| Command-kind cron jobs run a shell command inside the gateway with the pod environment, no model, own timeout, silent on `NO_REPLY` | Verified from CLI help and docs | Watcher |
-| A shell command can create a one-shot isolated agent job (`--at 0m --delete-after-run --session isolated --message --model --thinking --tools --timeout-seconds`) | Verified from CLI help; creation from inside a command job not yet exercised | Watcher → Worker |
-| Two agent runs may proceed at once on this pod; sub-agent lane allows eight | Verified from config and a live test | Worker concurrency |
+| Command-kind cron jobs run a shell command inside the gateway with the pod environment, no model, own timeout, silent on `NO_REPLY` | Verified from CLI help and docs (`/app/docs/automation/cron-jobs.md`). Creating them needs operator-admin scope; our shell already has it, since the 2 September rebind edited and enabled the live job from the command line | Watcher |
+| A shell command can create a one-shot isolated agent job (`--at 0m --delete-after-run --session isolated --message --model --thinking --tools --timeout-seconds`) | Verified from CLI help; creation from inside a command job not yet exercised (feasibility test 2) | Watcher → Worker |
+| Two agent runs may proceed at once on this pod; sub-agent lane allows eight | Verified from `openclaw config get agents.defaults.maxConcurrent` (2) and `agents.defaults.subagents` (8), plus a live sub-agent test | Worker concurrency |
 | Approval decisions are delivered as a message into the requesting chat session; no polling API | Verified from CLI help; no docs on expiry or on the Edit Intent return shape | Executor |
 | Brief detail fields render readably only when flat | Observed on brief #85 | Briefs |
 | Owner notifications accept repeated `--file` attachments | Verified from CLI help; inline PNG display not yet confirmed | Rendering approval |
@@ -186,11 +223,32 @@ Verified on the production pod on 2 September 2026 unless marked otherwise.
 Each stage ships as its own pull request with tests, is installed to the pod,
 and is proven with one controlled inquiry before the next stage starts.
 
+**Stage 0 — feasibility tests (an hour, no production change).**
+Each test uses throwaway names and is deleted afterwards:
+
+1. Create a command job that prints a timestamp every hour; confirm it runs,
+   appears in the job list and the portal, and survives a gateway restart.
+2. From inside that command job, create a one-shot isolated agent job with a
+   harmless message; confirm it runs and self-deletes.
+3. Confirm the command job's announce reaches the owner chat, and that a
+   `NO_REPLY` print stays silent.
+4. Send an owner notification with a test PNG attached; confirm how it shows.
+5. File a test brief, approve it, and capture exactly what arrives in the
+   chat session; check for an expiry field.
+6. Create a calendar event through Maton with a test attendee and
+   invitations enabled; confirm the event ID and the invitation.
+7. Generate one image from a shell command; confirm the output file and the
+   default model.
+8. Create ten one-shot jobs in quick succession; confirm none is refused.
+
+If tests 1 or 2 fail, the fallback is the single model-driven cron whose
+first step is the deterministic watcher command and whose remaining prompt is
+one short branch; most of the benefit survives.
+
 **Stage A — split the job (plumbing, low risk).**
 Watcher as a command cron; workers created per claim using today's full
 runbook as the worker prompt. Wins: silent zero-cost empty ticks, one clock
-per inquiry, no tick stacking. Feasibility tests first: create a command job,
-create a one-shot job from inside it, confirm the announce path.
+per inquiry, no tick stacking.
 
 **Stage B — small prompts and readable briefs.**
 The three branch templates; the customer email drafted before the brief and
@@ -224,30 +282,48 @@ summary the owner guide promises.
   something else. Mitigation: the executor is the only path that can send,
   and the chat prompt for approvals is a single sentence naming that command.
 - **Worker model quality.** A faster model must follow exact commands and
-  write valid JSON. Each candidate is proven on controlled inquiries before
-  it becomes the default.
+  write valid JSON. A candidate becomes the default only after passing a
+  fixed qualification set: ten controlled inquiries covering each branch,
+  with zero invented commands, zero invalid artifacts, and prices equal to
+  the helper's figures.
+- **Volume.** Fifty inquiries a day means fifty one-shot jobs a day. No limit
+  is documented; test 8 probes it, and the watcher's retry-then-review
+  fallback covers a refusal.
 - **Sub-agent handoff was proven concurrent but is not used here.** One-shot
   jobs give the same isolation with a simpler lifecycle and an explicit
   timeout; sub-agents stay a fallback.
 
 ---
 
-## 6. Questions for Kolo to verify before Stage A
+## 6. Kolo's review, 2 September 2026
 
-1. Does a command-kind cron job created by us persist across Kolo's
-   reconciliation of the pod, and does it appear as a Routine in the portal?
-2. Can a command job's script create a one-shot agent job, and does that job
-   inherit nothing from the owner's chat session?
-3. What does a command job's announce look like in the owner's chat, and is
-   `NO_REPLY` honored?
-4. Does `kolo notify-owner --file` show a PNG inline in the owner's Kolo chat?
-5. What exactly is delivered to the chat session on Approve, Edit Intent, and
-   Reject, and do briefs expire?
-6. Does Maton's calendar passthrough deliver invitations to attendees, and
-   does the response include the event ID?
-7. Does `openclaw infer image generate` work from a command job or worker
-   with the gateway token available there, and which image model is default?
-8. Is there any per-org limit on the number of one-shot jobs created per day?
+Kolo reviewed this document against the pod's docs, CLI help, and config.
+Its answers to the eight open questions, and what changed as a result:
+
+| Question | Kolo's answer | Action |
+|---|---|---|
+| 1. Command job persists across reconciliation, shows as a Routine? | Unknown; needs operator-admin scope (which our shell has) | Stage 0 test 1 |
+| 2. Command job can create a one-shot agent job? | Unknown; gateway token availability inside a command job unproven | Stage 0 test 2 |
+| 3. Command job announce and `NO_REPLY`? | Confirmed from docs | None |
+| 4. PNG inline via notification attachment? | Unknown | Stage 0 test 4 |
+| 5. What arrives on Approve, Edit, Reject; expiry? | Message into the chat session; no polling API; expiry and edit shape unknown | Stage 0 test 5; expiry handled in the executor (2.4) |
+| 6. Maton calendar invitations and event ID? | Unverified; passthrough documented, attendees not explicitly | Stage 0 test 6 |
+| 7. Image generation from a shell? | CLI confirmed; default model and token in command jobs unknown | Stage 0 test 7 |
+| 8. Daily one-shot job limit? | Undocumented | Stage 0 test 8; watcher fallback added (2.1) |
+
+Kolo's critique and the responses adopted:
+
+- Use the task board as the primary review surface, not a mirror. Adopted
+  (2.6).
+- Consider one-shot jobs for day-3 and day-7 nudges instead of watcher
+  polling. Recorded as an option (2.5).
+- Specify approval expiry handling, a model qualification test, an explicit
+  output limit for the watcher, and a fallback when job creation fails.
+  Adopted (2.1, 2.4, 5).
+- Kolo questioned why splitting helps at all. The measurements at the top of
+  this document answer that; Kolo did not have them.
+- Kolo marked the concurrency limits as unverified; they were read from the
+  live config in a separate thread and are cited in section 3.
 
 ---
 
