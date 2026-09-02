@@ -2407,8 +2407,11 @@ class CronConfigTests(unittest.TestCase):
         )
         self.assertIn("Use these reproduced commands exactly", message)
         self.assertIn("Never record `not specified`", message)
-        self.assertIn("kolo_safe.py complete-claimed --monitor-root", message)
-        self.assertIn("with reason `uncorrelated_dsn`", message)
+        self.assertIn("workflow_safe.py intake --monitor-root", message)
+        self.assertIn("manual review `uncorrelated_dsn`", message)
+        self.assertNotIn("gmail_classify.py '<work_paths.gmail_message>'", message)
+        self.assertNotIn("route_ownership.py '<work_paths.route>'", message)
+        self.assertNotIn("create-inquiry '<work_paths.route>'", message)
         self.assertIn("run the documented `spot_price.py` flow", message)
         self.assertIn("reason `invalid_cost_components`", message)
         self.assertIn(
@@ -5931,6 +5934,195 @@ class GatewayTokenTests(unittest.TestCase):
         self.assertIn("## One-time setup and activation boundary", operations)
         self.assertIn("## Updating an active monitor", operations)
         self.assertLess(len(skill.encode("utf-8")), 65_000)
+
+
+class IntakeTests(unittest.TestCase):
+    """One command replaces the eight fixed intake steps and stays idempotent."""
+
+    def capabilities(self) -> dict:
+        return InboxMonitorTests.capabilities(self)
+
+    def cron(self) -> dict:
+        return InboxMonitorTests.cron(self)
+
+    def gmail_message(self, message_id: str, thread_id: str, sender: str = "customer@example.net", **headers: str) -> dict:
+        base = {
+            "From": f"Pat Customer <{sender}>",
+            "Subject": "Custom ring inquiry",
+            "Message-ID": f"<{message_id}@example.net>",
+        }
+        base.update(headers)
+        return {
+            "id": message_id,
+            "threadId": thread_id,
+            "internalDate": "1100",
+            "payload": {"headers": [{"name": k, "value": v} for k, v in base.items()]},
+        }
+
+    def claimed(self, directory: str, message_id: str = "inquiry-1", thread_id: str = "thread-1", extra_messages: int = 0, **headers: str) -> tuple[object, dict]:
+        base = Path(directory)
+        monitor_root = base / "monitor"
+        inbox_monitor.prepare(monitor_root, self.capabilities(), self.cron())
+        inbox_monitor.activate(monitor_root, self.cron(), 1_000)
+        claim_root = base / "claims"
+        inbox_monitor.discover_complete(
+            monitor_root,
+            [{"gmail_message_id": message_id, "thread_id": thread_id, "internal_date_ms": 1_100}],
+            1_000,
+            2_000,
+        )
+        result = inbox_monitor.claim_next(monitor_root, claim_root, 600)
+        paths = result["work_paths"]
+        message = self.gmail_message(message_id, thread_id, **headers)
+        earlier = [self.gmail_message(f"earlier-{i}", thread_id) for i in range(extra_messages)]
+        Path(paths["gmail_message"]).write_text(json.dumps(message), encoding="utf-8")
+        Path(paths["gmail_thread"]).write_text(
+            json.dumps({"id": thread_id, "messages": earlier + [message]}), encoding="utf-8"
+        )
+        profile = base / "shop-profile.json"
+        profile.write_text(json.dumps({"shop": {"outbound_mailbox": "shop@example.com"}}), encoding="utf-8")
+        args = type(
+            "Args",
+            (),
+            {
+                "monitor_root": monitor_root,
+                "claim_root": claim_root,
+                "record_root": base / "records",
+                "message_id": message_id,
+                "shop_profile": profile,
+            },
+        )()
+        return args, paths
+
+    def test_new_inquiry_intake_routes_records_mirrors_and_alerts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, paths = self.claimed(directory)
+            with (
+                patch.object(workflow_safe, "mirror_record") as mirror,
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed") as notify,
+            ):
+                result = workflow_safe.intake(args)
+            self.assertEqual(result["classification"], "customer_or_uncertain")
+            self.assertEqual(result["decision"], "new_inquiry")
+            self.assertEqual(result["next_action"], "review_thread")
+            self.assertEqual(result["record_status"], "awaiting_specs")
+            self.assertRegex(result["estimate_id"], r"^jed-[0-9a-f]{16}$")
+            route = json.loads(Path(paths["route"]).read_text(encoding="utf-8"))
+            self.assertEqual(route["thread_id"], "thread-1")
+            self.assertEqual(route["recipient"], "customer@example.net")
+            self.assertEqual(json.loads(Path(paths["candidate_records"]).read_text(encoding="utf-8")), [])
+            record = estimate_record.read_object(
+                estimate_record.record_path(args.record_root, result["estimate_id"])
+            )
+            self.assertEqual(record["route"], route)
+            self.assertEqual(record["inbound_timestamp_ms"], 1100)
+            mirror.assert_called_once()
+            self.assertEqual(mirror.call_args.args[0]["estimate_id"], result["estimate_id"])
+            self.assertEqual(Path(mirror.call_args.args[1]), Path(paths["inquiry_record"]))
+            notify.assert_called_once()
+            self.assertEqual(
+                notify.call_args.args[3], f"customer_replied:{result['estimate_id']}:inquiry-1"
+            )
+            self.assertEqual(notify.call_args.args[5], "customer-replied")
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["processing_phase"], "ownership_confirmed")
+            self.assertEqual(state["status"], "processing")
+
+    def test_intake_is_idempotent_on_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(directory)
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                first = workflow_safe.intake(args)
+                second = workflow_safe.intake(args)
+            self.assertEqual(first["estimate_id"], second["estimate_id"])
+            self.assertEqual(second["decision"], "new_inquiry")
+            self.assertEqual(second["reason_code"], "initiating_claim_resumed")
+            self.assertEqual(second["next_action"], "review_thread")
+
+    def test_reply_on_owned_thread_continues_the_existing_estimate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(directory, message_id="reply-2", thread_id="thread-1", extra_messages=1)
+            # The initiating message was processed earlier and owns the thread.
+            initiating = self.gmail_message("earlier-0", "thread-1")
+            route = gmail_route.build_route(initiating, "shop@example.com")
+            record = estimate_record.create_initial_record(args.record_root, route, 1_000)
+            _ok, state = inbox_claim.acquire(args.claim_root, "earlier-0")
+            inbox_claim.advance_phase(args.claim_root, "earlier-0", state["claim_token"], "ready_to_finalize")
+            inbox_claim.finish(args.claim_root, "earlier-0", state["claim_token"], "processed")
+            with (
+                patch.object(workflow_safe, "mirror_record") as mirror,
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed") as notify,
+            ):
+                result = workflow_safe.intake(args)
+            self.assertEqual(result["decision"], "owned")
+            self.assertEqual(result["estimate_id"], record["estimate_id"])
+            self.assertEqual(result["thread_message_count"], 2)
+            self.assertEqual(result["next_action"], "review_thread")
+            mirror.assert_not_called()
+            notify.assert_called_once()
+
+    def test_auto_reply_is_completed_without_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(directory, **{"Auto-Submitted": "auto-replied"})
+            with (
+                patch.object(workflow_safe, "mirror_record") as mirror,
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed") as notify,
+            ):
+                result = workflow_safe.intake(args)
+            self.assertEqual(result["classification"], "auto_reply")
+            self.assertEqual(result["next_action"], "done")
+            mirror.assert_not_called()
+            notify.assert_not_called()
+            item = inbox_monitor.load_queue_item(args.monitor_root, "inquiry-1")
+            self.assertEqual(item["processing_status"], "processed")
+            self.assertEqual(list(args.record_root.glob("jed-*.json")) if args.record_root.exists() else [], [])
+
+    def test_bounce_and_identity_guard_become_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(
+                directory,
+                sender="mailer-daemon@example.net",
+                **{"Subject": "Delivery Status Notification (Failure)"},
+            )
+            with patch.object(workflow_safe.kolo_safe, "manual_review_claimed") as manual:
+                result = workflow_safe.intake(args)
+            self.assertEqual(result["classification"], "dsn_candidate")
+            self.assertEqual(result["next_action"], "done")
+            self.assertEqual(manual.call_args.args[4], "uncorrelated_dsn")
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(directory)
+            other = gmail_route.build_route(self.gmail_message("other-1", "other-thread"), "shop@example.com")
+            estimate_record.create_initial_record(args.record_root, other, 900)
+            with (
+                patch.object(workflow_safe.kolo_safe, "manual_review_claimed") as manual,
+                patch.object(workflow_safe, "mirror_record") as mirror,
+            ):
+                result = workflow_safe.intake(args)
+            self.assertEqual(result["decision"], "manual_review")
+            self.assertEqual(result["reason_code"], "identity_has_active_estimate_on_another_thread")
+            self.assertEqual(manual.call_args.args[4], "identity_has_active_estimate_on_another_thread")
+            mirror.assert_not_called()
+
+    def test_intake_cli_prints_the_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = self.claimed(directory)
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+                patch("sys.stdout", io.StringIO()) as stdout,
+            ):
+                code = workflow_safe.main([
+                    "intake", "--monitor-root", str(args.monitor_root), "--claim-root", str(args.claim_root),
+                    "--record-root", str(args.record_root), "--message-id", "inquiry-1",
+                    "--shop-profile", str(args.shop_profile),
+                ])
+            self.assertEqual(code, 0)
+            printed = json.loads(stdout.getvalue())
+            self.assertEqual(printed["next_action"], "review_thread")
+            self.assertRegex(printed["estimate_id"], r"^jed-")
 
 
 class ReviewFindingRegressionTests(unittest.TestCase):
