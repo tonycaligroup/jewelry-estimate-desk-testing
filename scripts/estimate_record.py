@@ -1099,6 +1099,63 @@ def validate_approval_request(
         return approval_request
 
 
+RETIREMENT_REASONS = {
+    "duplicate_of_another_thread",
+    "created_in_error",
+    "superseded_by_another_estimate",
+    "customer_withdrew",
+    "test_artifact",
+}
+
+
+def retire(
+    root: Path, estimate_id: str, reason: str, note: str | None = None
+) -> dict[str, Any]:
+    """Retire one estimate the shop will not pursue, without touching anything else.
+
+    A record created in error otherwise has nowhere to go: the only path that
+    removed one was a full customer-state reset, which also deletes good work
+    and rewinds the discovery watermark. This is deliberately narrow. It moves a
+    single non-terminal record to `dormant`, records why, and changes no claim,
+    queue item, watermark, or other record.
+    """
+    if reason not in RETIREMENT_REASONS:
+        raise ValueError(
+            "reason must be one of: " + ", ".join(sorted(RETIREMENT_REASONS))
+        )
+    if note is not None and (not isinstance(note, str) or len(note) > 400):
+        raise ValueError("note must be text of at most 400 characters")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        status = record["status"]
+        if status not in route_ownership.ACTIVE_STATUSES:
+            raise ValueError(
+                f"estimate is already terminal with status '{status}'; "
+                "nothing to retire"
+            )
+        # Retiring a sent estimate would leave the customer holding a price the
+        # shop has quietly abandoned. That needs a customer message, not a
+        # status change, so it is out of scope here.
+        if status in {"estimate_sent", "appointment_booked", "approved"}:
+            raise ValueError(
+                f"estimate is '{status}' and the customer has already been told; "
+                "resolve it with the customer rather than retiring the record"
+            )
+        entry: dict[str, Any] = {
+            "reason": reason,
+            "retired_at": datetime.now(timezone.utc).isoformat(),
+            "previous_status": status,
+        }
+        if note:
+            entry["note"] = note
+        record["retirement"] = entry
+        record["status"] = "dormant"
+        write_object(path, record)
+        return record
+
+
 def record_approval_requested(
     root: Path,
     estimate_id: str,
@@ -1620,6 +1677,14 @@ def main(argv: list[str] | None = None) -> int:
         "--record-root", type=Path, default=default_record_root()
     )
     thread_review.add_argument("--output", type=Path)
+    retire_parser = sub.add_parser("retire")
+    retire_parser.add_argument("--estimate-id", required=True)
+    retire_parser.add_argument("--reason", required=True)
+    retire_parser.add_argument("--note")
+    retire_parser.add_argument(
+        "--record-root", type=Path, default=default_record_root()
+    )
+    retire_parser.add_argument("--output", type=Path)
     approval = sub.add_parser("record-approval-requested")
     approval.add_argument("--estimate-id", required=True)
     approval.add_argument("--source-message-id", required=True)
@@ -1674,6 +1739,12 @@ def main(argv: list[str] | None = None) -> int:
                 args.estimate_id,
                 read_object(args.snapshot),
                 read_object(args.shop_profile),
+            )
+            if args.output is not None:
+                write_object(args.output, record)
+        elif args.command == "retire":
+            record = retire(
+                args.record_root, args.estimate_id, args.reason, args.note
             )
             if args.output is not None:
                 write_object(args.output, record)
