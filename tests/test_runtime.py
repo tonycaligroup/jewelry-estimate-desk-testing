@@ -4015,6 +4015,55 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertIn("1 item(s) awaiting manual review", report["message"])
             self.assertIn("unresolved Jewelry Estimate Desk reviews", report["message"])
 
+    def test_announced_report_does_not_repeat_itself_every_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.queued_root(directory)
+            item = inbox_monitor.load_queue_item(root, "msg-a")
+            item["processing_status"] = "manual_review"
+            item["discovery_status"] = "complete"
+            item["review_status"] = "open"
+            item["reason_code"] = "invalid_cost_components"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-a"), item
+            )
+            first = inbox_monitor.run_report(root, announce=True)
+            self.assertIn("invalid_cost_components", first["message"])
+            self.assertFalse(first["repeat"])
+
+            second = inbox_monitor.run_report(root, announce=True)
+            self.assertEqual(second["message"], "NO_REPLY")
+            self.assertTrue(second["repeat"])
+            self.assertEqual(len(second["manual_reviews"]), 1)
+
+            # A second, different review is new information and must announce.
+            other = inbox_monitor.load_queue_item(root, "msg-b")
+            other["processing_status"] = "manual_review"
+            other["discovery_status"] = "complete"
+            other["review_status"] = "open"
+            other["reason_code"] = "uncertain_classification"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-b"), other
+            )
+            third = inbox_monitor.run_report(root, announce=True)
+            self.assertFalse(third["repeat"])
+            self.assertIn("uncertain_classification", third["message"])
+
+    def test_reading_the_report_without_announcing_never_suppresses(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.queued_root(directory)
+            item = inbox_monitor.load_queue_item(root, "msg-a")
+            item["processing_status"] = "manual_review"
+            item["discovery_status"] = "complete"
+            item["review_status"] = "open"
+            item["reason_code"] = "invalid_cost_components"
+            inbox_monitor.atomic_write_json(
+                inbox_monitor.queue_path(root, "msg-a"), item
+            )
+            for _ in range(3):
+                report = inbox_monitor.run_report(root)
+                self.assertIn("invalid_cost_components", report["message"])
+                self.assertFalse(report["repeat"])
+
     def test_run_report_refuses_to_call_an_unsettled_run_clean(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.queued_root(directory)

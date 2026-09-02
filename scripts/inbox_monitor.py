@@ -883,7 +883,9 @@ def list_manual_reviews(root: Path) -> list[dict[str, Any]]:
     )
 
 
-def run_report(root: Path, claim_root: Path | None = None) -> dict[str, Any]:
+def run_report(
+    root: Path, claim_root: Path | None = None, announce: bool = False
+) -> dict[str, Any]:
     """Derive the owner-facing run summary from durable state alone.
 
     The announcement a cron run delivers is otherwise composed by the model, so
@@ -941,15 +943,46 @@ def run_report(root: Path, claim_root: Path | None = None) -> dict[str, Any]:
         lines.append(
             f"{uncertain_actions} external action(s) recorded as uncertain."
         )
-    return {
+    message = "\n".join(lines) if lines else "NO_REPLY"
+    report = {
         "schema_version": 1,
         "settled": settled,
         "counts": counts,
         "manual_reviews": reviews,
         "uncertain_notifications": uncertain_notifications,
         "uncertain_external_actions": uncertain_actions,
-        "message": "\n".join(lines) if lines else "NO_REPLY",
+        "message": message,
+        "repeat": False,
     }
+    if not announce:
+        return report
+
+    # An open review persists across runs, so announcing the report on every
+    # run repeats the same message every few minutes and trains the owner to
+    # ignore it. Announce only what has changed since the last announcement.
+    digest = sha256_json(
+        {
+            "settled": settled,
+            "message": message,
+            "reviews": [
+                [review["review_key"], review["reason_code"]] for review in reviews
+            ],
+            "uncertain_notifications": uncertain_notifications,
+            "uncertain_external_actions": uncertain_actions,
+        }
+    )
+    path = root / "last-report.json"
+    previous = None
+    if path.exists():
+        stored = read_json(path)
+        if isinstance(stored, dict):
+            previous = stored.get("digest")
+    if previous == digest:
+        report["repeat"] = True
+        report["message"] = "NO_REPLY"
+        return report
+    atomic_write_json(path, {"schema_version": 1, "digest": digest})
+    return report
 
 
 def resolve_manual_review(root: Path, review_key: str) -> dict[str, Any]:
@@ -1059,6 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("assert-settled")
     report_parser = sub.add_parser("run-report")
     report_parser.add_argument("--claim-root", type=Path)
+    report_parser.add_argument("--announce", action="store_true")
     sub.add_parser("manual-reviews")
     resolve_review_parser = sub.add_parser("resolve-manual-review")
     resolve_review_parser.add_argument("--review-key", required=True)
@@ -1129,7 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "assert-settled":
             result = assert_settled(args.root)
         elif args.command == "run-report":
-            result = run_report(args.root, args.claim_root)
+            result = run_report(args.root, args.claim_root, args.announce)
         elif args.command == "manual-reviews":
             result = list_manual_reviews(args.root)
         elif args.command == "resolve-manual-review":

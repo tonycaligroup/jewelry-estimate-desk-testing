@@ -757,9 +757,14 @@ For each returned message:
    it yourself:
 
    ```bash
-   python3 {baseDir}/scripts/inbox_monitor.py run-report \
+   python3 {baseDir}/scripts/inbox_monitor.py run-report --announce \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims'
    ```
+
+   `--announce` suppresses a report identical to the last one announced, so an
+   open review is raised once rather than every few minutes. A `NO_REPLY`
+   message means there is nothing new to tell the owner, not that nothing is
+   outstanding.
 
    Deliver its `message` field verbatim as the entire announcement. Do not
    compose, summarize, reword, or add to it, and never announce an outcome that
