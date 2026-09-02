@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import gateway_token
 import inbox_claim
 
 
@@ -35,9 +36,8 @@ def canonical_sha256(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def build_command(payload_path: Path, token: str) -> list[str]:
-    if not token or any(character in token for character in "\r\n"):
-        raise ValueError("MATON_API_KEY is missing or invalid")
+def build_command(payload_path: Path) -> list[str]:
+    """Build the curl argv; the credential never appears in it."""
     return [
         "curl",
         "-sS",
@@ -45,13 +45,20 @@ def build_command(payload_path: Path, token: str) -> list[str]:
         "-X",
         "POST",
         SEND_URL,
-        "-H",
-        f"Authorization: Bearer {token}",
+        "--config",
+        "-",
         "-H",
         "Content-Type: application/json",
         "--data-binary",
         f"@{payload_path}",
     ]
+
+
+def build_config(token: str) -> str:
+    """The Authorization header is fed to curl on stdin, invisible to ps."""
+    if not token or any(character in token for character in "\r\n\t\" "):
+        raise ValueError("MATON_API_KEY is missing or invalid")
+    return f'header = "Authorization: Bearer {token}"\n'
 
 
 def write_private_json(path: Path, value: dict[str, str]) -> None:
@@ -80,10 +87,18 @@ def receipt_from_action(action: dict[str, Any]) -> dict[str, str]:
 
 
 def run_command(
-    argv: Sequence[str],
+    argv: list[str],
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    stdin_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return runner(list(argv), check=True, capture_output=True, text=True, shell=False)
+    return runner(
+        list(argv),
+        input=stdin_text,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
 
 
 def send_reply_claimed(
@@ -103,7 +118,8 @@ def send_reply_claimed(
         )
     payload = read_payload(payload_path)
     binding = canonical_sha256(payload)
-    command = build_command(payload_path, token)
+    command = build_command(payload_path)
+    config = build_config(token)
     acquired, state = inbox_claim.acquire_external_action(
         claim_root,
         message_id,
@@ -123,7 +139,7 @@ def send_reply_claimed(
             f"customer delivery is already {action['status']}; refusing retry"
         )
     try:
-        result = run_command(command, runner=runner)
+        result = run_command(command, runner=runner, stdin_text=config)
         response = json.loads(result.stdout)
         if not isinstance(response, dict):
             raise ValueError("Gmail provider response must be a JSON object")
@@ -175,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             args.delivery_key,
             args.payload,
             args.provider_response,
-            os.environ.get("MATON_API_KEY", ""),
+            gateway_token.load_token(),
         )
         print(json.dumps(receipt, sort_keys=True))
         return 0

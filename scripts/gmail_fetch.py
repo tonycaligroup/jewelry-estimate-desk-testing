@@ -19,6 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+import gateway_token
 import inbox_monitor
 
 
@@ -212,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     fetch_parser.add_argument("--message-id", required=True)
     args = parser.parse_args(argv)
     try:
-        token = require_token(os.environ.get("MATON_API_KEY", ""))
+        token = require_token(gateway_token.load_token())
         if args.command == "discover":
             result = discover(args.monitor_root, token)
         else:

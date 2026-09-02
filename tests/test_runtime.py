@@ -30,6 +30,7 @@ import customer_state_reset
 import inbox_claim
 import inbox_monitor
 import estimate_record
+import gateway_token
 import gmail_reply
 import gmail_route
 import gmail_classify
@@ -2389,7 +2390,7 @@ class CronConfigTests(unittest.TestCase):
         self.assertIn("Customer-delegated quality choices are complete", message)
         self.assertIn("Budget is optional", message)
         self.assertIn(
-            "the only authorized next steps are to write `cost_components` and call",
+            "the only authorized next steps are to price through `cost_components.py prepare`",
             message,
         )
         self.assertIn(
@@ -5870,6 +5871,66 @@ class CostComponentsTests(unittest.TestCase):
                 ])
             self.assertEqual(code, 2)
             self.assertIn("spot price evidence", json.loads(stderr.getvalue())["error"])
+
+
+class GatewayTokenTests(unittest.TestCase):
+    def test_token_file_takes_precedence_and_must_be_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "maton-api-key"
+            path.write_text("file-token\n", encoding="utf-8")
+            os.chmod(path, 0o600)
+            env = {"MATON_API_KEY_FILE": str(path), "MATON_API_KEY": "env-token"}
+            self.assertEqual(gateway_token.load_token(env), "file-token")
+            os.chmod(path, 0o640)
+            with self.assertRaisesRegex(ValueError, "group or others"):
+                gateway_token.load_token(env)
+            os.chmod(path, 0o600)
+            path.write_text("two words\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "usable token"):
+                gateway_token.load_token(env)
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                gateway_token.load_token({"MATON_API_KEY_FILE": str(Path(directory) / "missing")})
+
+    def test_environment_variable_is_only_a_fallback(self) -> None:
+        with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path("/nonexistent/maton-api-key")):
+            self.assertEqual(gateway_token.load_token({"MATON_API_KEY": "env-token"}), "env-token")
+            with self.assertRaisesRegex(ValueError, "MATON_API_KEY_FILE"):
+                gateway_token.load_token({})
+            with self.assertRaises(ValueError):
+                gateway_token.load_token({"MATON_API_KEY": "bad\ntoken"})
+
+    def test_gmail_send_keeps_the_credential_out_of_argv(self) -> None:
+        argv = gmail_safe.build_command(Path("/private/payload.json"))
+        self.assertNotIn("Authorization", " ".join(argv))
+        self.assertIn("--config", argv)
+        self.assertEqual(argv[argv.index("--config") + 1], "-")
+        config = gmail_safe.build_config("secret-token")
+        self.assertEqual(config, 'header = "Authorization: Bearer secret-token"\n')
+        with self.assertRaises(ValueError):
+            gmail_safe.build_config("bad token")
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "{}", ""))
+        gmail_safe.run_command(argv, runner=runner, stdin_text=config)
+        self.assertEqual(runner.call_args.kwargs["input"], config)
+        self.assertNotIn("secret-token", " ".join(runner.call_args.args[0]))
+
+    def test_cron_message_prices_through_the_helper_and_forbids_source_reading(self) -> None:
+        cron = (ROOT / "templates" / "inbox-monitor-cron.txt").read_text(encoding="utf-8")
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        for needle in (
+            "cost_components.py prepare",
+            "cost_components.py finalize",
+            "Never read the bundled scripts' source code",
+            "read the installed jewelry-estimate-desk-testing SKILL.md completely",
+        ):
+            self.assertIn(needle, cron)
+        self.assertNotIn("Write `cost_components` with exactly four arrays", cron)
+        self.assertIn("cost_components.py prepare", skill)
+        self.assertIn("references/monitor-operations.md", skill)
+        self.assertNotIn("### One-time setup and activation boundary", skill)
+        operations = (ROOT / "references" / "monitor-operations.md").read_text(encoding="utf-8")
+        self.assertIn("## One-time setup and activation boundary", operations)
+        self.assertIn("## Updating an active monitor", operations)
+        self.assertLess(len(skill.encode("utf-8")), 65_000)
 
 
 class ReviewFindingRegressionTests(unittest.TestCase):

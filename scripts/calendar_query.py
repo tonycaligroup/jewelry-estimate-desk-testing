@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+
+import gateway_token
 import os
 import re
 import secrets
@@ -162,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             args.time_max,
             args.timezone,
             args.calendar_id,
-            os.environ.get("MATON_API_KEY", ""),
+            gateway_token.load_token(),
         )
         write_private(args.output, receipt)
         print(json.dumps(receipt, sort_keys=True))
