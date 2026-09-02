@@ -20,6 +20,8 @@ import gmail_reply
 import gmail_safe
 import inbox_claim
 import gateway_token
+import gmail_classify
+import gmail_route
 import inbox_monitor
 import kolo_safe
 import route_ownership
@@ -334,6 +336,103 @@ def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
     return record
 
 
+def intake(args: argparse.Namespace) -> dict[str, Any]:
+    """Classify, route, decide ownership, and record one claimed message.
+
+    These eight steps always run in the same order and never involve a
+    judgment call, yet each one used to cost the run a model turn. Bundling
+    them removes those turns. Every step is idempotent, so a resumed claim
+    can run this again safely: the route is rebuilt, phases only advance,
+    the initial record is retry-stable, and the owner alert deduplicates.
+    """
+    profile = read_object(args.shop_profile)
+    mailbox = (profile.get("shop") or {}).get("outbound_mailbox")
+    if not isinstance(mailbox, str) or not mailbox.strip():
+        raise ValueError("shop profile is missing shop.outbound_mailbox")
+    paths = inbox_monitor.prepare_claim_work(
+        args.monitor_root, args.claim_root, args.message_id
+    )
+    message = read_object(Path(paths["gmail_message"]))
+    thread = read_object(Path(paths["gmail_thread"]))
+    if message.get("id") != args.message_id:
+        raise ValueError("fetched Gmail message does not match the claimed message")
+    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    classification = gmail_classify.classify(message)
+    result: dict[str, Any] = {
+        "message_id": args.message_id,
+        "classification": classification["classification"],
+        "classification_reason": classification["reason_code"],
+        "work_paths": paths,
+    }
+    if classification["classification"] == "auto_reply":
+        kolo_safe.complete_claimed(args.monitor_root, args.claim_root, args.message_id, token)
+        result.update({"outcome": "auto_reply_completed", "next_action": "done"})
+        return result
+    if classification["classification"] != "customer_or_uncertain":
+        reason = "uncorrelated_dsn" if classification["classification"] == "dsn_candidate" else "uncertain_classification"
+        kolo_safe.manual_review_claimed(
+            args.monitor_root, args.claim_root, args.message_id, token, reason
+        )
+        result.update({"outcome": "manual_review", "reason_code": reason, "next_action": "done"})
+        return result
+
+    route = gmail_route.build_route(message, mailbox)
+    write_private(Path(paths["route"]), route)
+    inbox_claim.advance_phase(args.claim_root, args.message_id, token, "routed")
+    candidates = estimate_record.lookup_thread(args.record_root, route)
+    write_private(Path(paths["candidate_records"]), candidates)
+    messages = thread.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("fetched Gmail thread has no messages")
+    decision = route_ownership.decide(route, candidates, args.claim_root, len(messages))
+    result.update({
+        "decision": decision["decision"],
+        "reason_code": decision.get("reason_code"),
+        "thread_message_count": len(messages),
+    })
+    if decision["decision"] in {"manual_review", "owned_manual_review"}:
+        kolo_safe.manual_review_claimed(
+            args.monitor_root, args.claim_root, args.message_id, token, decision["reason_code"]
+        )
+        result.update({"outcome": "manual_review", "estimate_id": decision.get("estimate_id"), "next_action": "done"})
+        return result
+    if decision["decision"] == "new_inquiry":
+        internal_date = message.get("internalDate")
+        try:
+            inbound_ms = int(internal_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("fetched Gmail message lacks a numeric internalDate") from exc
+        record = estimate_record.create_initial_record(args.record_root, route, inbound_ms)
+        mirror_record(record, Path(paths["inquiry_record"]))
+    elif decision["decision"] == "owned":
+        record = read_object(
+            estimate_record.record_path(args.record_root, decision["estimate_id"])
+        )
+    else:
+        kolo_safe.manual_review_claimed(
+            args.monitor_root, args.claim_root, args.message_id, token, "missing_thread_ownership"
+        )
+        result.update({"outcome": "manual_review", "reason_code": "missing_thread_ownership", "next_action": "done"})
+        return result
+    inbox_claim.advance_phase(args.claim_root, args.message_id, token, "ownership_confirmed")
+    estimate_id = record["estimate_id"]
+    kolo_safe.notify_owner_claimed(
+        args.claim_root,
+        args.message_id,
+        token,
+        f"customer_replied:{estimate_id}:{args.message_id}",
+        estimate_id,
+        "customer-replied",
+    )
+    result.update({
+        "outcome": "ownership_confirmed",
+        "estimate_id": estimate_id,
+        "record_status": record["status"],
+        "next_action": "review_thread",
+    })
+    return result
+
+
 def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
     """Mirror and safely route one persisted post-estimate decision."""
     record, decision = estimate_record.post_estimate_decision(
@@ -453,6 +552,12 @@ def main(argv: list[str] | None = None) -> int:
     appointment.add_argument("--appointment-intent", type=Path, required=True)
     appointment.add_argument("--appointment-approval", type=Path, required=True)
     appointment.add_argument("--defer-finalize-for-rendering", action="store_true")
+    take = sub.add_parser("intake")
+    take.add_argument("--monitor-root", type=Path, required=True)
+    take.add_argument("--claim-root", type=Path, required=True)
+    take.add_argument("--record-root", type=Path, required=True)
+    take.add_argument("--message-id", required=True)
+    take.add_argument("--shop-profile", type=Path, required=True)
     finalize = sub.add_parser("finalize-post-estimate")
     add_common_paths(finalize)
     finalize.add_argument("--monitor-root", type=Path, required=True)
@@ -471,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
             record = send_approved_estimate(args)
         elif args.command == "request-appointment-approval":
             record = request_appointment_approval(args)
+        elif args.command == "intake":
+            record = intake(args)
         elif args.command == "finalize-post-estimate":
             record = finalize_post_estimate(args)
         elif args.command == "record-appointment-booked":

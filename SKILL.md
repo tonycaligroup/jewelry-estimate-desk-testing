@@ -287,108 +287,59 @@ For each returned message:
 
    This writes the complete message and thread only to the authoritative
    `work_paths.gmail_message` and `work_paths.gmail_thread`. Never construct a
-   Gmail read request or choose an output path. Then run:
+   Gmail read request or choose an output path. Then run the bundled intake:
 
    ```bash
-   python3 {baseDir}/scripts/gmail_classify.py "$WORK/gmail-message.json"
-   ```
-
-   - `auto_reply`: complete as processed with no response or owner alert, using
-     `kolo_safe.py complete-claimed` so the helper resolves the authoritative
-     token, advances the no-side-effect phase, reconciles the queue, and cleans
-     claim work atomically.
-   - `dsn_candidate`: correlate only against durable stored outbound provider
-     evidence and the exact failed-recipient email. Never trust an estimate ID
-     found only in message text. A verified failure becomes `manual_review` with
-     reason `delivery_failed` and an event-specific owner alert. An uncorrelated
-     DSN becomes `manual_review` with reason `uncorrelated_dsn`; never treat it as
-     a customer. When the isolated cron has no bundled deterministic correlation
-     result, it must choose `uncorrelated_dsn` rather than inspect raw records or
-     guess.
-   - `customer_or_uncertain`: derive and validate the customer route below.
-   - Mailbox quota, authentication/security, or persistent system failures are
-     `manual_review` with reason `system_actionable` and use the fixed generic
-     monitor alert. Other uncertain classifications are `manual_review` with
-     reason `uncertain_classification`.
-3. Derive the route from the exact message. The normalized sender email remains
-   exact; never remove plus-address tags or merge aliases:
-
-   ```bash
-   python3 {baseDir}/scripts/gmail_route.py \
-     "$WORK/gmail-message.json" '<profile-outbound-mailbox>' "$WORK/route.json"
-   python3 {baseDir}/scripts/inbox_claim.py advance-phase \
-     --message-id '<gmail-id>' --phase routed
-   ```
-
-4. A thread is Kolo-owned only when one schema-valid estimate record matches the
-   exact `thread_id`, exact `identity_key`, and initiating Gmail ID, and that
-   initiating ID has a valid local claim. A display-name match is irrelevant.
-   Build the candidate array only through the private local record store's exact
-   thread lookup, then run the ownership decision:
-
-   ```bash
-   python3 {baseDir}/scripts/estimate_record.py lookup-thread \
-     "$WORK/route.json" \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --output "$WORK/candidate-records.json"
-   python3 {baseDir}/scripts/route_ownership.py \
-     "$WORK/route.json" "$WORK/candidate-records.json" \
+   python3 {baseDir}/scripts/workflow_safe.py intake \
+     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
      --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --thread-message-count '<exact-Gmail-thread-message-count>'
+     --record-root '<absolute-workspace>/estimate-desk/records' \
+     --message-id '<gmail-id-returned-by-claim-next>' \
+     --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json'
    ```
 
-   Treat the helper decision as authoritative. `manual_review` and
-   `owned_manual_review` must use the combined durable manual-review command in
-   step 6 and must not send to the customer. `declined` and `dormant` records
+   Eight fixed steps that never involve a judgment call now run inside this one
+   command, in this order: the conservative deterministic header classifier;
+   the exact customer route (the normalized sender email stays exact, never
+   stripped of plus tags or merged with aliases) written to `work_paths.route`;
+   the claim advanced to `routed`; the ownership candidates written to
+   `work_paths.candidate_records` from the private local record store's exact
+   thread lookup; the ownership decision using the exact Gmail thread message
+   count; for a `new_inquiry`, the retry-stable minimal record (created locally
+   first, mirrored to Kolo second, both keyed to the initiating Gmail ID so a
+   repeat targets the same record); the claim advanced to `ownership_confirmed`;
+   and the durable `customer-replied` owner alert bound to
+   `customer_replied:<jed-id>:<gmail-id>`. Every step is idempotent, so a
+   resumed claim runs the same command again; a resumed initiating message comes
+   back as `new_inquiry` with reason `initiating_claim_resumed`.
+
+   The command also terminalizes the deterministic exits itself: `auto_reply`
+   completes as processed with no response or owner alert; `dsn_candidate`
+   becomes manual review with reason `uncorrelated_dsn` (never treat a bounce
+   as a customer, and never trust an estimate ID found only in message text);
+   an unsupported classification becomes `uncertain_classification`; and every
+   `manual_review` or `owned_manual_review` ownership decision becomes manual
+   review with the decision's own reason code. `declined` and `dormant` records
    retain ownership but require manual review rather than a new estimate.
-   For every non-review decision, advance the claim to `ownership_confirmed`
-   after this helper succeeds. A resumed claim whose earlier run already
-   created the record returns `new_inquiry` with reason
-   `initiating_claim_resumed` and the existing estimate ID; replay the same
-   steps, which are retry-stable, rather than treating it as a new customer.
+   Mailbox quota, authentication, or persistent system failures are
+   `manual_review` with reason `system_actionable`.
 
-   For `new_inquiry`, create the minimal ownership record before drafting or
-   sending any customer response and before finishing the claim:
+   Read the JSON result. `next_action: done` means the claim is terminal;
+   continue the `claim-next` loop. `next_action: review_thread` means continue
+   with the full-thread review for `estimate_id`; `record_status` tells you
+   whether an estimate has already been sent and therefore which review shape
+   to write. If the command exits nonzero, do not rerun the individual steps
+   by hand: finish as manual review with reason `intake_failed`.
 
-   ```bash
-   python3 {baseDir}/scripts/estimate_record.py create-inquiry \
-     "$WORK/route.json" \
-     --inbound-timestamp-ms '<Gmail-internalDate-ms>' \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --output "$WORK/inquiry-record.json"
-   python3 {baseDir}/scripts/kolo_safe.py record-upsert \
-     --record-type skill.jewelry_estimate \
-     --external-id '<estimate-id-from-inquiry-record>' \
-     --payload "$WORK/inquiry-record.json" --status awaiting_specs
-   ```
-
-   The local create happens before the Kolo mirror upsert and derives a
-   retry-stable opaque estimate ID from the initiating Gmail ID. Repeating both
-   operations targets the same record. If either persistence operation fails,
-   send nothing and finish as manual review with reason
-   `record_persistence_failed`. A successful initial record is updated through
-   later phases; never create a second estimate record for that thread.
-5. For a valid response on an active estimate, normally notify the owner at
-   every trust stage before any customer response. Bind the alert to an
-   event-specific key that includes the event, estimate ID, and Gmail ID:
-
-   ```bash
-   python3 {baseDir}/scripts/kolo_safe.py notify-owner-claimed \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --message-id '<gmail-id>' \
-     --notification-key 'customer_replied:<jed-id>:<gmail-id>' \
-     --event customer-replied --estimate-id '<jed-id>'
-   ```
-
-   The wrapper writes `pending` before invoking Kolo and records `sent` after
-   successful CLI acceptance; `sent` is not an independent user-visible
-   delivery receipt. Because Kolo has no delivery-receipt query, any command
-   failure after invocation is `uncertain`, never a retryable pre-delivery
-   failure. A process crash may leave `pending`; the stale reconciler marks it
-   `uncertain` after 600 seconds. Never resend `pending` or `uncertain` alerts.
-   A `customer-replied` notice is not an approval request. If approval creation
-   later fails, say explicitly that the reply notice was sent but no approval
-   request was created.
+   The owner alert's wrapper writes `pending` before invoking Kolo and records
+   `sent` after successful CLI acceptance; `sent` is not an independent
+   user-visible delivery receipt. Because Kolo has no delivery-receipt query,
+   any command failure after invocation is `uncertain`, never a retryable
+   pre-delivery failure. A process crash may leave `pending`; the stale
+   reconciler marks it `uncertain` after 600 seconds. Never resend `pending` or
+   `uncertain` alerts. A `customer-replied` notice is not an approval request.
+   If approval creation later fails, say explicitly that the reply notice was
+   sent but no approval request was created.
    Generic mailbox alerts tied to a claimed message must never call
    `notify-monitor` directly.
 
@@ -427,7 +378,7 @@ For each returned message:
    requests rendering, add `--defer-finalize-for-rendering`, then complete
    `send-rendering`, which finalizes the claim. Never claim the appointment is
    booked until approval is granted and the live calendar write succeeds.
-6. Before deciding which specifications are missing or complete, fetch the
+3. Before deciding which specifications are missing or complete, fetch the
    exact Gmail thread resource and read every message in chronological order,
    including the initiating inquiry and all later customer replies. Never
    evaluate only the newest message and never treat the current record as a
@@ -497,7 +448,7 @@ For each returned message:
    to clear, replace, or invent a returned missing field. If it is empty, continue
    through internal pricing and the claimed owner-approval request in the same
    run. Notification alone is never a completed customer reply.
-7. Complete normal branches only through `workflow_safe.py`; do not split
+4. Complete normal branches only through `workflow_safe.py`; do not split
    delivery, persistence, mirroring, phase advancement, or finalization.
 
    For missing specifications, first write the price-free body to the returned
@@ -697,7 +648,7 @@ product/specification unknowns, but never jeweler cost or pricing assumptions.
 Cost assumptions remain owner-only in every mode.
 
 Evaluate these fields against the merged full-thread specification recorded in
-Inbox monitoring step 6. A fact supplied in the initiating inquiry or any
+Inbox monitoring step 3. A fact supplied in the initiating inquiry or any
 later customer reply is known and must not be requested again.
 
 When fields are missing, use `templates/spec-gate-email.md`: one friendly,
