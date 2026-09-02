@@ -19,6 +19,7 @@ import estimate_record
 import gmail_reply
 import gmail_safe
 import inbox_claim
+import gateway_token
 import inbox_monitor
 import kolo_safe
 import route_ownership
@@ -91,7 +92,7 @@ def send_spec_followup(args: argparse.Namespace) -> dict[str, Any]:
         f"customer_reply:{args.estimate_id}:{args.message_id}",
         args.gmail_payload,
         args.provider_response,
-        os.environ.get("MATON_API_KEY", ""),
+        gateway_token.load_token(),
     )
     if args.initiating:
         record = estimate_record.record_spec_gate_sent(
@@ -277,7 +278,7 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
         f"approved_estimate:{args.estimate_id}:{message_id}",
         args.gmail_payload,
         args.provider_response,
-        os.environ.get("MATON_API_KEY", ""),
+        gateway_token.load_token(),
         allow_processed_claim=True,
     )
     record = estimate_record.record_estimate_sent(
@@ -316,7 +317,7 @@ def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
         f"customer_rendering:{args.estimate_id}:{args.message_id}",
         args.gmail_payload,
         args.provider_response,
-        os.environ.get("MATON_API_KEY", ""),
+        gateway_token.load_token(),
     )
     record = estimate_record.record_rendering_sent(
         args.record_root,
