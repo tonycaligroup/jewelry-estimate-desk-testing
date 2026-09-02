@@ -336,6 +336,59 @@ def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
     return record
 
 
+NOT_CUSTOMER_MAIL = {
+    "auto_reply",
+    "calendar_event",
+    "automated_notification",
+    "bulk_mail",
+    "internal_sender",
+}
+NOT_AN_INQUIRY_REASONS = {
+    "not_a_quote_request",
+    "vendor_or_marketing",
+    "personal_or_internal",
+    "unrelated",
+}
+
+
+def not_an_inquiry(args: argparse.Namespace) -> dict[str, Any]:
+    """Close a claimed message that turned out not to be a quote request.
+
+    The header classifier cannot read; it only removes machine mail. A human
+    can still write to the shop about anything, and intake will have opened a
+    record for it before anyone read it. Once the thread review shows the
+    message asks for no estimate, this retires that record, mirrors it, and
+    finalizes the claim, so the record never shadows later mail from the same
+    sender. It refuses anything that has moved past the initial record.
+    """
+    if args.reason not in NOT_AN_INQUIRY_REASONS:
+        raise ValueError("reason must be one of: " + ", ".join(sorted(NOT_AN_INQUIRY_REASONS)))
+    record = read_object(estimate_record.record_path(args.record_root, args.estimate_id))
+    route = record.get("route") or {}
+    if route.get("gmail_message_id") != args.message_id:
+        raise ValueError(
+            "only the message that opened the record can close it as not an inquiry"
+        )
+    if record.get("status") != "awaiting_specs":
+        raise ValueError(
+            f"record is '{record.get('status')}', not a fresh awaiting_specs record"
+        )
+    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    retired = estimate_record.retire(
+        args.record_root, args.estimate_id, "not_an_inquiry", f"triage: {args.reason}"
+    )
+    mirror_record(retired, args.record_output)
+    kolo_safe.complete_claimed(args.monitor_root, args.claim_root, args.message_id, token)
+    return {
+        "message_id": args.message_id,
+        "estimate_id": args.estimate_id,
+        "status": retired["status"],
+        "reason": args.reason,
+        "outcome": "not_an_inquiry_completed",
+        "next_action": "done",
+    }
+
+
 def intake(args: argparse.Namespace) -> dict[str, Any]:
     """Classify, route, decide ownership, and record one claimed message.
 
@@ -357,16 +410,22 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
     if message.get("id") != args.message_id:
         raise ValueError("fetched Gmail message does not match the claimed message")
     token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
-    classification = gmail_classify.classify(message)
+    classification = gmail_classify.classify(message, mailbox)
     result: dict[str, Any] = {
         "message_id": args.message_id,
         "classification": classification["classification"],
         "classification_reason": classification["reason_code"],
         "work_paths": paths,
     }
-    if classification["classification"] == "auto_reply":
+    if classification["classification"] in NOT_CUSTOMER_MAIL:
+        # Nothing a customer wrote is in here: an auto-reply, a calendar
+        # invitation, a machine notification, a newsletter, or a coworker.
+        # It is closed without a record, an alert, or a reply, so it can never
+        # become a phantom estimate that later mail gets matched against.
         kolo_safe.complete_claimed(args.monitor_root, args.claim_root, args.message_id, token)
-        result.update({"outcome": "auto_reply_completed", "next_action": "done"})
+        result.update(
+            {"outcome": f"{classification['classification']}_completed", "next_action": "done"}
+        )
         return result
     if classification["classification"] != "customer_or_uncertain":
         reason = "uncorrelated_dsn" if classification["classification"] == "dsn_candidate" else "uncertain_classification"
@@ -558,6 +617,14 @@ def main(argv: list[str] | None = None) -> int:
     take.add_argument("--record-root", type=Path, required=True)
     take.add_argument("--message-id", required=True)
     take.add_argument("--shop-profile", type=Path, required=True)
+    not_inquiry = sub.add_parser("not-an-inquiry")
+    not_inquiry.add_argument("--monitor-root", type=Path, required=True)
+    not_inquiry.add_argument("--claim-root", type=Path, required=True)
+    not_inquiry.add_argument("--record-root", type=Path, required=True)
+    not_inquiry.add_argument("--message-id", required=True)
+    not_inquiry.add_argument("--estimate-id", required=True)
+    not_inquiry.add_argument("--reason", required=True)
+    not_inquiry.add_argument("--record-output", type=Path, required=True)
     finalize = sub.add_parser("finalize-post-estimate")
     add_common_paths(finalize)
     finalize.add_argument("--monitor-root", type=Path, required=True)
@@ -578,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
             record = request_appointment_approval(args)
         elif args.command == "intake":
             record = intake(args)
+        elif args.command == "not-an-inquiry":
+            record = not_an_inquiry(args)
         elif args.command == "finalize-post-estimate":
             record = finalize_post_estimate(args)
         elif args.command == "record-appointment-booked":
