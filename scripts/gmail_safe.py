@@ -55,8 +55,10 @@ def build_command(payload_path: Path, token: str) -> list[str]:
 
 
 def write_private_json(path: Path, value: dict[str, str]) -> None:
+    parent_existed = path.parent.exists()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path.parent, 0o700)
+    if not parent_existed:
+        os.chmod(path.parent, 0o700)
     temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
     try:
         temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")

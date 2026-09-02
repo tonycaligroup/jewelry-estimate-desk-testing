@@ -57,10 +57,15 @@ def sender_address(message: dict[str, Any]) -> str:
     return parsed[0][1].lower()
 
 
+def auto_submitted_keyword(value: str) -> str:
+    """Return the RFC 3834 keyword without its optional parameters."""
+    return value.split(";", 1)[0].strip().lower()
+
+
 def classify(message: dict[str, Any]) -> dict[str, str]:
     sender = sender_address(message)
     subject = one_header(message, "Subject")
-    auto_submitted = one_header(message, "Auto-Submitted").lower()
+    auto_submitted = auto_submitted_keyword(one_header(message, "Auto-Submitted"))
     content_type = one_header(message, "Content-Type").lower()
     sender_local = sender.split("@", 1)[0]
     dsn_sender = sender_local in {"mailer-daemon", "postmaster"}
@@ -69,14 +74,28 @@ def classify(message: dict[str, Any]) -> dict[str, str]:
         phrase in subject.lower()
         for phrase in ("delivery status notification", "undeliverable", "delivery failure")
     )
-    if dsn_sender and (dsn_content or dsn_subject or auto_submitted == "auto-generated"):
+    # An RFC 6522 delivery-status report is authoritative on its own. Bounces are
+    # not always sent from mailer-daemon or postmaster, and a bounce that is not
+    # recognized here would otherwise be swallowed as an automatic reply, hiding
+    # a failed estimate delivery from the owner.
+    if dsn_content or (
+        dsn_sender and (dsn_subject or auto_submitted == "auto-generated")
+    ):
         return {"classification": "dsn_candidate", "reason_code": "delivery_status_headers"}
 
-    auto_header = auto_submitted not in {"", "no"}
+    # Only `auto-replied` marks this message as an automatic reply. Contact
+    # forms, marketplace notifications, and other application senders stamp
+    # `auto-generated` on genuine customer inquiries, so those must stay
+    # routable rather than being completed with no reply and no owner alert.
+    #
+    # X-Auto-Response-Suppress is deliberately not consulted: it is a
+    # sender-set directive asking recipients not to auto-reply, routinely
+    # present on Exchange-originated and application-generated mail. It is not
+    # evidence that this message is itself an automatic reply.
+    auto_header = auto_submitted == "auto-replied"
     vendor_auto_header = bool(
         header_values(message, "X-Autoreply")
         or header_values(message, "X-Autorespond")
-        or header_values(message, "X-Auto-Response-Suppress")
     )
     if auto_header or vendor_auto_header or AUTO_REPLY_SUBJECT_RE.match(subject):
         return {"classification": "auto_reply", "reason_code": "automatic_reply_headers"}

@@ -78,9 +78,8 @@ def build_options(
         response_body.get("calendars") if isinstance(response_body, dict) else None
     )
     calendar = calendars.get(calendar_id) if isinstance(calendars, dict) else None
-    busy = calendar.get("busy") if isinstance(calendar, dict) else None
-    if not isinstance(busy, list):
-        raise ValueError("calendar receipt lacks the requested busy array")
+    calendar_query.require_readable_calendar(calendar)
+    busy = calendar["busy"]
     busy_ranges = []
     for item in busy:
         if not isinstance(item, dict):

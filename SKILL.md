@@ -993,6 +993,7 @@ python3 {baseDir}/scripts/workflow_safe.py request-approval \
   --estimate-id '<jed-id>' \
   --current-state "$WORK/current-state.json" \
   --approval-request "$WORK/approval-request.json" \
+  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
   --record-output "$WORK/current-record.json"
 ```
 

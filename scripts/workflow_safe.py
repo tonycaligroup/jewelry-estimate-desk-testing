@@ -111,7 +111,11 @@ def send_spec_followup(args: argparse.Namespace) -> dict[str, Any]:
 def request_approval(args: argparse.Namespace) -> dict[str, Any]:
     candidate = read_object(args.current_state)
     current = estimate_record.prepare_approval_state(
-        args.record_root, args.estimate_id, args.message_id, candidate
+        args.record_root,
+        args.estimate_id,
+        args.message_id,
+        candidate,
+        read_object(args.shop_profile),
     )
     approval_existed = args.approval_request.exists()
     if approval_existed:
@@ -425,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
     approval.add_argument("--monitor-root", type=Path, required=True)
     approval.add_argument("--current-state", type=Path, required=True)
     approval.add_argument("--approval-request", type=Path, required=True)
+    approval.add_argument("--shop-profile", type=Path, required=True)
     send = sub.add_parser("send-approved-estimate")
     add_common_paths(send, message_required=False)
     send.add_argument("--current-state", type=Path)
