@@ -203,16 +203,16 @@ Verified on the production pod on 2 September 2026 unless marked otherwise.
 | Fact | Status | Used by |
 |---|---|---|
 | Command-kind cron jobs run a shell command inside the gateway with the pod environment, no model, own timeout, silent on `NO_REPLY` | Verified from CLI help and docs (`/app/docs/automation/cron-jobs.md`). Creating them needs operator-admin scope; our shell already has it, since the 2 September rebind edited and enabled the live job from the command line | Watcher |
-| A shell command can create a one-shot isolated agent job (`--at 0m --delete-after-run --session isolated --message --model --thinking --tools --timeout-seconds`) | Verified from CLI help; creation from inside a command job not yet exercised (feasibility test 2) | Watcher → Worker |
+| A shell command can create a one-shot isolated agent job (`--at +1m --delete-after-run --session isolated --message --model --thinking --tools --timeout-seconds`) | Verified live: a command job created and ran a child agent job (Stage 0 test 2) | Watcher → Worker |
 | Two agent runs may proceed at once on this pod; sub-agent lane allows eight | Verified from `openclaw config get agents.defaults.maxConcurrent` (2) and `agents.defaults.subagents` (8), plus a live sub-agent test | Worker concurrency |
 | Approval decisions are delivered as a message into the requesting chat session; no polling API | Verified from CLI help; no docs on expiry or on the Edit Intent return shape | Executor |
 | Brief detail fields render readably only when flat | Observed on brief #85 | Briefs |
-| Owner notifications accept repeated `--file` attachments | Verified from CLI help; inline PNG display not yet confirmed | Rendering approval |
+| Owner notifications accept repeated `--file` attachments | Verified live: PNG rendered inline in the owner's Kolo chat (Stage 0 test 4) | Rendering approval |
 | A brief can be marked executed or failed after acting | Verified from CLI help | Executor |
 | Kolo task board: create, list, update, assign, due dates | Verified from CLI help | Review tasks |
-| Maton passthrough exposes Google Calendar event creation with attendees and invitations | Reported by Kolo from the API-gateway skill; not yet exercised | Executor (booking) |
+| Maton passthrough exposes Google Calendar event creation with attendees and invitations | Verified live: insert, read, delete with an attendee (Stage 0 test 6) | Executor (booking) |
 | Maton passthrough exposes Gmail incremental history | Reported by Kolo; not yet exercised | Optional cheaper discovery |
-| Images can be generated from a shell command with count and output path | Verified from CLI help; not yet exercised | Rendering |
+| Images can be generated from a shell command with count and output path | Verified live: `gpt-image-2` default, PNG written (Stage 0 test 7) | Rendering |
 | No Gmail push, no hooks, no public ingress on this pod | Verified | Polling stays |
 | Models available include `litellm-fireworks/qwen-3-7-plus` (pod default) and `glm-5-3-flash`; the current job's implicit "high" thinking is silently downgraded on GLM and must be set explicitly if the model changes | Verified from model list and logs | Worker model choice |
 
@@ -244,6 +244,27 @@ Each test uses throwaway names and is deleted afterwards:
 If tests 1 or 2 fail, the fallback is the single model-driven cron whose
 first step is the deterministic watcher command and whose remaining prompt is
 one short branch; most of the benefit survives.
+
+**Stage 0 results, 2 September 2026 (evening, production pod).**
+
+| Test | Result | Evidence |
+|---|---|---|
+| 1. Command job runs, appears in job list | Pass. Persistence across Kolo reconciliation still to confirm; the job `jed-stage0-cmd` is left in place for that check | Manual run wrote a timestamp to the log; listed as `command / cron` |
+| 2. Command job creates a one-shot agent job | Pass | Parent command job created `jed-stage0-child`; the child ran 62 s later with `qwen-3-7-plus`, thinking off, tools `exec`, wrote its file, self-deleted |
+| 3. Command job announce and `NO_REPLY` | Pass | Stdout text appeared in the owner thread; ten `NO_REPLY` jobs posted nothing |
+| 4. PNG via owner notification | Pass, with a routing note | The image rendered inline, but in the owner's main Kolo chat, not the estimate-desk thread; use `--session-key` to target a thread |
+| 5. Test brief approved | Pass | Flat detail fields rendered as labeled rows; the decision arrived in the session as a `user` message beginning "Strategic Brief #86 APPROVED"; the model marked the brief executed and the card switched to "Action executed" |
+| 6. Calendar through Maton | Pass | Insert returned 200 with the attendee, read back 200, delete 204 |
+| 7. Image generation from a shell | Pass | Default model `gpt-image-2`, 1024×1024 PNG written to the requested path |
+| 8. Ten one-shot jobs at once | Pass | All ten accepted; all self-deleted after running. Note: `--exact` is only valid with `--cron`, not `--at` |
+
+Not shown as a Routine: the Kolo portal's routine list showed only the
+model-driven inbox monitor, not the command job. Command jobs are managed
+from the command line, not the portal.
+
+Persistence across Kolo's reconciliation (test 1) remains open until the
+throwaway job has survived at least one day; everything else the design
+depends on is now proven.
 
 **Stage A — split the job (plumbing, low risk).**
 Watcher as a command cron; workers created per claim using today's full
