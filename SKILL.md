@@ -546,7 +546,10 @@ For each returned message:
    step 6 and must not send to the customer. `declined` and `dormant` records
    retain ownership but require manual review rather than a new estimate.
    For every non-review decision, advance the claim to `ownership_confirmed`
-   after this helper succeeds.
+   after this helper succeeds. A resumed claim whose earlier run already
+   created the record returns `new_inquiry` with reason
+   `initiating_claim_resumed` and the existing estimate ID; replay the same
+   steps, which are retry-stable, rather than treating it as a new customer.
 
    For `new_inquiry`, create the minimal ownership record before drafting or
    sending any customer response and before finishing the claim:

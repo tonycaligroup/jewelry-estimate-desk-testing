@@ -4545,6 +4545,49 @@ class RouteOwnershipTests(unittest.TestCase):
             self.assertEqual(result["decision"], "manual_review")
             self.assertEqual(result["reason_code"], "missing_initiating_claim")
 
+    def test_resumed_initiating_message_continues_as_new_inquiry(self) -> None:
+        # A run that created the record and then died leaves its claim in
+        # processing; the resumed run must not be stopped by its own claim.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            inbox_claim.acquire(root, "initiating-message")
+            route = self.route()
+            route["gmail_message_id"] = "initiating-message"
+            result = route_ownership.decide(
+                route, [self.record("awaiting_specs")], root, 1
+            )
+            self.assertEqual(
+                result,
+                {
+                    "decision": "new_inquiry",
+                    "reason_code": "initiating_claim_resumed",
+                    "estimate_id": "jed-0123456789abcdef",
+                },
+            )
+            # A terminal record never resumes, even for its own message.
+            result = route_ownership.decide(
+                route, [self.record("declined")], root, 1
+            )
+            self.assertEqual(result["decision"], "manual_review")
+            self.assertEqual(result["reason_code"], "initiating_claim_not_processed")
+
+    def test_other_messages_still_wait_for_the_initiating_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            inbox_claim.acquire(root, "initiating-message")
+            route = self.route()
+            route["gmail_message_id"] = "customer-reply"
+            result = route_ownership.decide(
+                route, [self.record("awaiting_specs")], root, 2
+            )
+            self.assertEqual(result["decision"], "manual_review")
+            self.assertEqual(result["reason_code"], "initiating_claim_not_processed")
+            # A route without a message ID (older callers) keeps the old rule.
+            result = route_ownership.decide(
+                self.route(), [self.record("awaiting_specs")], root, 1
+            )
+            self.assertEqual(result["reason_code"], "initiating_claim_not_processed")
+
     def test_terminal_record_retains_ownership_but_requires_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"

@@ -123,6 +123,22 @@ def decide(
     if claim.get("message_id_sha256") != inbox_claim.claim_key(initiating_id):
         return {"decision": "manual_review", "reason_code": "initiating_claim_mismatch"}
     if claim.get("status") != "processed":
+        # A stale claim that already created its record is resumed by a later
+        # run, which re-runs this decision for the initiating message itself.
+        # Its own claim is still processing, so the unprocessed-claim rule
+        # would strand every such inquiry in manual review. For the initiating
+        # message alone, an in-flight claim is the run continuing, and the
+        # create-inquiry and thread-review steps replay retry-stably.
+        if (
+            claim.get("status") == "processing"
+            and route.get("gmail_message_id") == initiating_id
+            and record["status"] in ACTIVE_STATUSES
+        ):
+            return {
+                "decision": "new_inquiry",
+                "reason_code": "initiating_claim_resumed",
+                "estimate_id": record["estimate_id"],
+            }
         return {"decision": "manual_review", "reason_code": "initiating_claim_not_processed"}
     if record["status"] in {"declined", "dormant", "manual_review"}:
         return {
