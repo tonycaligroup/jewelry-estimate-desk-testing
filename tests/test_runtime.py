@@ -7613,6 +7613,49 @@ class DecisionQuestionTests(unittest.TestCase):
                 ))
 
 
+class TickRenderingTests(unittest.TestCase):
+    def test_render_and_send_uses_the_shell_image_command_and_falls_back_to_a_worker(self) -> None:
+        p = {k: Path("/ws/estimate-desk") / v for k, v in (("monitor_root", "inbox-monitor"), ("claim_root", "inbox-claims"), ("record_root", "records"))}
+        record = {"specification": {"piece_type": "pendant", "metal": "14k yellow gold", "stone_type": "ruby", "setting_style": "bezel"}}
+        with tempfile.TemporaryDirectory() as directory:
+            paths = {"customer_reply": str(Path(directory) / "customer-reply.txt"), "gmail_payload": str(Path(directory) / "p.json"),
+                     "gmail_provider_response": str(Path(directory) / "r.json"), "current_record": str(Path(directory) / "c.json"),
+                     "appointment_intent": str(Path(directory) / "ai.json"), "appointment_approval": str(Path(directory) / "aa.json")}
+            calls = []
+            def run(argv, **_kwargs):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "outputs": [{"path": f"/media/{len(calls)}.png"}]}), "")
+            with (
+                patch.object(pipeline.rendering_materialize, "materialize", side_effect=lambda mr, cr, mid, src, slot: {"path": f"/work/rendering-{slot}.png", "slot": slot}) as mat,
+                patch.object(pipeline.workflow_safe, "send_rendering") as send,
+            ):
+                out = pipeline.render_and_send(p, "msg-1", "jed-0123456789abcdef", record, paths, "openclaw", run)
+            self.assertEqual(out["outcome"], "rendering_sent")
+            self.assertEqual(out["images"], 2)
+            self.assertEqual([c[:4] for c in calls], [["openclaw", "infer", "image", "generate"]] * 2)
+            self.assertIn("front three-quarter", calls[0][5])
+            self.assertIn("side profile", calls[1][5])
+            self.assertEqual(mat.call_count, 2)
+            sent = send.call_args.args[0]
+            self.assertEqual([str(i) for i in sent.images], ["/work/rendering-1.png", "/work/rendering-2.png"])
+            self.assertIn("written specification", Path(paths["customer_reply"]).read_text(encoding="utf-8"))
+            # A failed generation hands the claim to a worker instead of dropping it.
+            failing = Mock(return_value=subprocess.CompletedProcess([], 0, "not json", ""))
+            with patch.object(pipeline.workflow_safe, "request_appointment_approval") as appt:
+                out = pipeline.post_estimate_actions(p, "msg-1", "jed-0123456789abcdef", record,
+                                                     "request_appointment_approval_then_send_rendering", paths, "openclaw", failing)
+            self.assertEqual(out["outcome"], "needs_worker")
+            appt.assert_called_once()
+            self.assertTrue(appt.call_args.args[0].defer_finalize_for_rendering)
+            with patch.object(pipeline.workflow_safe, "request_appointment_approval") as appt:
+                out = pipeline.post_estimate_actions(p, "msg-1", "jed-0123456789abcdef", record,
+                                                     "request_appointment_approval", paths, "openclaw", failing)
+            self.assertEqual(out["outcome"], "appointment_approval_requested")
+            self.assertFalse(appt.call_args.args[0].defer_finalize_for_rendering)
+            intent = json.loads(Path(paths["appointment_intent"]).read_text(encoding="utf-8"))
+            self.assertEqual(intent, {"requested_times": [], "calendar_availability": []})
+
+
 class OwnerQuestionTests(unittest.TestCase):
     """WORKFLOW.md 6.10: a missing rate is a plain question, answered in chat."""
 
