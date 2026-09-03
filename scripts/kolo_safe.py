@@ -175,6 +175,112 @@ def build_request_appointment_approval(
     ]
 
 
+REVIEW_REASON_TEXT = {
+    "identity_has_active_estimate_on_another_thread": (
+        "This sender already has an open estimate on a different email thread. "
+        "Decide whether this is a new piece, a duplicate, or a reply that belongs "
+        "with the existing estimate."
+    ),
+    "uncertain_classification": "The desk could not tell what this message asks for.",
+    "classification_uncertain": (
+        "A reply arrived after an estimate was sent, and the desk could not tell "
+        "whether it accepts, asks for a meeting or a picture, changes the design, "
+        "or asks for something new."
+    ),
+    "invalid_cost_components": (
+        "Pricing needs a rate that is not on the rate card. Add the rate to the "
+        "shop settings, then approve so the desk can price it."
+    ),
+    "uncorrelated_dsn": "A delivery failure bounced back that does not match a known estimate.",
+    "missing_thread_ownership": "The desk could not prove which estimate this thread belongs to.",
+    "intake_failed": "A system error stopped intake before any customer contact.",
+    "system_actionable": "A mailbox, authentication, or system failure needs attention.",
+    "rendering_generation_timeout": "Rendering images did not finish in time.",
+    "rendering_validation_failed": "The generated renderings did not match the approved design.",
+    "stale_processing_retry_exhausted": "Processing stopped twice before finishing; check the thread.",
+    "stale_processing_ambiguous": "Processing stopped mid-action and cannot be resumed safely.",
+}
+
+
+def review_reason_text(reason_code: str) -> str:
+    return REVIEW_REASON_TEXT.get(reason_code, reason_code.replace("_", " "))
+
+
+def build_request_review_approval(
+    review_key: str,
+    reason_code: str,
+    message_id: str,
+    session_key: str,
+    headers: dict[str, str] | None = None,
+    agent_id: str = "main",
+) -> list[str]:
+    """File one manual-review item as a Kolo approval brief.
+
+    The review queue inside the skill is invisible unless the owner asks for
+    it. The approval queue is where the owner already looks, so every review
+    becomes a brief there: flat text fields only (nested objects render as
+    noise in the card), the reason in plain words, and an execution payload
+    that lets the executor close the review when the owner approves.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", review_key or ""):
+        raise ValueError("review_key must be a lowercase SHA-256 value")
+    if not re.fullmatch(r"[a-z0-9_]{3,64}", reason_code or ""):
+        raise ValueError("invalid review reason code")
+    session_key = validate_session_key(session_key)
+    headers = headers or {}
+    details = {
+        "Why it needs you": review_reason_text(reason_code),
+        "From": (headers.get("From") or "unknown")[:120],
+        "Subject": (headers.get("Subject") or "unknown")[:160],
+        "Received": (headers.get("Date") or "unknown")[:60],
+        "Review key": review_key[:12],
+        "Approve means": "I have handled this; close the review.",
+        "Reject means": "Leave it open in the review list.",
+    }
+    payload = {
+        "action_type": "manual_review",
+        "review_key": review_key,
+        "reason_code": reason_code,
+        "gmail_message_id": message_id,
+    }
+    return [
+        "kolo",
+        "request-approval",
+        "--agent-id",
+        agent_id,
+        "--action",
+        f"Manual review \u2014 {reason_code.replace('_', ' ')}",
+        "--reasoning",
+        "A message needs a human decision before the desk can act. "
+        "Approve when you have handled it; reject to keep it open.",
+        "--risk-level",
+        "low",
+        "--details",
+        json.dumps(details, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        "--execution-payload",
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        "--session-key",
+        session_key,
+    ]
+
+
+def build_update_brief(brief_id: str, status: str, result: dict[str, Any]) -> list[str]:
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", brief_id or ""):
+        raise ValueError("invalid brief id")
+    if status not in {"executed", "failed"}:
+        raise ValueError("brief status must be executed or failed")
+    return [
+        "kolo",
+        "update-brief",
+        "--brief-id",
+        brief_id,
+        "--status",
+        status,
+        "--execution-result",
+        json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+    ]
+
+
 def build_notify_owner(estimate_id: str, event: str = "approval-ready") -> list[str]:
     estimate_id = validate_estimate_id(estimate_id)
     try:
@@ -456,6 +562,65 @@ def notify_monitor_claimed(
     return result
 
 
+def claimed_message_headers(
+    monitor_root: Path, claim_root: Path, message_id: str
+) -> dict[str, str]:
+    """Best-effort From/Subject/Date of the claimed message, for the brief only."""
+    try:
+        paths = inbox_monitor.prepare_claim_work(monitor_root, claim_root, message_id)
+        message = json.loads(Path(paths["gmail_message"]).read_text(encoding="utf-8"))
+        headers = (message.get("payload") or {}).get("headers") or []
+        wanted: dict[str, str] = {}
+        for header in headers:
+            if isinstance(header, dict) and header.get("name") in ("From", "Subject", "Date"):
+                value = header.get("value")
+                if isinstance(value, str) and header["name"] not in wanted:
+                    wanted[header["name"]] = value.strip()
+        return wanted
+    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+        return {}
+
+
+def review_brief_claimed(
+    monitor_root: Path,
+    claim_root: Path,
+    message_id: str,
+    claim_token: str,
+    review_key: str,
+    reason_code: str,
+    headers: dict[str, str],
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    """File the review brief once, journaled like any other owner notice."""
+    approver = activation_binding.load(activation_binding.binding_path(monitor_root))
+    command = build_request_review_approval(
+        review_key, reason_code, message_id, approver["session_key"], headers
+    )
+    acquired, state = inbox_claim.acquire_notification(
+        claim_root,
+        message_id,
+        claim_token,
+        f"manual_review_brief:{reason_code}:{message_id}",
+        notification_field="manual_review_notification",
+    )
+    if not acquired:
+        status = state["manual_review_notification"]["status"]
+        return subprocess.CompletedProcess(command, 0, f"notification already {status}\n", "")
+    try:
+        result = run_command(command, runner=runner)
+    except (OSError, subprocess.CalledProcessError):
+        inbox_claim.finish_notification(
+            claim_root, message_id, claim_token, "uncertain",
+            notification_field="manual_review_notification",
+        )
+        raise
+    inbox_claim.finish_notification(
+        claim_root, message_id, claim_token, "sent",
+        notification_field="manual_review_notification",
+    )
+    return result
+
+
 def manual_review_claimed(
     monitor_root: Path,
     claim_root: Path,
@@ -464,9 +629,15 @@ def manual_review_claimed(
     reason_code: str,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str]]:
-    """Persist manual review before attempting its one owner notification."""
+    """Persist manual review, then put it in front of the owner as a brief.
+
+    The brief goes to the approval queue, the one place the owner already
+    checks. When no activation binding exists (an older installation), the
+    generic chat alert is used instead so nothing is lost silently.
+    """
     if claim_token is None:
         claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
+    headers = claimed_message_headers(monitor_root, claim_root, message_id)
     queue_item = inbox_monitor.finalize_item(
         monitor_root,
         message_id,
@@ -475,14 +646,27 @@ def manual_review_claimed(
         "manual_review",
         reason_code,
     )
-    result = notify_monitor_claimed(
-        claim_root,
-        message_id,
-        claim_token,
-        f"manual_review:{reason_code}:{message_id}",
-        "manual-review",
-        runner=runner,
-    )
+    binding = activation_binding.binding_path(monitor_root)
+    if binding.exists():
+        result = review_brief_claimed(
+            monitor_root,
+            claim_root,
+            message_id,
+            claim_token,
+            queue_item["gmail_message_id_sha256"],
+            reason_code,
+            headers,
+            runner=runner,
+        )
+    else:
+        result = notify_monitor_claimed(
+            claim_root,
+            message_id,
+            claim_token,
+            f"manual_review:{reason_code}:{message_id}",
+            "manual-review",
+            runner=runner,
+        )
     return queue_item, result
 
 

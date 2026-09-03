@@ -142,10 +142,13 @@ Everything I do is written down, including my mistakes.
 - **I time myself** — how many minutes from their email to a decision in your
   hands. If I'm slow somewhere, you'll see where.
 
-If an inbox alert says something needs manual review, ask Kolo: **“Show my
-unresolved Jewelry Estimate Desk reviews.”** Kolo should show a privacy-safe
-review key, reason, and time before retrieving any customer message. An alert
-that only says “open Kolo” is incomplete; you should not have to hunt for it.
+Anything that needs a human decision shows up in your Approval Required list
+as a brief that says, in plain words, why it needs you, who wrote, and when.
+Approve it once you have handled it; reject it to leave it open. You can also
+ask Kolo: **“Show my unresolved Jewelry Estimate Desk reviews.”** You should
+never have to hunt for it, and you will never get a stream of progress
+messages: the desk only speaks when something is finished or something is
+wrong.
 
 ---
 

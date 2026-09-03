@@ -81,11 +81,10 @@ def worker_create_argv(
         "--timeout-seconds",
         str(cron_config.WORKER_TIMEOUT_SECONDS),
         "--light-context",
-        "--announce",
-        "--channel",
-        "kolo",
-        "--to",
-        owner_target,
+        # A worker has no owner-facing output of its own: approvals, alerts,
+        # and briefs all go through bundled commands. Delivery stays off so
+        # narration or a stray final line can never reach the owner's phone.
+        "--no-deliver",
         "--json",
     ]
 
@@ -212,8 +211,15 @@ def tick(
             continue
         summary["workers"].append({"message_id": message_id, "job_id": job_id})
 
+    # The owner's channel may be a phone. Reviews reach the owner as approval
+    # briefs, so the tick itself speaks only when something is wrong: an
+    # uncertain alert or action, or a worker that could not be started.
     report = inbox_monitor.run_report(
-        p["monitor_root"], p["claim_root"], announce=True, in_flight_ok=True
+        p["monitor_root"],
+        p["claim_root"],
+        announce=True,
+        in_flight_ok=True,
+        review_lines=False,
     )
     summary["message"] = report["message"]
     if summary["spawn_failures"]:

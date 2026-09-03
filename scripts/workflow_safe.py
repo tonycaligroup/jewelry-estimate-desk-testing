@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import secrets
 import subprocess
@@ -389,6 +390,30 @@ def not_an_inquiry(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def resolve_review_approval(args: argparse.Namespace) -> dict[str, Any]:
+    """Close a review the owner approved in the approval queue, then report it.
+
+    This is the only thing the chat session may do with an approved
+    manual-review brief: one command, no reading of customer mail, and the
+    brief is marked executed so the queue reflects reality.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", args.review_key or ""):
+        raise ValueError("review_key must be a lowercase SHA-256 value")
+    open_keys = {r["review_key"] for r in inbox_monitor.list_manual_reviews(args.monitor_root)}
+    item = None
+    if args.review_key in open_keys:
+        item = inbox_monitor.resolve_manual_review(args.monitor_root, args.review_key)
+        outcome = "resolved"
+    else:
+        outcome = "already_resolved"
+    result = {"action_type": "manual_review", "review_key": args.review_key, "outcome": outcome}
+    kolo_safe.run_command(
+        kolo_safe.build_update_brief(args.brief_id, "executed", result),
+        runner=getattr(args, "runner", subprocess.run),
+    )
+    return {**result, "brief_id": args.brief_id, "review_status": (item or {}).get("review_status", "resolved")}
+
+
 def worker_start(args: argparse.Namespace) -> dict[str, Any]:
     """Hand a worker job the intake result for the one claim leased to it.
 
@@ -637,6 +662,10 @@ def main(argv: list[str] | None = None) -> int:
     take.add_argument("--record-root", type=Path, required=True)
     take.add_argument("--message-id", required=True)
     take.add_argument("--shop-profile", type=Path, required=True)
+    resolve = sub.add_parser("resolve-review-approval")
+    resolve.add_argument("--monitor-root", type=Path, required=True)
+    resolve.add_argument("--review-key", required=True)
+    resolve.add_argument("--brief-id", required=True)
     start = sub.add_parser("worker-start")
     start.add_argument("--monitor-root", type=Path, required=True)
     start.add_argument("--claim-root", type=Path, required=True)
@@ -673,6 +702,8 @@ def main(argv: list[str] | None = None) -> int:
             record = not_an_inquiry(args)
         elif args.command == "worker-start":
             record = worker_start(args)
+        elif args.command == "resolve-review-approval":
+            record = resolve_review_approval(args)
         elif args.command == "finalize-post-estimate":
             record = finalize_post_estimate(args)
         elif args.command == "record-appointment-booked":

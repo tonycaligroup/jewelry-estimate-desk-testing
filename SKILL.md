@@ -966,6 +966,25 @@ invitation. Confirm to the customer only after the calendar write succeeds.
 Use the owner's IANA timezone, never the pod's UTC clock. Never select meeting
 times based on the desired delivery date.
 
+### Handling approved manual-review briefs in the main Kolo session
+
+Every manual-review item is also filed as a Kolo approval brief whose
+execution payload has `action_type: manual_review`, a `review_key`, and the
+reason. When Kolo delivers an approved payload of that kind, run exactly one
+command and nothing else:
+
+```bash
+python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
+  --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
+  --review-key '<review_key from the payload>' \
+  --brief-id '<Brief ID from the delivered decision>'
+```
+
+It closes the review (a repeat is a no-op) and reports the brief as executed.
+A rejected brief needs no action; the review stays open. Never read the
+customer's mail into the chat to "help" with the decision, and never resolve
+a review the owner did not approve.
+
 ### Handling approved appointment requests in the main Kolo session
 
 When Kolo delivers an approved execution payload whose `action_type` is
