@@ -343,7 +343,7 @@ repeats an open item, and never sends a message a brief already covers.
 |---|---|
 | A customer replies on an existing inquiry | One alert naming the estimate |
 | Specification is complete and priced | An approval brief with the price, the cost sheet, and the exact customer email |
-| Something needs a human | An approval brief in the same queue: why it needs the owner in plain words, who wrote, the subject, and when. Approving it closes the review; rejecting leaves it open |
+| Something needs a human | An approval brief in the same queue, titled with the sender and subject so the owner can find the email. It says why it needs the owner in plain words and asks one yes/no question: did you handle this email? Approve = yes, the review closes. Reject = not yet, it stays open |
 | A meeting is requested | A booking approval with the calendar-checked candidate times, at every stage |
 | A customer asks for a rendering | A rendering approval showing the conforming images before anything is sent |
 | A rate is missing | A brief asking for that rate |

@@ -173,11 +173,16 @@ Two ways to schedule it; the feasibility tests decide which:
 ### 2.6 Reviews as approval briefs (built 3 September 2026)
 
 Every manual-review item is filed in the Kolo approval queue as a brief, the
-one place the owner already looks, rather than on a task board. The brief
-carries the reason in plain words, the sender, subject, and time, and an
-execution payload; approving it runs one deterministic command that closes
-the review and marks the brief executed, rejecting leaves it open. The
-"show my unresolved reviews" chat query stays as a secondary path.
+one place the owner already looks, rather than on a task board. The card is
+a yes/no control, so the brief asks one yes/no question: did you handle this
+email? Its title names the sender and subject ("Check email from Pat: Ring")
+so the owner can find the email in the shop inbox; the details repeat them,
+say what to do, give the reason in plain words, and spell out approve (yes,
+handled, the review closes) and reject (not yet, it stays open). Headers come
+from the claim work file, falling back to the estimate record when the work
+file is gone. Approving runs one deterministic command that closes the review
+and marks the brief executed. The "show my unresolved reviews" chat query
+stays as a secondary path.
 
 Owner-channel discipline: the channel chosen at setup may be a phone, so it
 receives only finalized messages. Ticks announce nothing unless the desk
