@@ -7484,6 +7484,7 @@ class InlinePipelineTests(unittest.TestCase):
                 summary, runner = watcher.run_tick(ws)
             self.assertEqual(summary["inline_failures"], 1)
             self.assertEqual(summary["inline"][0]["outcome"], "deferred")
+            self.assertIn("could not be judged this tick", summary["message"])
             state = inbox_claim.read_state(inbox_claim.claim_path(ws / "estimate-desk" / "inbox-claims", "inquiry-1"))
             self.assertEqual(state["status"], "processing")
             self.assertFalse(inbox_claim.recovery_lease_active(state))
