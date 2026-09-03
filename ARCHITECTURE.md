@@ -266,7 +266,12 @@ Verified on the production pod on 2 September 2026 unless marked otherwise.
 | Maton passthrough exposes Google Calendar event creation with attendees and invitations | Verified live: insert, read, delete with an attendee (Stage 0 test 6) | Executor (booking) |
 | Maton passthrough exposes Gmail incremental history | Reported by Kolo; not yet exercised | Optional cheaper discovery |
 | Images can be generated from a shell command with count and output path | Verified live: `gpt-image-2` default, PNG written (Stage 0 test 7) | Rendering |
-| No Gmail push, no hooks, no public ingress on this pod | Verified | Polling stays |
+| No Gmail push, no hooks, no public ingress on this pod | Verified 2 Sep; a second Kolo instance suggested Gmail hooks on 3 Sep and Tony confirmed there are none on Kolo today | Polling stays |
+| `openclaw infer model run --model <id> --thinking off --json --prompt <text>` is the supported stateless completion; envelope `{"ok", "outputs": [{"text"}]}`, non-zero exit and `ok:false` on provider failure; no system-prompt, max-tokens, temperature, or JSON-mode flags; consumes no agent concurrency slot; command jobs inherit `LITELLM_API_KEY`/`LITELLM_BASE_URL` | Reported by a second Kolo instance from its CLI and docs, 3 Sep 2026; to confirm on this pod | Inline judgment (speed fix 2) |
+| Cheaper models for extraction and classification: `litellm-fireworks/glm-5-3-flash`, `litellm/claude-haiku-4-5`, `litellm-openai/gemini-3.1-flash-lite-preview` (5-10x cheaper per token than qwen-3-7-plus) | Reported by a second Kolo instance | `pipeline.json` `model` |
+| `openclaw infer image generate --prompt ... --json` returns `outputs[].path`; `infer image edit --file` exists | Reported; generate verified live 2 Sep | Retire the rendering worker later |
+| Edit Intent replaces the brief's execution payload with the owner's edited JSON before it reaches the session | Reported by a second Kolo instance | Executor must validate a revised payload, not re-derive |
+| No reply binding for `kolo notify-owner`; the owner's answer arrives only as a main-session chat message | Reported; matches our design (question code in the text) | Owner questions |
 | Models available include `litellm-fireworks/qwen-3-7-plus` (pod default) and `glm-5-3-flash`; the current job's implicit "high" thinking is silently downgraded on GLM and must be set explicitly if the model changes | Verified from model list and logs | Worker model choice  Workers moved to `qwen-3-7-plus` with thinking off on 3 September 2026 after a glm-5-3 worker managed 14 tool calls in 900 s. |
 
 ---
@@ -355,6 +360,26 @@ optional carat, fee and accent catalog keys) and does skeleton fill,
 finalize, binding, brief, record, mirror, and claim finish in one command.
 An intake claim is now about five round trips: start, write review,
 review-thread, then either write body plus send-spec-followup or price.
+
+**Speed fix 2 — inline judgment, no worker job (built 3 September 2026,
+switched off until verified live).** Kolo exposes a stateless completion,
+`openclaw infer model run --model <id> --json --prompt <text>`, usable from
+a command-kind cron job. `judge.py` wraps it: one call per judgment (triage,
+specification extraction, post-estimate classification, follow-up drafting,
+quantities), strict JSON parsing, shape validation, one retry that quotes the
+rejection, and a `JudgmentError` that distinguishes a transient platform
+failure from a malformed answer. `spec_gate.py` decides the missing required
+fields by rule, so the model only extracts. `pipeline.py` runs a claim end to
+end inside the watcher tick: dead-spot resume, triage, extract, gate,
+`review-thread`, then draft plus `send-spec-followup` or quantities plus
+`price`; post-estimate replies are classified and finalized the same way, and
+only rendering or appointment work is still handed to a worker job. The
+switch is `estimate-desk/pipeline.json` (`{"inline": true, "model": ...}`),
+read by the watcher each tick, so enabling it needs no rebind. A transient
+model failure leaves the claim processing and unleased for the stale
+reconciler; a malformed answer after the retry files `classification_malformed`.
+Expected: two to three completions per claim, finishing in the tick that
+discovered it, and no agent loop that can wander.
 
 **Stage C — deterministic approvals for bookings and renderings.**
 Calendar-write helper with receipts; rendering generation by script with
