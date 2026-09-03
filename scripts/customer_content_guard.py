@@ -65,6 +65,30 @@ DOLLAR_AMOUNT_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
 CUSTOMER_TERMINOLOGY_PATTERNS = (re.compile(r"\bCAD\b", re.I),)
 
 
+MARKDOWN_EMPHASIS_RE = re.compile(r"(\*{1,3}|_{2,3})(?=\S)(.+?)(?<=\S)\1")
+MARKDOWN_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+", re.MULTILINE)
+MARKDOWN_BULLET_RE = re.compile(r"^([ \t]*)[*+][ \t]+", re.MULTILINE)
+MARKDOWN_CODE_RE = re.compile(r"`+")
+
+
+def plain_text(text: str) -> str:
+    """Customer mail goes out as plain text; strip markdown a model may have added.
+
+    Gmail shows the raw characters, so **bold** arrived as literal stars in a
+    customer's estimate. Emphasis markers, heading hashes, and backticks are
+    removed; star bullets become dashes; everything else is left as written.
+    """
+    if not isinstance(text, str):
+        return text
+    cleaned = MARKDOWN_HEADING_RE.sub("", text)
+    cleaned = MARKDOWN_BULLET_RE.sub(r"\1- ", cleaned)
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = MARKDOWN_EMPHASIS_RE.sub(r"\2", cleaned)
+    return MARKDOWN_CODE_RE.sub("", cleaned)
+
+
 def validate_customer_text(text: str) -> str:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("customer-facing text must not be empty")

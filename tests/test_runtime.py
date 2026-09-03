@@ -7666,6 +7666,28 @@ class DecisionQuestionTests(unittest.TestCase):
                 ))
 
 
+class PlainTextMailTests(unittest.TestCase):
+    def test_markdown_from_the_model_is_stripped_before_the_customer_sees_it(self) -> None:
+        body = (
+            "Hello,\n\n**Custom Wedding Band**\n- 18K yellow gold, size 10\n* Width: 4mm\n\n"
+            "**Estimated Investment: $2,186.30**\n\n## Lead Time\n*3-4 weeks* from `design approval`.\n"
+        )
+        self.assertEqual(
+            customer_content_guard.plain_text(body),
+            "Hello,\n\nCustom Wedding Band\n- 18K yellow gold, size 10\n- Width: 4mm\n\n"
+            "Estimated Investment: $2,186.30\n\nLead Time\n3-4 weeks from design approval.\n",
+        )
+
+    def test_reply_builder_sends_plain_text(self) -> None:
+        route = gmail_route.build_route(
+            IntakeTests("test_intake_cli_prints_the_result").gmail_message("m-1", "t-1"), "shop@example.com"
+        )
+        payload = gmail_reply.build_reply(route, "Hello,\n\n**Estimated Investment: $2,186.30**\n")
+        raw = base64.urlsafe_b64decode(payload["raw"] + "==").decode("utf-8", "replace")
+        self.assertIn("Estimated Investment: $2,186.30", raw)
+        self.assertNotIn("**", raw)
+
+
 class TickRenderingTests(unittest.TestCase):
     def test_render_and_send_uses_the_shell_image_command_and_falls_back_to_a_worker(self) -> None:
         p = {k: Path("/ws/estimate-desk") / v for k, v in (("monitor_root", "inbox-monitor"), ("claim_root", "inbox-claims"), ("record_root", "records"))}

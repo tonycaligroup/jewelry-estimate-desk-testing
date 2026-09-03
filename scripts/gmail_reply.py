@@ -14,7 +14,7 @@ from email.utils import formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Any, Sequence
 
-from customer_content_guard import validate_customer_text
+from customer_content_guard import plain_text, validate_customer_text
 from gmail_route import email_identity_key
 
 
@@ -66,7 +66,7 @@ def build_reply(
     if identity_key != email_identity_key(recipient):
         raise ValueError("route.identity_key does not match route.recipient")
     subject = require_text(route, "original_subject")
-    body = validate_customer_text(body)
+    body = validate_customer_text(plain_text(body))
 
     raw_references = route.get("references", [])
     if not isinstance(raw_references, list):
