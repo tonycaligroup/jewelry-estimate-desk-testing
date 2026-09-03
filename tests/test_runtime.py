@@ -36,6 +36,7 @@ import gmail_text
 import judge
 import spec_gate
 import pipeline
+import slots
 import cost_components as cost_components_module
 import inbox_monitor
 import estimate_record
@@ -1486,7 +1487,7 @@ class SafeCliTests(unittest.TestCase):
                 "agent:main:kolo:test-session",
             )
         self.assertEqual(argv[:2], ["kolo", "request-approval"])
-        self.assertEqual(argv[argv.index("--risk-level") + 1], "low")
+        self.assertEqual(argv[argv.index("--risk-level") + 1], "medium")
         self.assertEqual(argv[argv.index("--agent-id") + 1], "main")
         payload = json.loads(argv[argv.index("--execution-payload") + 1])
         self.assertEqual(payload["action_type"], "appointment_booking")
@@ -7627,33 +7628,168 @@ class TickRenderingTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "outputs": [{"path": f"/media/{len(calls)}.png"}]}), "")
             with (
                 patch.object(pipeline.rendering_materialize, "materialize", side_effect=lambda mr, cr, mid, src, slot: {"path": f"/work/rendering-{slot}.png", "slot": slot}) as mat,
-                patch.object(pipeline.workflow_safe, "send_rendering") as send,
+                patch.object(pipeline.workflow_safe, "request_rendering_approval", return_value={"outcome": "rendering_approval_requested", "images": 2, "next": "done"}) as gate,
             ):
                 out = pipeline.render_and_send(p, "msg-1", "jed-0123456789abcdef", record, paths, "openclaw", run)
-            self.assertEqual(out["outcome"], "rendering_sent")
-            self.assertEqual(out["images"], 2)
+            # Renderings never go to the customer from here: the owner approves first.
+            self.assertEqual(out["outcome"], "rendering_approval_requested")
             self.assertEqual([c[:4] for c in calls], [["openclaw", "infer", "image", "generate"]] * 2)
             self.assertIn("front three-quarter", calls[0][5])
             self.assertIn("side profile", calls[1][5])
             self.assertEqual(mat.call_count, 2)
-            sent = send.call_args.args[0]
-            self.assertEqual([str(i) for i in sent.images], ["/work/rendering-1.png", "/work/rendering-2.png"])
-            self.assertIn("written specification", Path(paths["customer_reply"]).read_text(encoding="utf-8"))
+            gate.assert_called_once()
             # A failed generation hands the claim to a worker instead of dropping it.
             failing = Mock(return_value=subprocess.CompletedProcess([], 0, "not json", ""))
+            paths["work_dir"] = directory
+            p["shop_profile"] = Path(directory) / "shop-profile.json"
+            p["shop_profile"].write_text(json.dumps({"shop": {}, "scheduling": {"timezone": "America/Los_Angeles", "calendar": None, "windows": []}}), encoding="utf-8")
+            times = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps({"text": json.dumps({"requested_times": ["early next week"]})}), ""))
             with patch.object(pipeline.workflow_safe, "request_appointment_approval") as appt:
                 out = pipeline.post_estimate_actions(p, "msg-1", "jed-0123456789abcdef", record,
-                                                     "request_appointment_approval_then_send_rendering", paths, "openclaw", failing)
+                                                     "request_appointment_approval_then_send_rendering", paths, "openclaw", failing,
+                                                     digest={"messages": []}, judge_runner=times)
             self.assertEqual(out["outcome"], "needs_worker")
             appt.assert_called_once()
             self.assertTrue(appt.call_args.args[0].defer_finalize_for_rendering)
             with patch.object(pipeline.workflow_safe, "request_appointment_approval") as appt:
                 out = pipeline.post_estimate_actions(p, "msg-1", "jed-0123456789abcdef", record,
-                                                     "request_appointment_approval", paths, "openclaw", failing)
+                                                     "request_appointment_approval", paths, "openclaw", failing,
+                                                     digest={"messages": []}, judge_runner=times)
             self.assertEqual(out["outcome"], "appointment_approval_requested")
             self.assertFalse(appt.call_args.args[0].defer_finalize_for_rendering)
             intent = json.loads(Path(paths["appointment_intent"]).read_text(encoding="utf-8"))
-            self.assertEqual(intent, {"requested_times": [], "calendar_availability": []})
+            self.assertEqual(intent["requested_times"], ["early next week"])
+            self.assertEqual(intent["calendar_availability"], [])
+            self.assertIn("no calendar", intent["availability_note"])
+
+
+class SlotTests(unittest.TestCase):
+    def scheduling(self) -> dict:
+        return {"timezone": "America/Los_Angeles", "calendar": "primary",
+                "windows": [{"days": ["mon", "wed"], "start": "10:00", "end": "12:00"}, {"day": "friday", "start": "14:00", "end": "15:00"}],
+                "durations_minutes": {"consultation": 30}, "buffer_minutes": 0, "minimum_notice_minutes": 120, "meeting_offer_window_days": 7}
+
+    def test_candidate_slots_come_from_the_windows_in_order(self) -> None:
+        # Tuesday 8 Sep 2026 09:00 PT
+        now = datetime(2026, 9, 8, 16, 0, tzinfo=timezone.utc)
+        found = slots.candidate_slots(self.scheduling(), now)
+        labels = [s["start"] for s in found]
+        self.assertTrue(labels[0].startswith("2026-09-09T10:00"))   # Wednesday 10:00
+        self.assertTrue(labels[1].startswith("2026-09-09T10:30"))
+        self.assertTrue(labels[2].startswith("2026-09-11T14:00"))   # Friday 14:00
+        self.assertTrue(all("-07:00" in s for s in labels))
+        self.assertEqual(slots.parse_windows({"windows": [{"days": ["nope"], "start": "9", "end": "10:00"}]}), [])
+        self.assertEqual(slots.candidate_slots({"timezone": "UTC", "windows": []}, now), [])
+
+    def test_offer_times_checks_the_live_calendar_and_labels_free_slots(self) -> None:
+        import email.utils
+        now = datetime(2026, 9, 8, 16, 0, tzinfo=timezone.utc)
+        profile = {"scheduling": self.scheduling()}
+        busy_start = "2026-09-09T17:00:00Z"  # Wed 10:00 PT is busy
+        class Response:
+            headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+            def __init__(self, body): self._body = body
+            def read(self): return json.dumps(self._body).encode("utf-8")
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def opener(request, timeout=15):
+            query = json.loads(request.data.decode("utf-8"))
+            body = {"kind": "calendar#freeBusy", "timeMin": query["timeMin"], "timeMax": query["timeMax"],
+                    "calendars": {"primary": {"busy": [{"start": busy_start, "end": "2026-09-09T17:30:00Z"}]}}}
+            return Response(body)
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(slots.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")):
+                offered = slots.offer_times(profile, "token", Path(directory), now=now, opener=opener)
+            labels = [o["label"] for o in offered["options"]]
+            self.assertEqual(len(labels), 3)
+            self.assertTrue(labels[0].startswith("Wednesday, September 9 at 10:30 AM"))
+            self.assertTrue((Path(directory) / "calendar-options.json").exists())
+        self.assertEqual(slots.offer_times({"scheduling": {"timezone": "UTC", "windows": []}}, "t", Path("/tmp"))["options"], [])
+
+
+class RenderingGateTests(unittest.TestCase):
+    def test_owner_sees_the_views_and_the_send_waits_for_approval(self) -> None:
+        import hashlib
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            desk = ws / "estimate-desk"
+            desk.mkdir(parents=True)
+            args, paths = helper.claimed(str(desk))
+            (desk / "monitor").rename(desk / "inbox-monitor")
+            (desk / "claims").rename(desk / "inbox-claims")
+            args.monitor_root = desk / "inbox-monitor"
+            args.claim_root = desk / "inbox-claims"
+            args.record_root = desk / "records"
+            args.shop_profile = desk / "shop-profile.json"
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                estimate_id = workflow_safe.intake(args)["estimate_id"]
+            activation_binding.create(activation_binding.binding_path(args.monitor_root), "agent:main:kolo:direct:chat-1")
+            work = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, "inquiry-1")
+            png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+            Path(work["rendering_image_1"]).write_bytes(png)
+            Path(work["rendering_image_2"]).write_bytes(png + b"1")
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"status":"ok","brief":{"briefId":"01a06000-0000-7000-8000-000000000007"}}', ""))
+            out = workflow_safe.request_rendering_approval(argparse.Namespace(
+                monitor_root=args.monitor_root, claim_root=args.claim_root, record_root=args.record_root,
+                shop_profile=args.shop_profile, message_id="inquiry-1", estimate_id=estimate_id, runner=runner,
+            ))
+            self.assertEqual(out["outcome"], "rendering_approval_requested")
+            argvs = [c.args[0] for c in runner.call_args_list]
+            previews = [a for a in argvs if a[:3] == ["kolo", "notify-owner", "-m"]]
+            self.assertEqual(len(previews), 2)
+            self.assertIn("--file", previews[0])
+            brief = next(a for a in argvs if a[1] == "request-approval")
+            self.assertEqual(brief[brief.index("--risk-level") + 1], "medium")
+            payload = json.loads(brief[brief.index("--execution-payload") + 1])
+            self.assertEqual(payload["action_type"], "send_rendering")
+            self.assertEqual(len(payload["images"]), 2)
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "awaiting_owner")
+            self.assertEqual(state["reason_code"], "rendering_approval")
+            # Approval: the exact images the owner saw go out; a changed image is refused.
+            Path(work["rendering_image_2"]).write_bytes(png + b"2")
+            with self.assertRaisesRegex(ValueError, "changed since the owner approved"):
+                workflow_safe.send_approved_rendering(argparse.Namespace(
+                    workspace=ws, estimate_id=estimate_id, message_id="inquiry-1", brief_id=None, runner=runner,
+                ))
+            Path(work["rendering_image_2"]).write_bytes(png + b"1")
+            # The record must be in a sent state for a rendering; simulate an approved claim closing instead.
+            # (send_rendering's own validations are covered elsewhere.)
+            with patch.object(workflow_safe, "send_rendering", return_value={"status": "estimate_sent"}) as send:
+                # The claim was reopened by the failed attempt above; park it again so reopen works.
+                token = inbox_claim.authoritative_claim_token(args.claim_root, "inquiry-1")
+                inbox_claim.finish(args.claim_root, "inquiry-1", token, "awaiting_owner", "rendering_approval")
+                inbox_monitor.reconcile_terminal(args.monitor_root, "inquiry-1", args.claim_root)
+                out = workflow_safe.send_approved_rendering(argparse.Namespace(
+                    workspace=ws, estimate_id=estimate_id, message_id="inquiry-1", brief_id="01a06000-0000-7000-8000-000000000007", runner=runner,
+                ))
+            self.assertEqual(out["outcome"], "rendering_sent")
+            self.assertEqual([str(i) for i in send.call_args.args[0].images], [work["rendering_image_1"], work["rendering_image_2"]])
+            self.assertIn("written specification", Path(work["customer_reply"]).read_text(encoding="utf-8"))
+            update = [a for a in [c.args[0] for c in runner.call_args_list] if a[1] == "update-brief"]
+            self.assertEqual(update[-1][update[-1].index("--brief-id") + 1], "01a06000-0000-7000-8000-000000000007")
+
+    def test_rejecting_holds_the_renderings(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            desk = ws / "estimate-desk"
+            desk.mkdir(parents=True)
+            args, paths = helper.claimed(str(desk))
+            (desk / "monitor").rename(desk / "inbox-monitor")
+            (desk / "claims").rename(desk / "inbox-claims")
+            token = inbox_claim.authoritative_claim_token(desk / "inbox-claims", "inquiry-1")
+            inbox_monitor.park_item(desk / "inbox-monitor", "inquiry-1", desk / "inbox-claims", token, "rendering_approval")
+            out = workflow_safe.reject_rendering(argparse.Namespace(workspace=ws, message_id="inquiry-1"))
+            self.assertEqual(out["outcome"], "rendering_rejected")
+            state = inbox_claim.read_state(inbox_claim.claim_path(desk / "inbox-claims", "inquiry-1"))
+            self.assertEqual(state["status"], "manual_review")
+            self.assertEqual(state["reason_code"], "owner_rejected_rendering")
+            self.assertEqual(inbox_monitor.list_manual_reviews(desk / "inbox-monitor"), [])
 
 
 class OwnerQuestionTests(unittest.TestCase):
