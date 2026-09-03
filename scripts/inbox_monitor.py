@@ -31,8 +31,8 @@ SCHEMA_VERSION = 2
 LEGACY_SCHEMA_VERSION = 1
 QUEUE_SCHEMA_VERSION = 1
 ACTIVATION_STATES = {"prepared", "active", "reconfiguring"}
-PROCESSING_STATES = {"unclaimed", "processing", "processed", "manual_review"}
-TERMINAL_STATES = {"processed", "manual_review"}
+PROCESSING_STATES = {"unclaimed", "processing", "processed", "manual_review", "awaiting_owner"}
+TERMINAL_STATES = {"processed", "manual_review", "awaiting_owner"}
 REQUIRED_CAPABILITIES = (
     "gmail_after_epoch",
     "gmail_internal_date_ms",
@@ -1058,6 +1058,39 @@ def finalize_item(
     result = reconcile_terminal(root, message_id, claim_root)
     cleanup_claim_work(root, message_id)
     return result
+
+
+def park_item(
+    root: Path,
+    message_id: str,
+    claim_root: Path,
+    claim_token: str,
+    reason_code: str,
+) -> dict[str, Any]:
+    """Park one claim while the owner answers a question (WORKFLOW.md 6.10).
+
+    Unlike finalize_item this keeps the claim work directory: the fetched
+    message and thread are needed again when the answer arrives and the
+    worker resumes.
+    """
+    inbox_claim.finish(claim_root, message_id, claim_token, "awaiting_owner", reason_code)
+    return reconcile_terminal(root, message_id, claim_root)
+
+
+def reopen_item(
+    root: Path,
+    message_id: str,
+    claim_root: Path,
+    lease_seconds: int,
+) -> dict[str, Any]:
+    """Resume a parked claim: processing again, leased to the worker about to start."""
+    state = inbox_claim.reopen(claim_root, message_id, lease_seconds)
+    queue_item = sync_claim(root, message_id, {"acquired": True, **state})
+    return {
+        "queue_item": queue_item,
+        "claim": {"acquired": True, "resumed": True, **state},
+        "work_paths": prepare_claim_work(root, claim_root, message_id),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

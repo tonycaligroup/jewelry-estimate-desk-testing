@@ -25,6 +25,8 @@ import gmail_classify
 import gmail_route
 import inbox_monitor
 import kolo_safe
+import owner_questions
+import cost_components
 import route_ownership
 
 
@@ -537,6 +539,163 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def ask_missing_rate(args: argparse.Namespace) -> dict[str, Any]:
+    """Ask the owner for the one rate pricing lacks, and park this claim.
+
+    WORKFLOW.md 6.10: a missing rate is not an error and not a review. The
+    question goes to the owner's channel in plain words, the claim waits as
+    awaiting_owner with its work directory intact, and answer_question()
+    resumes it once the owner replies. Everything here is idempotent: a
+    repeat neither re-asks nor re-sends.
+    """
+    claim_token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    record = estimate_record.read_object(
+        estimate_record.record_path(args.record_root, args.estimate_id)
+    )
+    queue_item = inbox_monitor.load_queue_item(args.monitor_root, args.message_id)
+    if queue_item["thread_id"] != record["route"]["thread_id"]:
+        raise ValueError("the claimed message is not on this estimate's thread")
+    profile = read_object(args.shop_profile)
+    missing = cost_components.missing_rates(record, profile)
+    if not missing:
+        raise ValueError("no rate is missing for this specification; price it instead")
+    rate = missing[0]
+    headers = kolo_safe.claimed_message_headers(args.monitor_root, args.claim_root, args.message_id)
+    customer = kolo_safe._sender_display(headers.get("From", "")) if headers.get("From") else None
+    root = owner_questions.questions_root(args.monitor_root)
+    created, question = owner_questions.create_missing_rate(
+        root,
+        args.estimate_id,
+        args.message_id,
+        rate,
+        customer,
+        owner_questions.summary_of_piece(record.get("specification")),
+    )
+    question = owner_questions.deliver(
+        root, question, runner=getattr(args, "runner", subprocess.run)
+    )
+    inbox_monitor.park_item(
+        args.monitor_root, args.message_id, args.claim_root, claim_token, "missing_rate"
+    )
+    return {
+        "outcome": "awaiting_owner",
+        "question_id": question["question_id"],
+        "reference": owner_questions.reference(question["question_id"]),
+        "created": created,
+        "delivery": question["delivery"]["status"],
+        "rate_kind": rate["rate_kind"],
+        "rate_key": rate["suggested_key"],
+        "estimate_id": args.estimate_id,
+        "next_action": "done",
+    }
+
+
+def open_questions(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """What the desk is still waiting on from the owner, oldest first."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    root = owner_questions.questions_root(p["monitor_root"])
+    return [
+        {
+            "question_id": q["question_id"],
+            "reference": owner_questions.reference(q["question_id"]),
+            "estimate_id": q["estimate_id"],
+            "kind": q["kind"],
+            "asked_at": q["asked_at"],
+            "delivery": q["delivery"]["status"],
+            "text": q["text"],
+        }
+        for q in owner_questions.list_questions(root, "open")
+    ]
+
+
+def answer_question(args: argparse.Namespace) -> dict[str, Any]:
+    """Take the owner's reply, save the rate, and resume the parked inquiry.
+
+    Runs in the main Kolo session, which is where the owner's answer arrives.
+    The reply is read for exactly one number; the number goes on the rate
+    card with provenance; the parked claim reopens under a worker lease and
+    a one-shot worker is started to price the piece. The price still goes
+    through the normal approval, so a misread number is caught there.
+    """
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    workspace = args.workspace.resolve()
+    p = inbox_watcher.paths_for(workspace)
+    root = owner_questions.questions_root(p["monitor_root"])
+    question = (
+        owner_questions.find(root, args.question) if args.question else owner_questions.only_open(root)
+    )
+    if question["status"] == "answered":
+        return {
+            "outcome": "already_answered",
+            "question_id": question["question_id"],
+            "answer": question.get("answer"),
+        }
+    if question["kind"] != "missing_rate":
+        raise ValueError("only missing-rate questions are answered this way")
+    value = owner_questions.parse_amount(args.answer)
+    question = owner_questions.record_answer(root, question, args.answer, value)
+    owner_questions.save_rate(
+        p["shop_profile"],
+        question["rate"]["rate_kind"],
+        question["rate"]["rate_key"],
+        value,
+        owner_questions.answer_provenance(question),
+    )
+    message_id = question["gmail_message_id"]
+    estimate_id = question["estimate_id"]
+    import cron_config  # local import keeps module import order unchanged
+
+    reopened = inbox_monitor.reopen_item(
+        p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS
+    )
+    work_dir = Path(reopened["work_paths"]["work_dir"])
+    if not Path(reopened["work_paths"]["gmail_message"]).exists():
+        import gmail_fetch  # local import; only needed when the work file was cleaned up
+
+        gmail_fetch.fetch_claimed(
+            p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token()
+        )
+    write_private(
+        work_dir / "intake-result.json",
+        {
+            "message_id": message_id,
+            "estimate_id": estimate_id,
+            "outcome": "owner_answered",
+            "question_id": question["question_id"],
+            "next_action": "review_thread",
+            "work_paths": reopened["work_paths"],
+        },
+    )
+    result = {
+        "outcome": "answered",
+        "question_id": question["question_id"],
+        "estimate_id": estimate_id,
+        "rate_kind": question["rate"]["rate_kind"],
+        "rate_key": question["rate"]["rate_key"],
+        "value": value,
+        "worker_job_id": None,
+    }
+    try:
+        result["worker_job_id"] = inbox_watcher.spawn_worker(
+            workspace,
+            args.base_dir.resolve(),
+            "",
+            args.openclaw or inbox_watcher.default_openclaw(),
+            message_id,
+            estimate_id,
+            str(work_dir),
+            runner=getattr(args, "runner", subprocess.run),
+        )
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        # The claim is processing under a lease; when it lapses the watcher's
+        # stale reconciler resumes it and the next tick starts a worker.
+        result["worker_error"] = str(exc)[:200]
+    return result
+
+
 def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
     """Mirror and safely route one persisted post-estimate decision."""
     record, decision = estimate_record.post_estimate_decision(
@@ -678,6 +837,21 @@ def main(argv: list[str] | None = None) -> int:
     not_inquiry.add_argument("--estimate-id", required=True)
     not_inquiry.add_argument("--reason", required=True)
     not_inquiry.add_argument("--record-output", type=Path, required=True)
+    ask_rate = sub.add_parser("ask-missing-rate")
+    ask_rate.add_argument("--monitor-root", type=Path, required=True)
+    ask_rate.add_argument("--claim-root", type=Path, required=True)
+    ask_rate.add_argument("--record-root", type=Path, required=True)
+    ask_rate.add_argument("--shop-profile", type=Path, required=True)
+    ask_rate.add_argument("--message-id", required=True)
+    ask_rate.add_argument("--estimate-id", required=True)
+    questions = sub.add_parser("open-questions")
+    questions.add_argument("--workspace", type=Path, required=True)
+    answer = sub.add_parser("answer-question")
+    answer.add_argument("--workspace", type=Path, required=True)
+    answer.add_argument("--base-dir", type=Path, required=True)
+    answer.add_argument("--question", default=None)
+    answer.add_argument("--answer", required=True)
+    answer.add_argument("--openclaw", default=None)
     finalize = sub.add_parser("finalize-post-estimate")
     add_common_paths(finalize)
     finalize.add_argument("--monitor-root", type=Path, required=True)
@@ -704,6 +878,12 @@ def main(argv: list[str] | None = None) -> int:
             record = worker_start(args)
         elif args.command == "resolve-review-approval":
             record = resolve_review_approval(args)
+        elif args.command == "ask-missing-rate":
+            record = ask_missing_rate(args)
+        elif args.command == "open-questions":
+            record = open_questions(args)
+        elif args.command == "answer-question":
+            record = answer_question(args)
         elif args.command == "finalize-post-estimate":
             record = finalize_post_estimate(args)
         elif args.command == "record-appointment-booked":

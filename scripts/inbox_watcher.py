@@ -26,6 +26,7 @@ import gmail_fetch
 import inbox_claim
 import inbox_monitor
 import kolo_safe
+import owner_questions
 import validate_profile
 import workflow_safe
 
@@ -138,6 +139,7 @@ def tick(
         "manual_review": 0,
         "workers": [],
         "spawn_failures": 0,
+        "reminders": 0,
         "message": "NO_REPLY",
     }
     profile_result = validate_profile.validate_profile(
@@ -155,6 +157,11 @@ def tick(
     inbox_claim.reconcile_stale_notifications(p["claim_root"], STALE_AFTER_SECONDS)
     kolo_safe.reconcile_stale_claims(
         p["monitor_root"], p["claim_root"], STALE_AFTER_SECONDS, runner=runner
+    )
+    # A question the owner has not answered for a working day gets one
+    # reminder, then waits (WORKFLOW.md 6.10).
+    summary["reminders"] = owner_questions.send_due_reminders(
+        owner_questions.questions_root(p["monitor_root"]), runner=runner
     )
     discovery = gmail_fetch.discover(p["monitor_root"], token)
     summary["discovered"] = discovery.get("discovered", 0)
