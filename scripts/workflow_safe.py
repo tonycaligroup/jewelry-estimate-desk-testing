@@ -433,6 +433,35 @@ def worker_start(args: argparse.Namespace) -> dict[str, Any]:
     result = read_object(Path(paths["work_dir"]) / "intake-result.json")
     if result.get("message_id") != args.message_id or result.get("next_action") != "review_thread":
         raise ValueError("intake result does not describe a delegated review for this message")
+    # Dead-spot guard. A previous worker may have reviewed the thread and then
+    # died before, or just after, sending the specification follow-up. Tell
+    # this worker exactly where to resume, or finish the claim when the send
+    # already happened, so the customer is neither left unasked nor asked twice.
+    record_root = getattr(args, "record_root", None) or args.monitor_root.resolve().parent / "records"
+    estimate_id = result.get("estimate_id")
+    record_file = estimate_record.record_path(record_root, estimate_id) if estimate_id else None
+    if record_file is not None and record_file.exists():
+        record = estimate_record.read_object(record_file)
+        pending = estimate_record.pending_followup(record, args.message_id)
+        if pending is not None:
+            result["resume"] = pending
+        elif record.get("status") == "awaiting_specs" and estimate_record.followup_sent(
+            record, args.message_id
+        ):
+            review = next(
+                (
+                    item
+                    for item in record.get("thread_reviews", [])
+                    if isinstance(item, dict)
+                    and item.get("source_message_id_sha256")
+                    == estimate_record.sha256_text(args.message_id)
+                ),
+                None,
+            )
+            if review is not None and review.get("outcome") == "awaiting_specs":
+                finish_processed(args.monitor_root, args.claim_root, record_root, args.message_id)
+                result["outcome"] = "followup_already_sent"
+                result["next_action"] = "done"
     return result
 
 
@@ -847,6 +876,7 @@ def main(argv: list[str] | None = None) -> int:
     start.add_argument("--monitor-root", type=Path, required=True)
     start.add_argument("--claim-root", type=Path, required=True)
     start.add_argument("--message-id", required=True)
+    start.add_argument("--record-root", type=Path, default=None)
     not_inquiry = sub.add_parser("not-an-inquiry")
     not_inquiry.add_argument("--monitor-root", type=Path, required=True)
     not_inquiry.add_argument("--claim-root", type=Path, required=True)

@@ -113,6 +113,17 @@ A worker never sends anything to a customer. It writes JSON artifacts and
 calls bundled commands. If it dies, its claim goes stale and the watcher's
 existing recovery either retries once or files a review item.
 
+Dead-spot guard (built 3 September 2026): a worker can die between
+recording a thread review that says "ask the customer" and sending that
+follow-up; the first emerald run did exactly that, the retry re-reviewed,
+hit the one-review-per-message rule, and escalated while the customer sat
+unasked. Now `estimate_record.pending_followup()` names that state,
+`worker-start` returns a `resume` object telling the next worker to send the
+recorded follow-up instead of reviewing again, a differing re-review while
+the send is still pending returns the standing review rather than a
+conflict, and when the send already happened `worker-start` finishes the
+claim itself.
+
 ### 2.3 Briefs (approval requests)
 
 A brief is filed by a bundled command, never composed by a model. It carries:

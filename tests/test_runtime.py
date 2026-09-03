@@ -6854,6 +6854,64 @@ class WatcherTickTests(unittest.TestCase):
             with self.assertRaises((ValueError, OSError)):
                 workflow_safe.worker_start(args)
 
+    def test_worker_start_resumes_an_unsent_followup_and_finishes_a_sent_one(self) -> None:
+        """Dead-spot guard: a review that said 'ask the customer' is not done until the send is recorded."""
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self.workspace(directory, [("inquiry-1", "thread-1", {})])
+            self.run_tick(ws)
+            desk = ws / "estimate-desk"
+            args = argparse.Namespace(
+                monitor_root=desk / "inbox-monitor", claim_root=desk / "inbox-claims", message_id="inquiry-1"
+            )
+            estimate_id = workflow_safe.worker_start(args)["estimate_id"]
+            record_root = desk / "records"
+            spec = {"piece_type": "ring", "metal": "14k yellow gold", "center_stone": {"type": "emerald"}}
+            # First worker reviews the thread, decides to ask, then dies before sending.
+            estimate_record.record_thread_review(record_root, estimate_id, {
+                "thread_id": "thread-1", "source_message_id": "inquiry-1",
+                "message_ids": ["inquiry-1"], "specification": spec,
+                "missing_required_fields": ["setting_style"],
+            })
+            record = estimate_record.read_object(estimate_record.record_path(record_root, estimate_id))
+            self.assertEqual(
+                estimate_record.pending_followup(record, "inquiry-1")["missing_required_fields"], ["setting_style"]
+            )
+            # A resumed worker is told to send, not to review again.
+            resumed = workflow_safe.worker_start(args)
+            self.assertEqual(resumed["next_action"], "review_thread")
+            self.assertEqual(resumed["resume"]["action"], "send_spec_followup")
+            self.assertEqual(resumed["resume"]["missing_required_fields"], ["setting_style"])
+            self.assertTrue(resumed["resume"]["initiating"])
+            # If it reviews again anyway with a different opinion, the first review stands.
+            again = estimate_record.record_thread_review(record_root, estimate_id, {
+                "thread_id": "thread-1", "source_message_id": "inquiry-1",
+                "message_ids": ["inquiry-1"], "specification": spec,
+                "missing_required_fields": ["stone_color", "stone_clarity"],
+            })
+            self.assertEqual(again["missing_required_fields"], ["setting_style"])
+            self.assertEqual(len(again["thread_reviews"]), 1)
+            # Once the follow-up is recorded as sent, a resumed worker finishes the claim.
+            estimate_record.record_spec_gate_sent(
+                record_root, estimate_id, "Which setting style would you like?",
+                {"id": "sent-1", "threadId": "thread-1"},
+            )
+            record = estimate_record.read_object(estimate_record.record_path(record_root, estimate_id))
+            self.assertIsNone(estimate_record.pending_followup(record, "inquiry-1"))
+            # After the send, a differing re-review is a real conflict again.
+            with self.assertRaisesRegex(ValueError, "conflicting thread review"):
+                estimate_record.record_thread_review(record_root, estimate_id, {
+                    "thread_id": "thread-1", "source_message_id": "inquiry-1",
+                    "message_ids": ["inquiry-1"], "specification": spec,
+                    "missing_required_fields": [],
+                })
+            finished = workflow_safe.worker_start(args)
+            self.assertEqual(finished["outcome"], "followup_already_sent")
+            self.assertEqual(finished["next_action"], "done")
+            state = inbox_claim.read_state(inbox_claim.claim_path(desk / "inbox-claims", "inquiry-1"))
+            self.assertEqual(state["status"], "processed")
+            item = inbox_monitor.load_queue_item(desk / "inbox-monitor", "inquiry-1")
+            self.assertEqual(item["processing_status"], "processed")
+
     def test_delegate_requires_the_authoritative_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ws = self.workspace(directory, [("inquiry-1", "thread-1", {})])

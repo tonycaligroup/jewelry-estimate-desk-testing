@@ -385,6 +385,52 @@ def record_followup_sent(
         return record
 
 
+def followup_sent(record: dict[str, Any], source_message_id: str) -> bool:
+    """True when the specification question for this message reached the customer."""
+    if record["route"]["gmail_message_id"] == source_message_id:
+        evidence = record.get("spec_gate_reply")
+        return isinstance(evidence, dict) and evidence.get("status") == "sent"
+    source_hash = sha256_text(source_message_id)
+    return any(
+        isinstance(item, dict)
+        and item.get("source_message_id_sha256") == source_hash
+        and item.get("status") == "sent"
+        for item in record.get("followup_replies", [])
+    )
+
+
+def pending_followup(record: dict[str, Any], source_message_id: str) -> dict[str, Any] | None:
+    """The review that said "ask the customer" when nothing was sent yet.
+
+    A worker can die between recording a thread review and sending the
+    follow-up. The review alone is not a finished job: until the send is
+    recorded the customer has not been asked, and a resumed worker must send
+    rather than review again.
+    """
+    if record.get("status") != "awaiting_specs":
+        return None
+    source_hash = sha256_text(source_message_id)
+    review = next(
+        (
+            item
+            for item in record.get("thread_reviews", [])
+            if isinstance(item, dict)
+            and item.get("source_message_id_sha256") == source_hash
+        ),
+        None,
+    )
+    if review is None or review.get("outcome") != "awaiting_specs":
+        return None
+    if followup_sent(record, source_message_id):
+        return None
+    return {
+        "action": "send_spec_followup",
+        "missing_required_fields": list(review.get("missing_required_fields") or []),
+        "initiating": record["route"]["gmail_message_id"] == source_message_id,
+        "review_recorded_at": review.get("recorded_at"),
+    }
+
+
 def record_thread_review(
     root: Path,
     estimate_id: str,
@@ -501,6 +547,15 @@ def record_thread_review(
             comparable = dict(existing)
             comparable.pop("recorded_at", None)
             if comparable == evidence:
+                return record
+            if (
+                not post_estimate
+                and existing.get("outcome") == "awaiting_specs"
+                and not followup_sent(record, source_message_id)
+            ):
+                # The earlier review already decided to ask the customer and
+                # nothing was sent yet. That review stands; a resumed worker
+                # must send its follow-up, not replace it with a new opinion.
                 return record
             legacy_evidence = dict(evidence)
             legacy_evidence.pop("classification_error_codes", None)
