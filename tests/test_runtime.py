@@ -819,6 +819,36 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
             self.assertEqual(result["next_action"], "done")
             self.assertEqual(result["outcome"], "design_change_detected")
 
+    def test_appointment_card_fields_are_recorded_and_the_claim_closes(self) -> None:
+        # Batch 2 put the piece, proposed time, and an availability note on the
+        # card; the record writer used to reject them after the card was filed.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args, record = self.post_estimate_args(root, intents=["appointment_request"])
+            slot = {"start": "2026-09-04T10:00:00-07:00", "end": "2026-09-04T10:30:00-07:00",
+                    "label": "Friday, September 4 at 10:00 AM PDT"}
+            appointment_intent = root / "appointment-intent.json"
+            appointment_intent.write_text(json.dumps({
+                "requested_times": ["tomorrow at 1:00pm"], "calendar_availability": [slot],
+                "availability_note": "no free slot at the requested time",
+            }), encoding="utf-8")
+            args.appointment_intent = appointment_intent
+            args.appointment_approval = root / "appointment-approval.json"
+            args.defer_finalize_for_rendering = False
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "request_appointment_approval_claimed"),
+                patch.object(workflow_safe.activation_binding, "load", return_value={"session_key": "agent:main:kolo:direct:c"}),
+                patch.object(workflow_safe, "finish_processed") as finish,
+            ):
+                workflow_safe.request_appointment_approval(args)
+            approval = json.loads(args.appointment_approval.read_text(encoding="utf-8"))
+            self.assertEqual(approval["proposed_time"], slot)
+            self.assertEqual(approval["availability_note"], "no free slot at the requested time")
+            stored = estimate_record.read_object(estimate_record.record_path(args.record_root, record["estimate_id"]))
+            self.assertEqual(len(stored["appointment_approval_requests"]), 1)
+            finish.assert_called_once()
+
     def test_rendering_and_appointment_commands_require_the_bound_intent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -7681,6 +7711,49 @@ class OwnerChannelDefaultTests(unittest.TestCase):
                 json.dumps({"owner_channel": {"kind": "sms", "session_key": "agent:main:sms:direct:owner-1"}}), encoding="utf-8"
             )
             self.assertEqual(kolo_safe.owner_channel_args(monitor_root), ["--session-key", "agent:main:sms:direct:owner-1"])
+
+
+class RequestedTimeFirstTests(unittest.TestCase):
+    scheduling = {
+        "timezone": "America/Los_Angeles", "calendar": "primary",
+        "windows": [{"days": ["mon", "tue", "wed", "thu", "fri"], "start": "10:00", "end": "17:00"}],
+        "durations_minutes": {"consultation": 30}, "meeting_offer_window_days": 7,
+    }
+
+    def test_resolved_times_must_be_local_datetimes(self) -> None:
+        out = judge.check_requested_times({"requested_times": ["tomorrow at 1pm"], "resolved_times": ["2026-09-04T13:00"]})
+        self.assertEqual(out["resolved_times"], ["2026-09-04T13:00"])
+        with self.assertRaises(ValueError):
+            judge.check_requested_times({"requested_times": [], "resolved_times": ["Friday 1pm"]})
+
+    def test_customer_time_inside_the_window_comes_first(self) -> None:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 9, 3, 16, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
+        preferred = slots.preferred_slots(self.scheduling, ["2026-09-04T13:00", "2026-09-05T13:00", "2026-09-04T18:00"], now)
+        self.assertEqual([s["start"] for s in preferred], ["2026-09-04T13:00:00-07:00"])  # weekend and after-hours dropped
+        import email.utils
+        class Response:
+            headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+            def __init__(self, body): self._body = body
+            def read(self): return json.dumps(self._body).encode("utf-8")
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def opener(request, timeout=15):
+            query = json.loads(request.data.decode("utf-8"))
+            return Response({"kind": "calendar#freeBusy", "timeMin": query["timeMin"], "timeMax": query["timeMax"],
+                             "calendars": {"primary": {"busy": []}}})
+        with (
+            patch.object(slots.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")),
+            tempfile.TemporaryDirectory() as directory,
+        ):
+            offered = slots.offer_times(
+                {"scheduling": self.scheduling}, "token", Path(directory), now=now, opener=opener,
+                requested=["2026-09-04T13:00"],
+            )
+        self.assertEqual(offered["options"][0]["start"], "2026-09-04T13:00:00-07:00")
+        self.assertEqual(len(offered["options"]), 3)
+        self.assertEqual(offered["options"][1]["start"], "2026-09-03T16:30:00-07:00")  # then the earliest free slot
 
 
 class PlainTextMailTests(unittest.TestCase):

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -152,20 +153,32 @@ def appointment_intent(
     model: str | None, judge_runner: Runner, openclaw: str | None, token: str | None = None,
 ) -> dict[str, Any]:
     """What the customer asked for, plus live-checked times from the windows."""
-    try:
-        asked = judge.extract_requested_times(digest, model, judge_runner, openclaw)["requested_times"]
-    except judge.JudgmentError:
-        asked = []
-    intent: dict[str, Any] = {"requested_times": asked, "calendar_availability": []}
     profile = workflow_safe.read_object(p["shop_profile"])
     scheduling = profile.get("scheduling") or {}
+    zone_name = scheduling.get("timezone") or "UTC"
+    try:
+        from zoneinfo import ZoneInfo
+
+        now_local = datetime.now(ZoneInfo(zone_name)).strftime("%A %Y-%m-%d %H:%M")
+    except (KeyError, ValueError, OSError):
+        now_local = None
+    try:
+        judged = judge.extract_requested_times(
+            digest, model, judge_runner, openclaw, now_local=now_local, timezone_name=zone_name,
+        )
+        asked, resolved = judged["requested_times"], judged.get("resolved_times", [])
+    except judge.JudgmentError:
+        asked, resolved = [], []
+    intent: dict[str, Any] = {"requested_times": asked, "calendar_availability": []}
     if not scheduling.get("calendar") or not slots.parse_windows(scheduling):
         intent["availability_note"] = "no calendar or declared windows configured"
         return intent
     try:
         import gateway_token  # local import; only needed when a calendar is configured
 
-        offered = slots.offer_times(profile, token or gateway_token.load_token(), Path(paths["work_dir"]))
+        offered = slots.offer_times(
+            profile, token or gateway_token.load_token(), Path(paths["work_dir"]), requested=resolved,
+        )
         intent["calendar_availability"] = [
             {"start": o["start"], "end": o["end"], "label": o["label"]} for o in offered["options"]
         ]

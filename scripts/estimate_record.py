@@ -1399,7 +1399,14 @@ def record_appointment_approval_requested(
         "requested_times",
         "calendar_availability",
     }
-    if not isinstance(approval, dict) or set(approval) != required:
+    # The owner's card also carries the piece, the proposed time, and a note
+    # about availability; they are display fields, not binding ones.
+    optional = {"piece", "proposed_time", "availability_note"}
+    if (
+        not isinstance(approval, dict)
+        or not required <= set(approval)
+        or not set(approval) <= required | optional
+    ):
         raise ValueError("appointment approval contains missing or unsupported fields")
     if approval.get("schema_version") != 1:
         raise ValueError("unsupported appointment approval schema_version")
