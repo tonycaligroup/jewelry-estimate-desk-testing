@@ -225,8 +225,10 @@ model, thinking off, and the safe tool allowlist. The worker begins with
 `workflow_safe.py worker-start`, which proves the lease and returns the intake
 result and `work_paths`; it never discovers, claims, or reports. If a worker
 dies, its lease lapses, the stale reconciler resumes the claim once, and the
-next tick starts a new worker. The watcher's stdout is the run report, or
-`NO_REPLY`.
+next tick starts a new worker; `worker-start` then says where to resume: a
+`resume` object means the thread was reviewed but the customer never asked
+(send that follow-up, review nothing again); `next_action: done` means the
+send already happened. The watcher's stdout is the run report or `NO_REPLY`.
 
 ### Cron discovery phase
 
@@ -684,7 +686,7 @@ profile; never replace it with `delegated_to_jeweler` or infer an origin from
 price sensitivity.
 
 For a piece without stones, stone fields are not applicable; do not report a
-misleading `x/8` score. Cost assumptions remain owner-only in every mode.
+misleading `x/8` score. Cost assumptions remain owner-only.
 
 Evaluate these fields against the merged full-thread specification recorded in
 Inbox monitoring step 3. A fact supplied in the initiating inquiry or any
@@ -789,7 +791,7 @@ accent-stone lines by copying `stone_catalog` entries with a quantity. Never
 edit a `rate_key`, `unit_cost`, `spot_price_per_gram`, `purity`, or `rate`
 that the helper filled, and never read the scripts' source to work out a
 format. If `unresolved` is not empty, the shop has no single rate for that
-line. That is a question for the owner, not a review (WORKFLOW.md 6.10):
+line. That is a question for the owner, not a review:
 
 ```bash
 python3 {baseDir}/scripts/workflow_safe.py ask-missing-rate \
@@ -801,9 +803,8 @@ python3 {baseDir}/scripts/workflow_safe.py ask-missing-rate \
   --estimate-id '<estimate-id>'
 ```
 
-It asks the owner which rate to use, parks this claim as `awaiting_owner`,
-and finalizes; you are done (reply `NO_REPLY`). Never ask the owner yourself
-or guess a rate. Otherwise finalize:
+It asks the owner which rate to use, parks the claim, and finalizes; reply
+`NO_REPLY`. Never ask the owner yourself or guess a rate. Otherwise finalize:
 
 ```bash
 python3 {baseDir}/scripts/cost_components.py finalize \
@@ -986,14 +987,14 @@ commands in the three sections below. It never writes a record, the shop
 profile, a rate, a price, or any file under `estimate-desk/` by hand, never
 runs `cost_components.py`, `pricing_model.py`, `spot_price.py`, or
 `request-approval` itself, and never continues an inquiry in chat: pricing
-happens only in a worker job. A number the owner states after a desk
-question is that question's answer. If unsure, ask one sentence and wait.
+happens only in a worker job. A number after a desk question is that
+question's answer. If unsure, ask and wait.
 
 ### Handling approved manual-review briefs in the main Kolo session
 
-A manual-review item is also a Kolo approval brief whose execution payload
-has `action_type: manual_review` and a `review_key`. When Kolo delivers an
-approved payload of that kind, run exactly one command:
+A manual-review item is also a Kolo approval brief (payload `action_type:
+manual_review` with a `review_key`). On an approved payload of that kind, run
+exactly one command:
 
 ```bash
 python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
@@ -1002,15 +1003,15 @@ python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
   --brief-id '<Brief ID from the delivered decision>'
 ```
 
-It closes the review (a repeat is a no-op) and reports the brief as executed.
-A rejected brief needs no action. Never read the customer's mail into the
-chat to "help", and never resolve a review the owner did not approve.
+It closes the review (a repeat is a no-op) and reports the brief executed. A
+rejected brief needs no action. Never read the customer's mail into the chat,
+and never resolve a review the owner did not approve.
 
 ### Handling the owner's answer to a desk question in the main Kolo session
 
-When pricing lacks a rate, the desk asks the owner here in plain words, with
-a six-character question code, and parks the claim as `awaiting_owner`. When
-the owner replies with a number, run exactly one command, words verbatim:
+When pricing lacks a rate, the desk asks the owner here in plain words with a
+six-character question code and parks the claim. When the owner replies with
+a number, run exactly one command, words verbatim:
 
 ```bash
 python3 {baseDir}/scripts/workflow_safe.py answer-question \
@@ -1023,8 +1024,7 @@ Omit `--question` when exactly one question is open. It saves the rate,
 reopens the claim, and starts the worker; the price still arrives as an
 approval brief. If it refuses (no number, two numbers, several open
 questions, an invalid record), tell the owner what it said and wait; never
-pick a number or re-run with a different answer. `workflow_safe.py
-open-questions --workspace '<absolute-workspace>'` lists what is waiting.
+pick a number or re-run with a different answer.
 
 ### Handling approved appointment requests in the main Kolo session
 
