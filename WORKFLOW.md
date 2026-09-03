@@ -429,8 +429,8 @@ in the implementation.
 Known gaps between this document and the current implementation, to be
 closed by follow-up changes:
 
-- Renderings are currently sent to the customer without an owner approval
-  step. This document requires a rendering approval first.
+- Renderings are approval-gated since 3 September 2026: the owner sees the
+  views in chat and approves a card before anything is emailed.
 - Stage 3 currently books meetings autonomously inside declared windows. This
   document requires owner approval for every booking at every stage; Stage 3
   may only offer times.

@@ -165,7 +165,9 @@ def _appointment_approval_details(
     message_id: str,
     intent: dict[str, Any],
 ) -> dict[str, Any]:
-    if set(intent) != {"requested_times", "calendar_availability"}:
+    if not {"requested_times", "calendar_availability"} <= set(intent) or not set(intent) <= {
+        "requested_times", "calendar_availability", "availability_note"
+    }:
         raise ValueError("appointment intent contains missing or unsupported fields")
     requested_times = intent["requested_times"]
     if (
@@ -202,7 +204,7 @@ def _appointment_approval_details(
     if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
         raise ValueError("appointment approval requires a sent estimate")
     route = record["route"]
-    return {
+    details = {
         "schema_version": 1,
         "action_type": "appointment_booking",
         "estimate_id": record["estimate_id"],
@@ -211,7 +213,14 @@ def _appointment_approval_details(
         "thread_id": route["thread_id"],
         "requested_times": [value.strip() for value in requested_times],
         "calendar_availability": normalized_slots,
+        "piece": owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their estimate",
     }
+    if normalized_slots:
+        details["proposed_time"] = dict(normalized_slots[0])
+    note = intent.get("availability_note")
+    if isinstance(note, str) and note.strip():
+        details["availability_note"] = note.strip()[:160]
+    return details
 
 
 def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
@@ -1123,6 +1132,108 @@ def answer_decision(
     return result
 
 
+RENDERING_NOTE = (
+    "Attached are visual illustrations of the design direction we discussed. The "
+    "written specification and the final design you approve control the finished "
+    "piece.\n\nIf you would like an adjustment to the look, reply here and tell me "
+    "what you would like changed.\n"
+)
+
+
+def _rendering_images(paths: dict[str, str]) -> list[Path]:
+    return [Path(paths[key]) for key in ("rendering_image_1", "rendering_image_2") if Path(paths[key]).exists()]
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
+    """Show the owner the views, file the approval, park the claim."""
+    paths = _work_paths(args)
+    images = _rendering_images(paths)
+    if not images:
+        raise ValueError("no materialized rendering images to approve")
+    record = estimate_record.read_object(estimate_record.record_path(args.record_root, args.estimate_id))
+    route_ownership.validate_record(record)
+    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their estimate"
+    details = {
+        "schema_version": 1,
+        "action_type": "send_rendering",
+        "estimate_id": args.estimate_id,
+        "gmail_message_id": args.message_id,
+        "thread_id": record["route"]["thread_id"],
+        "customer_email": record["route"]["recipient"],
+        "piece": piece,
+        "images": [{"slot": index, "sha256": _sha256_file(image)} for index, image in enumerate(images, start=1)],
+    }
+    approval_path = Path(paths["work_dir"]) / "rendering-approval.json"
+    if approval_path.exists() and read_object(approval_path) != details:
+        raise ValueError("existing rendering approval binding changed")
+    write_private(approval_path, details)
+    runner = getattr(args, "runner", subprocess.run)
+    customer = kolo_safe._sender_display(record["route"]["recipient"])
+    for index, image in enumerate(images, start=1):
+        kolo_safe.send_owner_preview(
+            args.monitor_root,
+            f"Rendering {index} of {len(images)} for {customer}'s {piece}. An approval card follows; "
+            "approve it to email these to the customer.",
+            image, runner=runner,
+        )
+    approver = activation_binding.load(activation_binding.binding_path(args.monitor_root))
+    kolo_safe.request_rendering_approval_claimed(
+        args.claim_root, args.message_id, token,
+        f"rendering_approval:{args.estimate_id}:{args.message_id}",
+        args.estimate_id, approval_path, approver["session_key"], runner=runner,
+    )
+    inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "rendering_approval")
+    return {"outcome": "rendering_approval_requested", "images": len(images), "next": "done"}
+
+
+def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
+    """The owner approved: verify the very images they saw, then send them."""
+    import cron_config  # local import keeps module import order unchanged
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    reopened = inbox_monitor.reopen_item(p["monitor_root"], args.message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
+    paths = reopened["work_paths"]
+    approval = read_object(Path(paths["work_dir"]) / "rendering-approval.json")
+    if approval.get("estimate_id") != args.estimate_id or approval.get("gmail_message_id") != args.message_id:
+        raise ValueError("rendering approval does not match this estimate and message")
+    images = _rendering_images(paths)
+    expected = {item["slot"]: item["sha256"] for item in approval.get("images", [])}
+    if len(images) != len(expected) or any(_sha256_file(img) != expected.get(i) for i, img in enumerate(images, start=1)):
+        raise ValueError("rendering images changed since the owner approved them")
+    body = Path(paths["customer_reply"])
+    body.write_text(RENDERING_NOTE, encoding="utf-8")
+    record = send_rendering(argparse.Namespace(
+        monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+        message_id=args.message_id, estimate_id=args.estimate_id, body=body, images=images,
+        gmail_payload=Path(paths["gmail_payload"]), provider_response=Path(paths["gmail_provider_response"]),
+        record_output=Path(paths["current_record"]),
+    ))
+    result = {"outcome": "rendering_sent", "images": len(images), "record_status": record.get("status")}
+    if getattr(args, "brief_id", None):
+        kolo_safe.run_command(
+            kolo_safe.build_update_brief(args.brief_id, "executed", result),
+            runner=getattr(args, "runner", subprocess.run),
+        )
+    return result
+
+
+def reject_rendering(args: argparse.Namespace) -> dict[str, Any]:
+    """The owner held the renderings back: close the claim, send nothing."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    _close_parked_claim(p, args.message_id, "owner_rejected_rendering")
+    return {"outcome": "rendering_rejected", "message_id": args.message_id}
+
+
 def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
     """Mirror and safely route one persisted post-estimate decision."""
     record, decision = estimate_record.post_estimate_decision(
@@ -1284,6 +1395,14 @@ def main(argv: list[str] | None = None) -> int:
     pricing.add_argument("--center-carat", type=float, default=None)
     pricing.add_argument("--fee", dest="fees", action="append", default=[])
     pricing.add_argument("--accent", dest="accents", action="append", default=[])
+    render_ok = sub.add_parser("send-approved-rendering")
+    render_ok.add_argument("--workspace", type=Path, required=True)
+    render_ok.add_argument("--estimate-id", required=True)
+    render_ok.add_argument("--message-id", required=True)
+    render_ok.add_argument("--brief-id", default=None)
+    render_no = sub.add_parser("reject-rendering")
+    render_no.add_argument("--workspace", type=Path, required=True)
+    render_no.add_argument("--message-id", required=True)
     ask_rate = sub.add_parser("ask-missing-rate")
     ask_rate.add_argument("--monitor-root", type=Path, required=True)
     ask_rate.add_argument("--claim-root", type=Path, required=True)
@@ -1325,6 +1444,10 @@ def main(argv: list[str] | None = None) -> int:
             record = worker_start(args)
         elif args.command == "resolve-review-approval":
             record = resolve_review_approval(args)
+        elif args.command == "send-approved-rendering":
+            record = send_approved_rendering(args)
+        elif args.command == "reject-rendering":
+            record = reject_rendering(args)
         elif args.command == "review-thread":
             record = review_thread(args)
         elif args.command == "price":

@@ -396,6 +396,18 @@ generation fails. Still open: validating an Edit Intent revision, the
 reopen-the-gate path for a "change" answer, calendar slots in tick-side
 appointment approvals.
 
+**Batch 2 (built 3 September 2026).** Renderings are gated: the tick
+generates the views, sends each to the owner's channel as a PNG, files a
+`send_rendering` approval (flat rows, medium risk, image hashes in the
+payload), and parks the claim; `send-approved-rendering` re-verifies the
+hashes and sends, `reject-rendering` closes with nothing sent. Appointment
+cards carry what the customer asked for (one judgment call quoting their
+words) and up to three live-checked times from `slots.py` (declared windows,
+free/busy through the calendar gateway, labelled by `appointment_options`),
+with approve meaning "book Option 1" and Edit Intent to choose another; risk
+medium. Still open: the main-session executor booking exactly the option on
+the card, and a "change" answer reopening the gate.
+
 **Stage C — deterministic approvals for bookings and renderings.**
 Calendar-write helper with receipts; rendering generation by script with
 PNGs attached to the owner notification; booking and rendering approval at

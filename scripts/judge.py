@@ -371,6 +371,36 @@ def draft_followup(
     return ask_json(prompt, check_body, model, runner, openclaw)
 
 
+def check_requested_times(value: dict[str, Any]) -> dict[str, Any]:
+    raw = value.get("requested_times", [])
+    if not isinstance(raw, list):
+        raise ValueError("requested_times must be a list")
+    times = []
+    for item in raw:
+        text = _string(item, 80)
+        if text and text not in times:
+            times.append(text)
+    return {"requested_times": times[:3]}
+
+
+def extract_requested_times(
+    digest: dict[str, Any],
+    model: str | None = None,
+    runner: Runner = subprocess.run,
+    openclaw: str | None = None,
+) -> dict[str, Any]:
+    """The customer's own words about when they want to meet, nothing invented."""
+    prompt = (
+        "A customer of a jewelry shop asked to meet. From ONLY the newest customer message (marked as the one "
+        "being handled), copy the customer's own words about timing, for example \"early next week\", "
+        "\"Tuesday afternoon\", \"noon on the 9th\". Answer with one JSON object only: "
+        '{"requested_times": [<up to three short quotes>]}. Use an empty list when they gave no timing. '
+        "Never invent a time.\n\n"
+        f"THREAD:\n{thread_text(digest)}"
+    )
+    return ask_json(prompt, check_requested_times, model, runner, openclaw)
+
+
 def check_quantities(value: dict[str, Any], fee_catalog: list[str], stone_catalog: list[str], needs_carat: bool) -> dict[str, Any]:
     def positive(name: str, required: bool) -> float | None:
         raw = value.get(name)

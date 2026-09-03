@@ -28,6 +28,7 @@ import judge
 import kolo_safe
 import owner_questions
 import rendering_materialize
+import slots
 import spec_gate
 import workflow_safe
 
@@ -88,12 +89,6 @@ def _send_followup(
     return {"outcome": "followup_sent", "missing_required_fields": missing, "next": "done"}
 
 
-RENDERING_NOTE = (
-    "Attached are visual illustrations of the design direction we discussed. The "
-    "written specification and the final design you approve control the finished "
-    "piece.\n\nIf you would like an adjustment to the look, reply here and tell me "
-    "what you would like changed.\n"
-)
 RENDERING_VIEWS = (
     "front three-quarter view on a plain white background",
     "side profile view on a plain white background",
@@ -142,27 +137,58 @@ def render_and_send(
             p["monitor_root"], p["claim_root"], message_id, Path(source), slot
         )
         images.append(Path(str(materialized["path"])))
-    body_path = Path(paths["customer_reply"])
-    body_path.write_text(RENDERING_NOTE, encoding="utf-8")
-    workflow_safe.send_rendering(argparse.Namespace(
+    # WORKFLOW.md 6.6: renderings are approval-gated at every stage. The owner
+    # sees the views in chat and gets a card; nothing reaches the customer
+    # until they approve.
+    return workflow_safe.request_rendering_approval(argparse.Namespace(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
-        message_id=message_id, estimate_id=estimate_id, body=body_path, images=images,
-        gmail_payload=Path(paths["gmail_payload"]), provider_response=Path(paths["gmail_provider_response"]),
-        record_output=Path(paths["current_record"]),
+        shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
+        runner=command_runner,
     ))
-    return {"outcome": "rendering_sent", "images": len(images), "next": "done"}
+
+
+def appointment_intent(
+    p: dict[str, Path], digest: dict[str, Any], paths: dict[str, str],
+    model: str | None, judge_runner: Runner, openclaw: str | None, token: str | None = None,
+) -> dict[str, Any]:
+    """What the customer asked for, plus live-checked times from the windows."""
+    try:
+        asked = judge.extract_requested_times(digest, model, judge_runner, openclaw)["requested_times"]
+    except judge.JudgmentError:
+        asked = []
+    intent: dict[str, Any] = {"requested_times": asked, "calendar_availability": []}
+    profile = workflow_safe.read_object(p["shop_profile"])
+    scheduling = profile.get("scheduling") or {}
+    if not scheduling.get("calendar") or not slots.parse_windows(scheduling):
+        intent["availability_note"] = "no calendar or declared windows configured"
+        return intent
+    try:
+        import gateway_token  # local import; only needed when a calendar is configured
+
+        offered = slots.offer_times(profile, token or gateway_token.load_token(), Path(paths["work_dir"]))
+        intent["calendar_availability"] = [
+            {"start": o["start"], "end": o["end"], "label": o["label"]} for o in offered["options"]
+        ]
+        if offered.get("reason"):
+            intent["availability_note"] = offered["reason"]
+    except (OSError, ValueError, KeyError) as exc:
+        intent["availability_note"] = f"calendar check failed: {str(exc)[:100]}"
+    return intent
 
 
 def post_estimate_actions(
     p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any], next_action: str,
     paths: dict[str, str], openclaw: str, command_runner: Runner,
+    digest: dict[str, Any] | None = None, model: str | None = None, judge_runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
-    """Appointment approvals and renderings from the tick; a worker only on failure."""
+    """Appointment approvals and rendering approvals from the tick; a worker only on failure."""
     wants_appointment = next_action in ("request_appointment_approval", "request_appointment_approval_then_send_rendering")
     wants_rendering = next_action in ("send_rendering", "request_appointment_approval_then_send_rendering")
     if wants_appointment:
         intent_path = Path(paths["appointment_intent"])
-        workflow_safe.write_private(intent_path, {"requested_times": [], "calendar_availability": []})
+        workflow_safe.write_private(
+            intent_path, appointment_intent(p, digest or {"messages": []}, paths, model, judge_runner, openclaw)
+        )
         workflow_safe.request_appointment_approval(argparse.Namespace(
             monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
             message_id=message_id, estimate_id=estimate_id, appointment_intent=intent_path,
@@ -229,6 +255,7 @@ def process_claim(
             return {"outcome": "post_estimate_finished", "next_action": nxt, "next": "done"}
         return post_estimate_actions(
             p, message_id, estimate_id, record, nxt, paths, openclaw or judge.default_openclaw(), command_runner,
+            digest=digest, model=model, judge_runner=judge_runner,
         )
 
     triage = judge.triage(digest, model, judge_runner, openclaw)

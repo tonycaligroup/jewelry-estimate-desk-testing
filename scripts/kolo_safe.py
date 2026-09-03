@@ -194,27 +194,144 @@ def build_request_appointment_approval(
     payload = json.dumps(
         details_object, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
+    rows, reasoning, title = appointment_card(details_object, estimate_id)
     return [
         "kolo",
         "request-approval",
         "--agent-id",
         agent_id,
         "--action",
-        f"Book appointment — {estimate_id}",
+        title,
         "--reasoning",
-        (
-            f"A customer requested an appointment for {estimate_id.upper()}. "
-            "Review the requested timing and approve the calendar action."
-        ),
+        reasoning,
         "--risk-level",
-        "low",
+        "medium",
         "--details",
-        payload,
+        json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         "--execution-payload",
         payload,
         "--session-key",
         session_key,
     ]
+
+
+def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[str, str], str, str]:
+    """Flat rows the owner can check against their own calendar."""
+    customer = str(details.get("customer_email") or "unknown")[:120]
+    piece = str(details.get("piece") or "their estimate")[:120]
+    asked = details.get("requested_times") or []
+    asked_text = "; ".join(str(t) for t in asked)[:200] if asked else "no time given"
+    options = details.get("calendar_availability") or []
+    rows: dict[str, str] = {
+        "Customer": customer,
+        "Piece": piece,
+        "Customer asked for": asked_text,
+        "Estimate": estimate_id,
+    }
+    for index, slot in enumerate(options[:3], start=1):
+        rows[f"Option {index}"] = str(slot.get("label") or slot.get("start") or "")[:120]
+    if options:
+        first = str(options[0].get("label") or options[0].get("start"))[:120]
+        rows["Approve means"] = (
+            f"Book Option 1 ({first}) on your calendar, invite the customer, and confirm in their email thread."
+        )
+        rows["Reject means"] = "Nothing is booked; the desk will ask you for a time instead."
+        title = f"Book appointment: {piece}, {first}"[:120]
+        reasoning = (
+            f"{customer} asked to meet ({asked_text}). These times are free on your calendar inside your "
+            "declared windows. Approve to book Option 1; use Edit Intent to pick another option; reject to book nothing."
+        )
+    else:
+        reason = str(details.get("availability_note") or "no calendar-checked times were available")[:160]
+        rows["Times I can offer"] = f"none ({reason})"
+        rows["Approve means"] = "Offer the customer times by email once you tell the desk which ones; nothing is booked yet."
+        rows["Reject means"] = "Nothing is booked and the customer is not answered by the desk."
+        title = f"Appointment request: {piece}"[:120]
+        reasoning = f"{customer} asked to meet ({asked_text}). {reason}."
+    return rows, reasoning, title
+
+
+def build_request_rendering_approval(
+    estimate_id: str, details: Path, session_key: str, agent_id: str = "main"
+) -> list[str]:
+    """One owner approval before renderings reach a customer (WORKFLOW.md 6.6)."""
+    estimate_id = validate_estimate_id(estimate_id)
+    session_key = validate_session_key(session_key)
+    details_object = json.loads(read_json_argument(details))
+    if details_object.get("action_type") != "send_rendering":
+        raise ValueError("rendering approval action_type must be send_rendering")
+    if details_object.get("estimate_id") != estimate_id:
+        raise ValueError("rendering approval estimate_id does not match")
+    images = details_object.get("images") or []
+    if not images:
+        raise ValueError("rendering approval needs at least one image")
+    payload = json.dumps(details_object, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    customer = str(details_object.get("customer_email") or "unknown")[:120]
+    piece = str(details_object.get("piece") or "their estimate")[:120]
+    rows = {
+        "Customer": customer,
+        "Piece": piece,
+        "Images": f"{len(images)} view(s), sent to you in chat just before this card",
+        "Approve means": "Email these renderings to the customer in their thread, with the note that the written specification controls the piece.",
+        "Reject means": "Nothing is sent; tell the desk what to change if you want new views.",
+        "Estimate": estimate_id,
+    }
+    return [
+        "kolo", "request-approval", "--agent-id", agent_id,
+        "--action", f"Send renderings: {piece}"[:120],
+        "--reasoning", (
+            f"{customer} asked to see the design. The desk generated {len(images)} view(s) of the approved "
+            "specification and sent them to you in chat. Approve to email them; reject to hold them."
+        ),
+        "--risk-level", "medium",
+        "--details", json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        "--execution-payload", payload,
+        "--session-key", session_key,
+    ]
+
+
+def request_rendering_approval_claimed(
+    claim_root: Path,
+    message_id: str,
+    claim_token: str | None,
+    action_key: str,
+    estimate_id: str,
+    details: Path,
+    session_key: str,
+    agent_id: str = "main",
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    """File the rendering approval once, journaled like every external action."""
+    if claim_token is None:
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
+    command = build_request_rendering_approval(estimate_id, details, session_key, agent_id)
+    binding_material = json.dumps(
+        {"agent_id": agent_id, "details": json.loads(read_json_argument(details)),
+         "estimate_id": estimate_id, "session_key": session_key},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    binding = "sha256:" + hashlib.sha256(binding_material).hexdigest()
+    acquired, state = inbox_claim.acquire_external_action(
+        claim_root, message_id, claim_token, action_key, "approval_request", binding,
+    )
+    if not acquired:
+        status = state["external_actions"][action_key]["status"]
+        if status == "sent":
+            return subprocess.CompletedProcess(command, 0, "rendering approval already sent\n", "")
+        raise ValueError(f"rendering approval is already {status}; refusing retry")
+    try:
+        result = run_command(command, runner=runner)
+    except (OSError, subprocess.CalledProcessError):
+        inbox_claim.finish_external_action(claim_root, message_id, claim_token, action_key, "uncertain")
+        raise
+    inbox_claim.finish_external_action(claim_root, message_id, claim_token, action_key, "sent")
+    return result
+
+
+def send_owner_preview(monitor_root: Path, text: str, image: Path,
+                       runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> None:
+    """Show the owner one rendering in their channel (PNG inline)."""
+    run_command(["kolo", "notify-owner", "-m", text, "--file", str(image), *owner_channel_args(monitor_root)], runner=runner)
 
 
 REVIEW_REASON_TEXT = {
@@ -245,6 +362,8 @@ REVIEW_REASON_TEXT = {
     ),
     "spot_price_unavailable": "The live metal price could not be fetched, so pricing stopped.",
     "same_sender_question": "The desk asked you whether this is the same piece or a new one.",
+    "rendering_approval": "The desk is waiting for your approval to send renderings.",
+    "owner_rejected_rendering": "You held the renderings back.",
     "unclear_reply_question": "The desk asked you what this reply meant.",
     "customer_escalation": (
         "The customer is upset, disputing, or asking for something the desk must "

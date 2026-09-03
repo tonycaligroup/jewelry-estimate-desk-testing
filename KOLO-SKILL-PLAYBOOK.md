@@ -273,9 +273,12 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
 - Session-key format for an SMS or Slack chat as a `kolo notify-owner`
   target (`kolo list-chats` shows chats; confirm the key shape before an
   owner picks SMS at setup).
-- Whether `openclaw infer image generate` writes under the Kolo media root
-  that `rendering_materialize.py` requires; if not, the tick's rendering path
-  falls back to a worker.
+- `openclaw infer image generate` from the tick produced two PNGs that the
+  materializer accepted and that reached the customer's thread. **verified 3
+  Sep 2026** (the send was ungated at the time; the gate is built since)
+- A `kolo notify-owner --file <png>` preview plus an approval card is the
+  pattern for "look at this before it goes out"; a card cannot carry an image
+  itself. **design; preview verified earlier with PNG inline**
 - Does Auto-Approve Low Risk apply to skill briefs? Test with a throwaway
   low-risk brief once the setting is understood.
 - Dedicated worker agent (`openclaw agents add`, `agents.entries.<id>` with
