@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any
 
 
-MODEL = "litellm-fireworks/glm-5-3"
+# Worker model. glm-5-3 ran about one tool call per minute with the full
+# SKILL.md in context and timed out at 900 s on a two-review claim (3 Sep
+# 2026). Qwen 3.7 Plus is the pod default and honors the explicit thinking
+# setting below.
+MODEL = "litellm-fireworks/qwen-3-7-plus"
 JOB_NAME = "jed-inbox-monitor"
 TIMEOUT_SECONDS = 900
 TOOLS_ALLOW = ["exec", "read", "write", "image_generate"]

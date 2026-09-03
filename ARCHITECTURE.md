@@ -251,7 +251,7 @@ Verified on the production pod on 2 September 2026 unless marked otherwise.
 | Maton passthrough exposes Gmail incremental history | Reported by Kolo; not yet exercised | Optional cheaper discovery |
 | Images can be generated from a shell command with count and output path | Verified live: `gpt-image-2` default, PNG written (Stage 0 test 7) | Rendering |
 | No Gmail push, no hooks, no public ingress on this pod | Verified | Polling stays |
-| Models available include `litellm-fireworks/qwen-3-7-plus` (pod default) and `glm-5-3-flash`; the current job's implicit "high" thinking is silently downgraded on GLM and must be set explicitly if the model changes | Verified from model list and logs | Worker model choice |
+| Models available include `litellm-fireworks/qwen-3-7-plus` (pod default) and `glm-5-3-flash`; the current job's implicit "high" thinking is silently downgraded on GLM and must be set explicitly if the model changes | Verified from model list and logs | Worker model choice  Workers moved to `qwen-3-7-plus` with thinking off on 3 September 2026 after a glm-5-3 worker managed 14 tool calls in 900 s. |
 
 ---
 
