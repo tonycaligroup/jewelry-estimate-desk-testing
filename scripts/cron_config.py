@@ -15,10 +15,67 @@ MODEL = "litellm-fireworks/glm-5-3"
 JOB_NAME = "jed-inbox-monitor"
 TIMEOUT_SECONDS = 900
 TOOLS_ALLOW = ["exec", "read", "write", "image_generate"]
+# The watcher is code, not a model: it polls, claims, classifies, routes,
+# and hands judgment work to one worker job per claim. A tick with nothing
+# to do finishes in seconds; the timeout only bounds a stuck Gmail call.
+WATCHER_TIMEOUT_SECONDS = 300
+# Each worker job gets its own clock, model, and tool allowlist. The lease on
+# its claim outlives the timeout slightly so the watcher never resumes a
+# claim while the worker's run is still being torn down.
+WORKER_TIMEOUT_SECONDS = 900
+WORKER_LEASE_SECONDS = 1020
+WORKER_THINKING = "off"
+WORKER_NAME_PREFIX = "jed-worker-"
+WATCHER_COMMAND_TEMPLATE = (
+    "python3 <BASE_DIR>/scripts/inbox_watcher.py "
+    "--workspace <WORKSPACE> --base-dir <BASE_DIR> --owner-target <OWNER_TARGET>"
+)
+WATCHER_COMMAND_RE = re.compile(
+    r"^python3 (/\S+)/scripts/inbox_watcher\.py "
+    r"--workspace (/\S+) --base-dir (/\S+) --owner-target (\S+)$"
+)
 
 
 def template_path() -> Path:
     return Path(__file__).resolve().parents[1] / "templates" / "inbox-monitor-cron.txt"
+
+
+def worker_template_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "templates" / "inbox-worker-cron.txt"
+
+
+def watcher_command(workspace: Path, base_dir: Path, owner_target: str) -> str:
+    """Render the exact shell line the watcher job runs every tick."""
+    if not re.fullmatch(r"[A-Za-z0-9:_.@-]{3,200}", owner_target or ""):
+        raise ValueError("owner target must be a plain delivery identifier")
+    return (
+        WATCHER_COMMAND_TEMPLATE.replace("<WORKSPACE>", str(workspace.resolve()))
+        .replace("<BASE_DIR>", str(base_dir.resolve()))
+        .replace("<OWNER_TARGET>", owner_target)
+    )
+
+
+def render_worker_message(
+    workspace: Path,
+    base_dir: Path,
+    message_id: str,
+    estimate_id: str,
+    work_dir: str,
+) -> str:
+    """Render one worker job's prompt for a single claimed message."""
+    for value, label in ((message_id, "message_id"), (estimate_id, "estimate_id")):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", value or ""):
+            raise ValueError(f"{label} must be a plain provider identifier")
+    if not work_dir.startswith("/") or any(ch.isspace() for ch in work_dir):
+        raise ValueError("work_dir must be an absolute path without spaces")
+    text = worker_template_path().read_text(encoding="utf-8").rstrip("\n")
+    return (
+        text.replace("<WORKSPACE>", str(workspace.resolve()))
+        .replace("<BASE_DIR>", str(base_dir.resolve()))
+        .replace("<CLAIMED_GMAIL_ID>", message_id)
+        .replace("<ESTIMATE_ID>", estimate_id)
+        .replace("<WORK_DIR>", work_dir)
+    )
 
 
 def render_message(workspace: Path, base_dir: Path) -> str:
@@ -86,6 +143,14 @@ def validate_binding(value: Any) -> dict[str, Any]:
         raise ValueError("invalid cron binding schedule")
     require_string(schedule.get("expr"), "schedule.expr")
     require_string(schedule.get("tz"), "schedule.tz")
+    if set(delivery) != {"mode", "channel", "to"}:
+        raise ValueError("cron binding delivery contains missing or unsupported fields")
+    if delivery.get("mode") != "announce" or delivery.get("channel") != "kolo":
+        raise ValueError("invalid cron binding delivery")
+    owner_target = require_string(delivery.get("to"), "delivery.to")
+    if payload.get("kind") == "command":
+        validate_command_payload(payload, owner_target)
+        return value
     required_payload = {
         "kind",
         "message",
@@ -113,12 +178,35 @@ def validate_binding(value: Any) -> dict[str, Any]:
     if "<WORKSPACE>" in message or "<BASE_DIR>" in message:
         raise ValueError("cron binding message contains unresolved path placeholders")
     validate_canonical_message(message)
-    if set(delivery) != {"mode", "channel", "to"}:
-        raise ValueError("cron binding delivery contains missing or unsupported fields")
-    if delivery.get("mode") != "announce" or delivery.get("channel") != "kolo":
-        raise ValueError("invalid cron binding delivery")
-    require_string(delivery.get("to"), "delivery.to")
     return value
+
+
+def validate_command_payload(payload: dict[str, Any], owner_target: str) -> None:
+    """Require the exact watcher command line with absolute, matching paths."""
+    if set(payload) != {"kind", "argv", "cwd", "timeoutSeconds"}:
+        raise ValueError("command binding payload contains missing or unsupported fields")
+    argv = payload.get("argv")
+    if (
+        not isinstance(argv, list)
+        or len(argv) != 3
+        or argv[:2] != ["sh", "-lc"]
+        or not isinstance(argv[2], str)
+    ):
+        raise ValueError("command binding argv must be sh -lc plus one command line")
+    match = WATCHER_COMMAND_RE.match(argv[2])
+    if match is None:
+        raise ValueError("command binding is not the canonical watcher command")
+    base_dir, workspace, base_dir_again, target = match.groups()
+    if base_dir != base_dir_again:
+        raise ValueError("command binding base directories disagree")
+    if target != owner_target:
+        raise ValueError("command binding owner target differs from delivery target")
+    if argv[2] != watcher_command(Path(workspace), Path(base_dir), owner_target):
+        raise ValueError("command binding differs from the canonical watcher command")
+    if payload.get("cwd") != workspace:
+        raise ValueError("command binding cwd must be the workspace")
+    if payload.get("timeoutSeconds") != WATCHER_TIMEOUT_SECONDS:
+        raise ValueError(f"command binding timeoutSeconds must be {WATCHER_TIMEOUT_SECONDS}")
 
 
 def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
@@ -135,18 +223,29 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
         raise ValueError("cron schedule, payload, and delivery must be objects")
     if schedule.get("kind") != "cron":
         raise ValueError("cron schedule kind must be cron")
-    if payload.get("kind") != "agentTurn":
-        raise ValueError("cron payload kind must be agentTurn")
-    if payload.get("message") != render_message(workspace, base_dir):
-        raise ValueError("live cron prompt does not match the canonical runbook")
-    if payload.get("model") != MODEL or payload.get("fallbacks") != []:
-        raise ValueError("cron model or fallbacks do not match the required runtime")
-    if payload.get("timeoutSeconds") != TIMEOUT_SECONDS:
-        raise ValueError(f"cron timeoutSeconds must be {TIMEOUT_SECONDS}")
-    if payload.get("lightContext") is not True:
-        raise ValueError("cron lightContext must be true")
-    if payload.get("toolsAllow") != TOOLS_ALLOW:
-        raise ValueError("cron toolsAllow must include the required safe tool set")
+    kind = payload.get("kind")
+    if kind == "command":
+        expected = watcher_command(workspace, base_dir, str(delivery.get("to")))
+        argv = payload.get("argv")
+        if not isinstance(argv, list) or argv != ["sh", "-lc", expected]:
+            raise ValueError("live watcher command does not match the canonical command")
+        if payload.get("cwd") != str(workspace.resolve()):
+            raise ValueError("live watcher cwd must be the workspace")
+        if payload.get("timeoutSeconds") != WATCHER_TIMEOUT_SECONDS:
+            raise ValueError(f"watcher timeoutSeconds must be {WATCHER_TIMEOUT_SECONDS}")
+    elif kind == "agentTurn":
+        if payload.get("message") != render_message(workspace, base_dir):
+            raise ValueError("live cron prompt does not match the canonical runbook")
+        if payload.get("model") != MODEL or payload.get("fallbacks") != []:
+            raise ValueError("cron model or fallbacks do not match the required runtime")
+        if payload.get("timeoutSeconds") != TIMEOUT_SECONDS:
+            raise ValueError(f"cron timeoutSeconds must be {TIMEOUT_SECONDS}")
+        if payload.get("lightContext") is not True:
+            raise ValueError("cron lightContext must be true")
+        if payload.get("toolsAllow") != TOOLS_ALLOW:
+            raise ValueError("cron toolsAllow must include the required safe tool set")
+    else:
+        raise ValueError("cron payload kind must be command or agentTurn")
     if job.get("sessionTarget") != "isolated":
         raise ValueError("cron sessionTarget must be isolated")
     if delivery.get("mode") != "announce":
@@ -167,15 +266,24 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
         },
         "sessionTarget": "isolated",
         "wakeMode": require_string(job.get("wakeMode"), "wakeMode"),
-        "payload": {
-            "kind": "agentTurn",
-            "message": payload["message"],
-            "model": MODEL,
-            "fallbacks": [],
-            "timeoutSeconds": TIMEOUT_SECONDS,
-            "lightContext": True,
-            "toolsAllow": TOOLS_ALLOW,
-        },
+        "payload": (
+            {
+                "kind": "command",
+                "argv": list(payload["argv"]),
+                "cwd": payload["cwd"],
+                "timeoutSeconds": WATCHER_TIMEOUT_SECONDS,
+            }
+            if kind == "command"
+            else {
+                "kind": "agentTurn",
+                "message": payload["message"],
+                "model": MODEL,
+                "fallbacks": [],
+                "timeoutSeconds": TIMEOUT_SECONDS,
+                "lightContext": True,
+                "toolsAllow": TOOLS_ALLOW,
+            }
+        ),
         "delivery": {
             "mode": "announce",
             "channel": "kolo",
@@ -187,32 +295,36 @@ def build_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
     # one, but do not invent an identity that cannot be verified from live state.
     if "agentId" in job:
         projection["agentId"] = require_string(job.get("agentId"), "agentId")
-    for optional in ("thinking",):
-        if optional in payload:
-            projection["payload"][optional] = payload[optional]
+    if kind == "agentTurn":
+        for optional in ("thinking",):
+            if optional in payload:
+                projection["payload"][optional] = payload[optional]
     return validate_binding(projection)
 
 
 def build_target_binding(job: Any, workspace: Path, base_dir: Path) -> dict[str, Any]:
-    """Project the intended safe config from an existing live job identity."""
+    """Project the intended safe config from an existing live job identity.
+
+    The canonical job is now the model-free watcher command. The target keeps
+    the live job's identity, schedule, and delivery and replaces only the
+    payload, whatever kind the live job currently has.
+    """
     if not isinstance(job, dict):
         raise ValueError("live cron job must be a JSON object")
     target = dict(job)
-    payload = job.get("payload")
-    if not isinstance(payload, dict):
-        raise ValueError("cron payload must be an object")
+    delivery = job.get("delivery")
+    if not isinstance(delivery, dict):
+        raise ValueError("cron delivery must be an object")
     target["payload"] = {
-        "kind": "agentTurn",
-        "message": render_message(workspace, base_dir),
-        "model": MODEL,
-        "fallbacks": [],
-        "timeoutSeconds": TIMEOUT_SECONDS,
-        "lightContext": True,
-        "toolsAllow": TOOLS_ALLOW,
+        "kind": "command",
+        "argv": [
+            "sh",
+            "-lc",
+            watcher_command(workspace, base_dir, require_string(delivery.get("to"), "delivery.to")),
+        ],
+        "cwd": str(workspace.resolve()),
+        "timeoutSeconds": WATCHER_TIMEOUT_SECONDS,
     }
-    for optional in ("thinking",):
-        if optional in payload:
-            target["payload"][optional] = payload[optional]
     return build_binding(target, workspace, base_dir)
 
 
@@ -228,15 +340,20 @@ def main(argv: list[str] | None = None) -> int:
     render = sub.add_parser("render-message")
     bind = sub.add_parser("bind-live")
     target = sub.add_parser("target-binding")
-    for command in (render, bind, target):
+    watcher = sub.add_parser("render-watcher-command")
+    for command in (render, bind, target, watcher):
         command.add_argument("--workspace", type=Path, required=True)
         command.add_argument("--base-dir", type=Path, required=True)
+    for command in (render, bind, target):
         command.add_argument("--output", type=Path, required=True)
+    watcher.add_argument("--owner-target", required=True)
     bind.add_argument("--job", type=Path, required=True)
     target.add_argument("--job", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "render-message":
+        if args.command == "render-watcher-command":
+            print(watcher_command(args.workspace, args.base_dir, args.owner_target))
+        elif args.command == "render-message":
             # This file is consumed verbatim as payload.message. A trailing
             # newline changes the binding hash and fails canonical validation.
             write_text(args.output, render_message(args.workspace, args.base_dir))
