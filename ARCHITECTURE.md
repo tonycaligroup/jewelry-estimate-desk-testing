@@ -209,7 +209,12 @@ command reads exactly one number, saves it to the rate card with provenance
 (`pricing.rate_provenance`), reopens the claim under a fresh token and a
 worker lease (`inbox_claim.reopen`), writes an intake result the worker's
 `worker-start` accepts, and spawns the one-shot worker. The price still goes
-through the price brief, so a misread number is caught there. The rate-key
+through the price brief, so a misread number is caught there. The answer
+command refuses, before writing anything, when the estimate record fails
+validation or is no longer awaiting specification, because on 3 September
+the main chat session hand-edited a record while "helping" and the next
+worker filed a misleading review; SKILL.md now forbids the main session
+from writing desk state or pricing at all. The rate-key
 matcher now prefers the key sharing the most descriptive tokens with the
 specification, so the saved key resolves on the next pass instead of
 re-raising the question. The same shape is intended for the unclear-reply

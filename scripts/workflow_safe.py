@@ -635,6 +635,24 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
         }
     if question["kind"] != "missing_rate":
         raise ValueError("only missing-rate questions are answered this way")
+    # Refuse before writing anything if the estimate is not in the state the
+    # question left it in. A hand-edited or already-priced record must be
+    # repaired or handled deliberately, not turned into a misleading review.
+    record = estimate_record.read_object(
+        estimate_record.record_path(p["record_root"], question["estimate_id"])
+    )
+    try:
+        route_ownership.validate_record(record)
+    except ValueError as exc:
+        raise ValueError(
+            f"estimate record {question['estimate_id']} is invalid ({exc}); "
+            "repair it before answering"
+        ) from exc
+    if record.get("status") != "awaiting_specs":
+        raise ValueError(
+            f"estimate record {question['estimate_id']} is {record.get('status')}, "
+            "not awaiting_specs; nothing to price"
+        )
     value = owner_questions.parse_amount(args.answer)
     question = owner_questions.record_answer(root, question, args.answer, value)
     owner_questions.save_rate(

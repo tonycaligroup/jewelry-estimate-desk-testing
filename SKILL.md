@@ -53,9 +53,8 @@ and delivery commitment behind owner approval.
    user explicitly resumes the workflow.
 
 Run this skill through the dedicated Kolo agent pinned to
-`litellm-fireworks/qwen-3-7-plus`, with no fallback. Worker jobs use the
-same model with thinking off and `--fallbacks ""`. If Kolo cannot verify the
-model, stop and route to the pinned agent.
+`litellm-fireworks/qwen-3-7-plus`, no fallback; worker jobs use the same
+model with thinking off. If Kolo cannot verify the model, stop.
 
 ## Bundled resources
 
@@ -224,11 +223,10 @@ each remaining claim to a one-shot worker job created from
 `templates/inbox-worker-cron.txt` with its own 900-second clock, the pinned
 model, thinking off, and the safe tool allowlist. The worker begins with
 `workflow_safe.py worker-start`, which proves the lease and returns the intake
-result and `work_paths`; it never discovers, claims, or reports. The lease
-keeps the next tick from resuming or failing a claim a worker still holds;
-when a worker dies, the lease lapses, the stale reconciler resumes the claim
-once, and the next tick starts a new worker. The watcher's stdout is the
-run report, or `NO_REPLY`.
+result and `work_paths`; it never discovers, claims, or reports. If a worker
+dies, its lease lapses, the stale reconciler resumes the claim once, and the
+next tick starts a new worker. The watcher's stdout is the run report, or
+`NO_REPLY`.
 
 ### Cron discovery phase
 
@@ -686,9 +684,7 @@ profile; never replace it with `delegated_to_jeweler` or infer an origin from
 price sensitivity.
 
 For a piece without stones, stone fields are not applicable; do not report a
-misleading `x/8` score. Wholesale estimates may label customer-visible
-product/specification unknowns, but never jeweler cost or pricing assumptions.
-Cost assumptions remain owner-only in every mode.
+misleading `x/8` score. Cost assumptions remain owner-only in every mode.
 
 Evaluate these fields against the merged full-thread specification recorded in
 Inbox monitoring step 3. A fact supplied in the initiating inquiry or any
@@ -806,9 +802,8 @@ python3 {baseDir}/scripts/workflow_safe.py ask-missing-rate \
 ```
 
 It asks the owner which rate to use, parks this claim as `awaiting_owner`,
-and finalizes; you are done (reply `NO_REPLY` in a worker). Never ask the
-owner yourself, guess a rate, or file a review for a missing rate. Otherwise
-finalize:
+and finalizes; you are done (reply `NO_REPLY`). Never ask the owner yourself
+or guess a rate. Otherwise finalize:
 
 ```bash
 python3 {baseDir}/scripts/cost_components.py finalize \
@@ -984,12 +979,21 @@ invitation. Confirm to the customer only after the calendar write succeeds.
 Use the owner's IANA timezone, never the pod's UTC clock. Never select meeting
 times based on the desired delivery date.
 
+### The main Kolo session: hard rules
+
+The main session is the owner's chat, not a worker. It runs only the exact
+commands in the three sections below. It never writes a record, the shop
+profile, a rate, a price, or any file under `estimate-desk/` by hand, never
+runs `cost_components.py`, `pricing_model.py`, `spot_price.py`, or
+`request-approval` itself, and never continues an inquiry in chat: pricing
+happens only in a worker job. A number the owner states after a desk
+question is that question's answer. If unsure, ask one sentence and wait.
+
 ### Handling approved manual-review briefs in the main Kolo session
 
-Every manual-review item is also filed as a Kolo approval brief whose
-execution payload has `action_type: manual_review`, a `review_key`, and the
-reason. When Kolo delivers an approved payload of that kind, run exactly one
-command and nothing else:
+A manual-review item is also a Kolo approval brief whose execution payload
+has `action_type: manual_review` and a `review_key`. When Kolo delivers an
+approved payload of that kind, run exactly one command:
 
 ```bash
 python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
@@ -999,16 +1003,14 @@ python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
 ```
 
 It closes the review (a repeat is a no-op) and reports the brief as executed.
-A rejected brief needs no action; the review stays open. Never read the
-customer's mail into the chat to "help" with the decision, and never resolve
-a review the owner did not approve.
+A rejected brief needs no action. Never read the customer's mail into the
+chat to "help", and never resolve a review the owner did not approve.
 
 ### Handling the owner's answer to a desk question in the main Kolo session
 
-When pricing lacks a rate, the desk asks the owner here in plain words (who
-asked, what for, "What price per carat should I use?", and a six-character
-question code) and parks the claim as `awaiting_owner`. When the owner
-replies with a number, run exactly one command, with their words verbatim:
+When pricing lacks a rate, the desk asks the owner here in plain words, with
+a six-character question code, and parks the claim as `awaiting_owner`. When
+the owner replies with a number, run exactly one command, words verbatim:
 
 ```bash
 python3 {baseDir}/scripts/workflow_safe.py answer-question \
@@ -1017,13 +1019,12 @@ python3 {baseDir}/scripts/workflow_safe.py answer-question \
   --answer '<the owner's reply, verbatim>'
 ```
 
-Omit `--question` when exactly one question is open. It saves the rate to
-the card with provenance, reopens the claim, and starts the worker; the
-price still arrives as an approval brief. If it refuses (no number, two
-numbers, several open questions), tell the owner what it needs in one
-sentence and wait. Never edit the rate card by hand, pick a number, or re-run
-with a different answer. `workflow_safe.py open-questions --workspace
-'<absolute-workspace>'` lists what is still waiting.
+Omit `--question` when exactly one question is open. It saves the rate,
+reopens the claim, and starts the worker; the price still arrives as an
+approval brief. If it refuses (no number, two numbers, several open
+questions, an invalid record), tell the owner what it said and wait; never
+pick a number or re-run with a different answer. `workflow_safe.py
+open-questions --workspace '<absolute-workspace>'` lists what is waiting.
 
 ### Handling approved appointment requests in the main Kolo session
 
