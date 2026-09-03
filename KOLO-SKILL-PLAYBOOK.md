@@ -279,6 +279,13 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
 - A `kolo notify-owner --file <png>` preview plus an approval card is the
   pattern for "look at this before it goes out"; a card cannot carry an image
   itself. **design; preview verified earlier with PNG inline**
+- `kolo notify-owner --session-key <activation session key>` posts into the
+  thread that activated the skill (the response names the chat id), which is
+  the same thread where `request-approval` cards appear. So the activation
+  binding's key is the right default owner channel. **verified 3 Sep 2026**
+- `kolo request-approval --help` and `kolo notify-owner --help` print nothing
+  (2m46s, empty output), so flags have to be learned from docs or trial; no
+  attachment flag is known for approval cards. **observed 3 Sep 2026**
 - Does Auto-Approve Low Risk apply to skill briefs? Test with a throwaway
   low-risk brief once the setting is understood.
 - Dedicated worker agent (`openclaw agents add`, `agents.entries.<id>` with
