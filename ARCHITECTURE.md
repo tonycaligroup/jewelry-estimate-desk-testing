@@ -356,6 +356,26 @@ finalize, binding, brief, record, mirror, and claim finish in one command.
 An intake claim is now about five round trips: start, write review,
 review-thread, then either write body plus send-spec-followup or price.
 
+**Speed fix 2 — inline judgment, no worker job (built 3 September 2026,
+switched off until verified live).** Kolo exposes a stateless completion,
+`openclaw infer model run --model <id> --json --prompt <text>`, usable from
+a command-kind cron job. `judge.py` wraps it: one call per judgment (triage,
+specification extraction, post-estimate classification, follow-up drafting,
+quantities), strict JSON parsing, shape validation, one retry that quotes the
+rejection, and a `JudgmentError` that distinguishes a transient platform
+failure from a malformed answer. `spec_gate.py` decides the missing required
+fields by rule, so the model only extracts. `pipeline.py` runs a claim end to
+end inside the watcher tick: dead-spot resume, triage, extract, gate,
+`review-thread`, then draft plus `send-spec-followup` or quantities plus
+`price`; post-estimate replies are classified and finalized the same way, and
+only rendering or appointment work is still handed to a worker job. The
+switch is `estimate-desk/pipeline.json` (`{"inline": true, "model": ...}`),
+read by the watcher each tick, so enabling it needs no rebind. A transient
+model failure leaves the claim processing and unleased for the stale
+reconciler; a malformed answer after the retry files `classification_malformed`.
+Expected: two to three completions per claim, finishing in the tick that
+discovered it, and no agent loop that can wander.
+
 **Stage C — deterministic approvals for bookings and renderings.**
 Calendar-write helper with receipts; rendering generation by script with
 PNGs attached to the owner notification; booking and rendering approval at
