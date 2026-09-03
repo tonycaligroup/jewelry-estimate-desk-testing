@@ -37,7 +37,7 @@ something.
 |---|---|---|
 | Customer | Their original channel. Today that is email to the shop's mailbox, and every reply stays in the customer's own thread. | Asks for a piece, answers questions, accepts or declines, asks for a picture or a meeting. |
 | The desk (assistant) | Works in the background. Writes to the customer only in the original thread, and only when the stage allows it. | Reads, extracts, prices, drafts, requests approval, sends approved messages, schedules. |
-| Owner / approver | Kolo: approval briefs, alerts in the owner chat, and the review list. The person who activated the desk is the approver. | Approves, edits, or rejects every price. Decides escalations. Sets the trust stage. |
+| Owner / approver | Kolo: approval briefs for actions, plain-English questions in the channel chosen at setup for missing information, and the estimate records. The person who activated the desk is the approver. | Approves, edits, or rejects every price, rendering, and booking. Answers the desk's questions. Decides escalations. Sets the trust stage. |
 | Calendar | The shop's Google Calendar. | The only source of truth for whether a meeting exists or a slot is free. |
 | Records | One private estimate record per inquiry, mirrored to Kolo for the owner. | Authoritative memory of the inquiry, its specification, price, evidence, and status. |
 
@@ -197,8 +197,9 @@ complete we price internally, deliberately on the high side:
 
 Quantities (finished weight, hours, a missing carat) are estimates made high.
 Rates come only from the rate card. If finished weight is truly unknown, the
-owner gets a bracket rather than false precision. A missing rate stops pricing
-and asks the owner for it.
+owner gets a bracket rather than false precision. A missing rate is not an
+error and not a review: the desk asks the owner which rate to use (6.10),
+saves the answer to the rate card, and then prices.
 
 ### 6.4 Owner approval
 
@@ -244,6 +245,7 @@ becomes `estimate_sent`.
 | A request to meet | Check the calendar for an existing meeting with this customer first. Build two or three fresh near-term times that are actually free inside declared windows. Send them to the owner as a booking approval. At Stage 3 the times may be offered to the customer while the owner decides; at Stage 1 or 2 nothing goes to the customer until the owner approves. The event is written and the customer is told "you're confirmed" only after the owner approves and the calendar write succeeds. |
 | A design change | Treat it as a changed specification: it returns to the gate and pricing, and the owner reviews it. |
 | Price pushback or a discount request | Owner only. No customer reply is drafted. |
+| Something the desk cannot read with confidence | Ask the owner what it is, quoting the customer's words (6.10). Nothing goes to the customer until the owner answers. |
 | Silence | Follow-up cadence in 6.8. |
 
 Every customer reply also raises a "customer replied" alert to the owner so
@@ -279,6 +281,50 @@ replied. Stage 1 drafts the nudge; Stage 2 or 3 sends when authorized.
 - Messages the desk cannot classify or that do not belong to any known
   inquiry: manual review, never a guess.
 
+### 6.10 When the desk needs the owner: questions versus approvals
+
+The desk has exactly two ways to put something in front of the owner.
+
+| It needs | It sends | The owner answers |
+|---|---|---|
+| Permission to act (send a price, send a rendering, book a meeting, any send) | An approval brief in the Kolo approval queue | Approve, edit, or reject |
+| A fact only the owner has (a rate, what a customer meant, whether two threads are one piece) | A plain-English question in the channel chosen at setup | In plain words, in the same channel |
+
+A review list is not one of the ways. An owner should never have to go
+somewhere else first, do something, and come back. An approval must be
+answerable from the card; a question must be answerable in one reply.
+
+**What a question contains.** Who the customer is and what they asked, in
+one line. What the desk is missing and why it cannot guess. What answer it
+needs, with an example of an acceptable reply. A short reference when more
+than one question is open, so the owner can say which one they mean.
+
+> Tony Lomelino asked for a quote on a synthetic sapphire ring. I do not have
+> a per-carat price for synthetic sapphire on your rate card. What price per
+> carat should I use? For example: "use 450".
+
+> Tony Lomelino replied to the pendant estimate: "Could you also do a matching
+> band?" Is this a second piece to quote separately, or a change to the
+> pendant?
+
+**What happens with the answer.** The desk records it against the estimate
+with provenance (answered by the owner, when, for which question). A fact
+that will be needed again is saved where it belongs: a rate goes on the rate
+card, so the same question is never asked twice. The inquiry then resumes
+from where it stopped, and its result still passes through the normal
+approval. A rate answered by the owner produces a price brief; the owner's
+second touch is the approval they would have had anyway.
+
+**Unanswered questions.** The inquiry waits. The customer is told nothing
+about the delay beyond the normal acknowledgement they already received. The
+desk reminds the owner once, after a working day, and then leaves it.
+
+**What stays a notice.** A failure of the desk itself (mailbox, credentials,
+a send whose outcome is uncertain) is reported once, in the channel, as a
+statement of what failed. Those are the only items that may sit on a review
+list, and the list is for the desk's own recovery, not a place the owner is
+expected to check.
+
 ---
 
 ## 7. Escalations: hand to the owner, draft nothing
@@ -286,13 +332,15 @@ replied. Stage 1 drafts the nudge; Stage 2 or 3 sends when authorized.
 Anger or dissatisfaction, price pushback after a sent quote, discount
 requests, legal threats or lawyers, insurance or chargeback matters, lost,
 damaged, or "not what I ordered" claims, estate or heirloom disputes, press,
-fraud or stolen-goods concerns, requests the desk does not fully understand,
+fraud or stolen-goods concerns, requests outside estimating a piece,
 "what is my old ring worth", "is this ethically sourced", "can you have it by
 Saturday" when the bench has not confirmed, any request for a payment link or
 card details, and any prior send whose outcome is uncertain.
 
 A first-contact price question is not pushback; a missing setting or an
-incomplete specification is an intake matter, not an escalation.
+incomplete specification is an intake matter, not an escalation. A reply the
+desk cannot read with confidence is a question to the owner (6.10), not an
+escalation: the desk keeps the conversation once the owner answers.
 
 ---
 
@@ -335,18 +383,19 @@ not by editing the record.
 
 ## 10. What the owner sees, and when
 
-The owner's channel may be a phone. Only finalized, important messages go
-to the channel chosen at setup; the desk never narrates its progress, never
-repeats an open item, and never sends a message a brief already covers.
+The owner's channel may be a phone. Only finalized, important messages and
+questions the desk cannot proceed without go to the channel chosen at setup;
+the desk never narrates its progress, never repeats an open item, and never
+sends a message a brief already covers.
 
 | Moment | The owner gets |
 |---|---|
 | A customer replies on an existing inquiry | One alert naming the estimate |
 | Specification is complete and priced | An approval brief with the price, the cost sheet, and the exact customer email |
-| Something needs a human | An approval brief in the same queue, titled with the sender and subject so the owner can find the email. It says why it needs the owner in plain words and asks one yes/no question: did you handle this email? Approve = yes, the review closes. Reject = not yet, it stays open |
+| The desk needs a fact only the owner has | One plain-English question in the channel: who asked, what is missing, what answer is needed (6.10). The owner replies in words and the desk continues |
 | A meeting is requested | A booking approval with the calendar-checked candidate times, at every stage |
 | A customer asks for a rendering | A rendering approval showing the conforming images before anything is sent |
-| A rate is missing | A brief asking for that rate |
+| A rate is missing | A question in the channel asking which rate to use; the answer is saved to the rate card and the price brief follows |
 | The desk itself fails | One message naming the failure |
 | Nothing new happened, or work is in progress | Nothing |
 
@@ -365,7 +414,10 @@ owner's hands in about ten minutes.
 - **Binding**: the hash tying an approval to the route, specification, and
   price it approved.
 - **Trust stage**: how much the desk may send on its own (section 4).
-- **Manual review**: a queued item the owner must resolve.
+- **Question**: a plain-English request for one fact only the owner has,
+  sent to the owner's channel and answered there in words (6.10).
+- **Manual review**: an item on the desk's own recovery list for a failure of
+  the desk itself; never a substitute for a question or an approval.
 
 ---
 
@@ -382,6 +434,12 @@ closed by follow-up changes:
 - Stage 3 currently books meetings autonomously inside declared windows. This
   document requires owner approval for every booking at every stage; Stage 3
   may only offer times.
+- Missing information (a rate, an unclear customer reply, a sender with
+  another open estimate) is currently raised as a manual-review item and,
+  since 3 September 2026, also filed as an approval brief. This document
+  requires a plain-English question in the owner's channel instead (6.10),
+  with the answer saved and the inquiry resumed; the review list is to be
+  reduced to failures of the desk itself.
 - The implementation still carries a wholesale mode, wholesale email wording,
   and a trade markup setting. This document is retail only; those are to be
   removed. The tests that pin customer wording and phase order
