@@ -33,6 +33,9 @@ import inbox_claim
 import inbox_watcher
 import owner_questions
 import gmail_text
+import judge
+import spec_gate
+import pipeline
 import cost_components as cost_components_module
 import inbox_monitor
 import estimate_record
@@ -7276,6 +7279,213 @@ class BundledWorkerStepTests(unittest.TestCase):
             self.assertEqual(review.runner.call_args.args[0][:2], ["kolo", "notify-owner"])
             claim = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
             self.assertEqual(claim["status"], "awaiting_owner")
+
+
+class JudgeTests(unittest.TestCase):
+    """One-shot completions: strict parsing, one retry, no shell for the model."""
+
+    def runner_returning(self, *outputs: str) -> Mock:
+        results = [subprocess.CompletedProcess([], 0, out, "") for out in outputs]
+        return Mock(side_effect=results)
+
+    def test_unwrap_handles_the_cli_envelopes_and_raw_text(self) -> None:
+        self.assertEqual(judge._unwrap('{"text": "hello"}'), "hello")
+        self.assertEqual(judge._unwrap('{"result": {"output": "nested"}}'), "nested")
+        self.assertEqual(judge._unwrap('{"choices": [{"message": {"content": "deep"}}]}'), "deep")
+        self.assertEqual(judge._unwrap("plain answer"), "plain answer")
+        self.assertEqual(judge.extract_json('Sure! ```json\n{"kind": "estimate_request"}\n```'), {"kind": "estimate_request"})
+        self.assertEqual(judge.extract_json('noise {"a": 1} trailing'), {"a": 1})
+        with self.assertRaises(ValueError):
+            judge.extract_json("no object here")
+
+    def test_ask_json_retries_once_with_the_rejection_and_then_gives_up(self) -> None:
+        runner = self.runner_returning(
+            json.dumps({"text": json.dumps({"kind": "nonsense"})}),
+            json.dumps({"text": json.dumps({"kind": "escalation", "note": "angry"})}),
+        )
+        out = judge.ask_json("Q", judge.check_triage, runner=runner, openclaw="openclaw")
+        self.assertEqual(out, {"kind": "escalation", "note": "angry"})
+        self.assertEqual(runner.call_count, 2)
+        second_prompt = runner.call_args_list[1].args[0][-1]
+        self.assertIn("Your previous answer was rejected", second_prompt)
+        self.assertEqual(runner.call_args_list[0].args[0][:5], ["openclaw", "infer", "model", "run", "--model"])
+        bad = self.runner_returning("garbage", "more garbage")
+        with self.assertRaises(judge.JudgmentError) as ctx:
+            judge.ask_json("Q", judge.check_triage, runner=bad, openclaw="openclaw")
+        self.assertFalse(ctx.exception.transient)
+        failing = Mock(return_value=subprocess.CompletedProcess([], 2, "", "model unavailable"))
+        with self.assertRaises(judge.JudgmentError) as ctx:
+            judge.complete("Q", runner=failing, openclaw="openclaw")
+        self.assertTrue(ctx.exception.transient)
+
+    def test_checks_enforce_the_shapes(self) -> None:
+        spec = judge.check_specification({"specification": {
+            "piece_type": "ring", "metal_karat": 14, "stone_color": "unknown", "bogus": "x",
+            "reference_images": ["one", 2], "stone_origin": "  lab-grown "}})
+        self.assertEqual(spec, {"specification": {"piece_type": "ring", "metal_karat": 14, "reference_images": ["one", "2"], "stone_origin": "lab-grown"}})
+        with self.assertRaises(ValueError):
+            judge.check_specification({"specification": {"stone_color": "n/a"}})
+        art = judge.check_artifact({"post_estimate_artifact": {"design_change_assessment": "Unchanged", "intents": ["rendering_request", "rendering_request"], "changed_fields": []}})
+        self.assertEqual(art["post_estimate_artifact"]["intents"], ["rendering_request"])
+        with self.assertRaises(ValueError):
+            judge.check_artifact({"post_estimate_artifact": {"design_change_assessment": "unchanged", "intents": [], "changed_fields": ["metal"]}})
+        with self.assertRaises(ValueError):
+            judge.check_body({"body": "Hi Pat, the sapphire would be $450 per carat which is a great price for you."})
+        with self.assertRaises(ValueError):
+            judge.check_body({"body": "Hi {{first_name}}, thanks for reaching out about the ring you described to us."})
+        ok = judge.check_body({"body": "Hi Pat, thanks for reaching out about the ring. Could you tell me the ring size and metal color?"})
+        self.assertIn("ring size", ok["body"])
+        q = judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3, "fees": ["casting"], "accents": [{"key": "melee", "carats": 0.2}]}, ["casting"], ["melee"], False)
+        self.assertEqual(q["fees"], ["casting"])
+        with self.assertRaises(ValueError):
+            judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3, "fees": ["plating"]}, ["casting"], [], False)
+        with self.assertRaises(ValueError):
+            judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
+
+
+class SpecGateTests(unittest.TestCase):
+    def profile(self, origin: str = "customer_choice") -> dict:
+        return {"defaults": {"stone_origin": origin}}
+
+    def test_gate_is_a_rule_not_a_guess(self) -> None:
+        full = {"piece_type": "ring", "metal": "14k yellow gold", "stone_type": "emerald", "stone_origin": "natural",
+                "stone_carat": 2, "stone_color": "jeweler's choice", "stone_clarity": "jeweler's choice",
+                "stone_shape": "emerald cut", "finger_size": 5, "setting_style": "bezel"}
+        self.assertEqual(spec_gate.missing_required_fields(full, self.profile()), [])
+        self.assertEqual(
+            spec_gate.missing_required_fields({"piece_type": "ring", "metal": "gold", "stone_type": "emerald"}, self.profile()),
+            ["finger_size", "metal_color", "metal_karat", "setting_style", "stone_carat", "stone_clarity", "stone_color", "stone_cut", "stone_origin"],
+        )
+        # No stones: no stone fields and no setting style required; platinum needs no karat or color.
+        self.assertEqual(spec_gate.missing_required_fields({"piece_type": "chain", "metal": "platinum", "dimensions": "18 inch"}, self.profile()), [])
+        self.assertEqual(spec_gate.missing_required_fields({"piece_type": "bracelet", "metal": "18k rose gold"}, self.profile()), ["dimensions"])
+        # Placeholders never count.
+        self.assertIn("finger_size", spec_gate.missing_required_fields({"piece_type": "ring", "metal": "14k white gold", "finger_size": "unknown"}, self.profile()))
+        # Ask-always origin is not delegatable.
+        spec = dict(full); spec["stone_origin"] = "jeweler's choice"
+        self.assertEqual(spec_gate.missing_required_fields(spec, self.profile("ask_always")), ["stone_origin"])
+
+
+class InlinePipelineTests(unittest.TestCase):
+    """The tick finishes a claim with one-shot judgments; no worker job."""
+
+    def judge_runner(self, answers: dict[str, dict]) -> Mock:
+        def run(argv, **_kwargs):
+            prompt = argv[-1]
+            for needle, answer in answers.items():
+                if needle in prompt:
+                    return subprocess.CompletedProcess(argv, 0, json.dumps({"text": json.dumps(answer)}), "")
+            return subprocess.CompletedProcess(argv, 0, '{"text": "{}"}', "")
+        return Mock(side_effect=run)
+
+    def workspace(self, directory: str, profile: dict):
+        helper = BundledWorkerStepTests("test_worker_start_hands_over_the_thread_as_text")
+        args, estimate_id, work_dir, _review = helper.parked_workspace(directory, {}, profile)
+        ws = Path(directory) / "ws"
+        (ws / "estimate-desk" / "pipeline.json").write_text('{"inline": true}', encoding="utf-8")
+        return ws, args, estimate_id
+
+    def profile(self) -> dict:
+        return BundledWorkerStepTests("test_worker_start_hands_over_the_thread_as_text").profile()
+
+    def intake_result(self, estimate_id: str) -> dict:
+        return {"message_id": "inquiry-1", "estimate_id": estimate_id, "next_action": "review_thread",
+                "record_status": "awaiting_specs", "decision": "new_inquiry"}
+
+    def test_incomplete_inquiry_gets_a_drafted_followup_in_the_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, estimate_id = self.workspace(directory, self.profile())
+            runner = self.judge_runner({
+                "decide what the CUSTOMER messages are": {"kind": "estimate_request", "note": "ring"},
+                "merge every fact": {"specification": {"piece_type": "ring", "metal": "14k white gold", "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 1}},
+                "Write the reply body": {"body": "Hi Pat, thanks for reaching out about the sapphire ring. Could you share the ring size, the setting style you like, and any preference on color, clarity, and cut?"},
+            })
+            sent = Mock(return_value={"id": "sent-1", "threadId": "thread-1"})
+            with (
+                patch.object(workflow_safe.gmail_safe, "send_reply_claimed", sent),
+                patch.object(workflow_safe.gateway_token, "load_token", return_value="t"),
+                patch.object(workflow_safe.gmail_reply, "build_reply", return_value={"threadId": "thread-1", "raw": "x"}),
+                patch.object(workflow_safe, "mirror_record"),
+            ):
+                out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
+            self.assertEqual(out["outcome"], "followup_sent")
+            self.assertEqual(out["missing_required_fields"], ["finger_size", "setting_style", "stone_clarity", "stone_color", "stone_cut"])
+            self.assertEqual(runner.call_count, 3)
+            record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
+            self.assertEqual(record["status"], "awaiting_specs")
+            self.assertEqual(record["spec_gate_reply"]["status"], "sent")
+            claim = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(claim["status"], "processed")
+
+    def test_complete_inquiry_is_priced_and_briefed_without_a_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, estimate_id = self.workspace(directory, self.profile())
+            runner = self.judge_runner({
+                "decide what the CUSTOMER messages are": {"kind": "estimate_request", "note": "pendant"},
+                "merge every fact": {"specification": {"piece_type": "pendant", "metal": "14k white gold", "dimensions": "18 inch chain",
+                    "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 0.75, "stone_color": "jeweler's choice",
+                    "stone_clarity": "jeweler's choice", "stone_shape": "oval", "setting_style": "bezel"}},
+                "bench jeweler estimating quantities": {"finished_grams": 4.5, "bench_hours": 3, "fees": ["casting", "setting"], "accents": []},
+            })
+            with (
+                patch.object(workflow_safe.kolo_safe, "run_command",
+                             return_value=subprocess.CompletedProcess([], 0, '{"status":"ok","brief":{"briefId":"b-1"}}', "")) as kolo,
+                patch.object(workflow_safe, "mirror_record"),
+            ):
+                out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
+            self.assertEqual(out["outcome"], "approval_requested")
+            self.assertGreater(out["proposed_price"], 0)
+            self.assertEqual(runner.call_count, 3)
+            self.assertEqual(kolo.call_args.args[0][:2], ["kolo", "request-approval"])
+            record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
+            self.assertEqual(record["status"], "pending_approval")
+
+    def test_non_inquiries_and_escalations_never_reach_the_customer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, estimate_id = self.workspace(directory, self.profile())
+            runner = self.judge_runner({"decide what the CUSTOMER messages are": {"kind": "vendor_or_marketing", "note": "supplier"}})
+            with patch.object(workflow_safe, "mirror_record"):
+                out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
+            self.assertEqual(out["outcome"], "not_an_inquiry")
+            record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
+            self.assertEqual(record["status"], "dormant")
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, estimate_id = self.workspace(directory, self.profile())
+            runner = self.judge_runner({"decide what the CUSTOMER messages are": {"kind": "escalation", "note": "lawyer"}})
+            brief = Mock(return_value=subprocess.CompletedProcess([], 0, '{"status":"ok"}', ""))
+            out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, command_runner=brief, openclaw="openclaw")
+            self.assertEqual(out["reason_code"], "customer_escalation")
+            claim = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(claim["status"], "manual_review")
+
+    def test_watcher_uses_the_pipeline_when_switched_on_and_defers_transient_failures(self) -> None:
+        watcher = WatcherTickTests("test_tick_closes_machine_mail_and_spawns_one_worker_per_inquiry")
+        watcher.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = watcher.workspace(directory, [("inquiry-1", "thread-1", {})])
+            (ws / "estimate-desk" / "pipeline.json").write_text('{"inline": true}', encoding="utf-8")
+            with patch.object(inbox_watcher.pipeline, "process_claim", return_value={"outcome": "followup_sent"}) as process:
+                summary, runner = watcher.run_tick(ws)
+            process.assert_called_once()
+            self.assertEqual(summary["inline"], [{"message_id": "inquiry-1", "outcome": "followup_sent"}])
+            self.assertEqual(summary["workers"], [])
+            self.assertFalse(any(c.args[0][1:3] == ["cron", "create"] for c in runner.call_args_list))
+        with tempfile.TemporaryDirectory() as directory:
+            ws = watcher.workspace(directory, [("inquiry-1", "thread-1", {})])
+            (ws / "estimate-desk" / "pipeline.json").write_text('{"inline": true}', encoding="utf-8")
+            with patch.object(inbox_watcher.pipeline, "process_claim", side_effect=judge.JudgmentError("model down", transient=True)):
+                summary, runner = watcher.run_tick(ws)
+            self.assertEqual(summary["inline_failures"], 1)
+            self.assertEqual(summary["inline"][0]["outcome"], "deferred")
+            state = inbox_claim.read_state(inbox_claim.claim_path(ws / "estimate-desk" / "inbox-claims", "inquiry-1"))
+            self.assertEqual(state["status"], "processing")
+            self.assertFalse(inbox_claim.recovery_lease_active(state))
+        with tempfile.TemporaryDirectory() as directory:
+            ws = watcher.workspace(directory, [("inquiry-1", "thread-1", {})])
+            (ws / "estimate-desk" / "pipeline.json").write_text('{"inline": true}', encoding="utf-8")
+            with patch.object(inbox_watcher.pipeline, "process_claim", return_value={"outcome": "needs_worker", "branch": "post_estimate", "next_action": "send_rendering"}):
+                summary, runner = watcher.run_tick(ws)
+            self.assertEqual(len(summary["workers"]), 1)
 
 
 class OwnerQuestionTests(unittest.TestCase):

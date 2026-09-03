@@ -25,7 +25,9 @@ import gateway_token
 import gmail_fetch
 import inbox_claim
 import inbox_monitor
+import judge
 import kolo_safe
+import pipeline
 import owner_questions
 import validate_profile
 import workflow_safe
@@ -131,6 +133,7 @@ def tick(
     max_workers: int = DEFAULT_MAX_WORKERS,
     runner: Runner = subprocess.run,
     token: str | None = None,
+    judge_runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     p = paths_for(workspace)
     summary: dict[str, Any] = {
@@ -141,6 +144,8 @@ def tick(
         "workers": [],
         "spawn_failures": 0,
         "reminders": 0,
+        "inline": [],
+        "inline_failures": 0,
         "message": "NO_REPLY",
     }
     profile_result = validate_profile.validate_profile(
@@ -195,6 +200,36 @@ def tick(
             continue
         work_dir = result["work_paths"]["work_dir"]
         workflow_safe.write_private(Path(work_dir) / "intake-result.json", result)
+        inline = pipeline.settings(workspace / "estimate-desk")
+        if inline.get("inline"):
+            # Finish the claim here with one-shot judgment calls; no worker.
+            try:
+                done = pipeline.process_claim(
+                    workspace, base_dir, message_id, result,
+                    model=inline.get("model"), judge_runner=judge_runner, command_runner=runner,
+                    openclaw=openclaw,
+                )
+            except judge.JudgmentError as exc:
+                summary["inline_failures"] += 1
+                if exc.transient:
+                    # Leave the claim processing and unleased; the stale
+                    # reconciler resumes it once and the next tick retries.
+                    summary["inline"].append({"message_id": message_id, "outcome": "deferred", "error": str(exc)[:160]})
+                    continue
+                kolo_safe.manual_review_claimed(
+                    p["monitor_root"], p["claim_root"], message_id, None,
+                    "classification_malformed", runner=runner,
+                )
+                summary["inline"].append({"message_id": message_id, "outcome": "manual_review", "error": str(exc)[:160]})
+                continue
+            except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+                summary["inline_failures"] += 1
+                summary["inline"].append({"message_id": message_id, "outcome": "deferred", "error": str(exc)[:160]})
+                continue
+            if done.get("outcome") != "needs_worker":
+                summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome")})
+                continue
+            summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action")})
         claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
         inbox_claim.delegate(
             p["claim_root"], message_id, claim_token, cron_config.WORKER_LEASE_SECONDS

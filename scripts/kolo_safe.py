@@ -203,6 +203,14 @@ REVIEW_REASON_TEXT = {
         "whether to ask again yourself or close it."
     ),
     "spot_price_unavailable": "The live metal price could not be fetched, so pricing stopped.",
+    "customer_escalation": (
+        "The customer is upset, disputing, or asking for something the desk must "
+        "not answer on its own. Please take this conversation over."
+    ),
+    "classification_malformed": (
+        "The desk could not produce a usable reading of this message after two "
+        "tries. Please read it yourself."
+    ),
     "missing_thread_ownership": "The desk could not prove which estimate this thread belongs to.",
     "intake_failed": "A system error stopped intake before any customer contact.",
     "system_actionable": "A mailbox, authentication, or system failure needs attention.",
