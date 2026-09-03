@@ -371,6 +371,9 @@ def draft_followup(
     return ask_json(prompt, check_body, model, runner, openclaw)
 
 
+LOCAL_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+
+
 def check_requested_times(value: dict[str, Any]) -> dict[str, Any]:
     raw = value.get("requested_times", [])
     if not isinstance(raw, list):
@@ -380,7 +383,19 @@ def check_requested_times(value: dict[str, Any]) -> dict[str, Any]:
         text = _string(item, 80)
         if text and text not in times:
             times.append(text)
-    return {"requested_times": times[:3]}
+    resolved: list[str] = []
+    raw_resolved = value.get("resolved_times", [])
+    if not isinstance(raw_resolved, list):
+        raise ValueError("resolved_times must be a list")
+    for item in raw_resolved:
+        text = _string(item, 40)
+        if not text:
+            continue
+        if not LOCAL_DATETIME_RE.fullmatch(text):
+            raise ValueError("resolved_times entries must look like YYYY-MM-DDTHH:MM")
+        if text not in resolved:
+            resolved.append(text)
+    return {"requested_times": times[:3], "resolved_times": resolved[:3]}
 
 
 def extract_requested_times(
@@ -388,14 +403,28 @@ def extract_requested_times(
     model: str | None = None,
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
+    now_local: str | None = None,
+    timezone_name: str | None = None,
 ) -> dict[str, Any]:
-    """The customer's own words about when they want to meet, nothing invented."""
+    """The customer's own words about when they want to meet, nothing invented.
+
+    When the words name a specific day and clock time ("tomorrow at 1pm",
+    "Tuesday at 10:30"), the model also resolves them to local date-times so
+    the calendar can offer that exact slot first. Vague words ("next week",
+    "afternoons") resolve to nothing.
+    """
+    today = (
+        f"Today is {now_local} in the shop's timezone ({timezone_name}). "
+        if now_local and timezone_name else ""
+    )
     prompt = (
         "A customer of a jewelry shop asked to meet. From ONLY the newest customer message (marked as the one "
         "being handled), copy the customer's own words about timing, for example \"early next week\", "
-        "\"Tuesday afternoon\", \"noon on the 9th\". Answer with one JSON object only: "
-        '{"requested_times": [<up to three short quotes>]}. Use an empty list when they gave no timing. '
-        "Never invent a time.\n\n"
+        "\"Tuesday afternoon\", \"noon on the 9th\". " + today +
+        "When a quote names a specific day AND a clock time, also resolve it to a local date-time in the "
+        "form YYYY-MM-DDTHH:MM; leave out anything vague. Answer with one JSON object only: "
+        '{"requested_times": [<up to three short quotes>], "resolved_times": [<zero to three YYYY-MM-DDTHH:MM>]}. '
+        "Use empty lists when they gave no timing. Never invent a time.\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
     return ask_json(prompt, check_requested_times, model, runner, openclaw)

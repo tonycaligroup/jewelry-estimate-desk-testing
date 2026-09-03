@@ -110,14 +110,45 @@ def candidate_slots(
     return slots
 
 
+def preferred_slots(scheduling: dict[str, Any], requested: list[str], now: datetime) -> list[dict[str, str]]:
+    """The customer's own resolved times as slots, kept only when inside the windows."""
+    zone = ZoneInfo(scheduling.get("timezone") or "UTC")
+    windows = parse_windows(scheduling)
+    length = timedelta(minutes=duration_minutes(scheduling))
+    notice = timedelta(minutes=int(scheduling.get("minimum_notice_minutes") or 0))
+    earliest = now.astimezone(zone) + notice
+    slots: list[dict[str, str]] = []
+    for text in requested:
+        try:
+            start = datetime.strptime(str(text), "%Y-%m-%dT%H:%M").replace(tzinfo=zone)
+        except (TypeError, ValueError):
+            continue
+        end = start + length
+        minute = start.hour * 60 + start.minute
+        inside = any(
+            start.weekday() in days and minute >= w_start and minute + int(length.total_seconds() // 60) <= w_end
+            for days, w_start, w_end in windows
+        )
+        if inside and start >= earliest:
+            slot = {"start": start.isoformat(), "end": end.isoformat()}
+            if slot not in slots:
+                slots.append(slot)
+    return slots
+
+
 def offer_times(
     profile: dict[str, Any],
     token: str,
     out_dir: Path,
     now: datetime | None = None,
     opener: Callable[..., Any] | None = None,
+    requested: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Live-checked options for the owner's card, or an empty list with a reason."""
+    """Live-checked options for the owner's card, or an empty list with a reason.
+
+    A time the customer asked for comes first whenever it is inside the
+    declared windows and free; the earliest other free slots fill the rest.
+    """
     scheduling = profile.get("scheduling") or {}
     calendar_id = scheduling.get("calendar")
     if not calendar_id or not parse_windows(scheduling):
@@ -138,7 +169,9 @@ def offer_times(
     ]
     query_end = calendar_query.parse_timestamp(time_max, "time_max")
     free: list[dict[str, str]] = []
-    for slot in candidate_slots(scheduling, current):
+    for slot in preferred_slots(scheduling, requested or [], current) + candidate_slots(scheduling, current):
+        if slot in free:
+            continue
         start = calendar_query.parse_timestamp(slot["start"], "slot.start")
         end = calendar_query.parse_timestamp(slot["end"], "slot.end")
         if end > query_end:
