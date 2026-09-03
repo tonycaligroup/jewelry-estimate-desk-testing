@@ -335,15 +335,20 @@ not by editing the record.
 
 ## 10. What the owner sees, and when
 
+The owner's channel may be a phone. Only finalized, important messages go
+to the channel chosen at setup; the desk never narrates its progress, never
+repeats an open item, and never sends a message a brief already covers.
+
 | Moment | The owner gets |
 |---|---|
-| A customer replies on an existing inquiry | An alert naming the estimate |
-| Specification is complete and priced | An approval brief with price and cost sheet |
-| Something needs a human | A review item with a privacy-safe key, reason, and time, retrievable by asking Kolo to show unresolved Jewelry Estimate Desk reviews |
+| A customer replies on an existing inquiry | One alert naming the estimate |
+| Specification is complete and priced | An approval brief with the price, the cost sheet, and the exact customer email |
+| Something needs a human | An approval brief in the same queue: why it needs the owner in plain words, who wrote, the subject, and when. Approving it closes the review; rejecting leaves it open |
 | A meeting is requested | A booking approval with the calendar-checked candidate times, at every stage |
 | A customer asks for a rendering | A rendering approval showing the conforming images before anything is sent |
-| A rate is missing | A review item asking for that rate |
-| Nothing new happened | Nothing |
+| A rate is missing | A brief asking for that rate |
+| The desk itself fails | One message naming the failure |
+| Nothing new happened, or work is in progress | Nothing |
 
 Expectation set with the owner: an inquiry becomes a priced decision in the
 owner's hands in about ten minutes.

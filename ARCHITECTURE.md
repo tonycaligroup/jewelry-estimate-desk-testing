@@ -170,13 +170,19 @@ Two ways to schedule it; the feasibility tests decide which:
   day-3 and day-7 timestamps when the estimate is sent (uses the platform
   scheduler as intended, but leaves two jobs per estimate to clean up).
 
-### 2.6 Review tasks (new)
+### 2.6 Reviews as approval briefs (built 3 September 2026)
 
-The Kolo task board becomes the primary place the owner sees manual reviews.
-Every review item becomes a task assigned to the owner, titled with the
-privacy-safe review key and reason, with a due date; resolving the review
-closes the task. The "show my unresolved reviews" chat query stays as a
-secondary path only.
+Every manual-review item is filed in the Kolo approval queue as a brief, the
+one place the owner already looks, rather than on a task board. The brief
+carries the reason in plain words, the sender, subject, and time, and an
+execution payload; approving it runs one deterministic command that closes
+the review and marks the brief executed, rejecting leaves it open. The
+"show my unresolved reviews" chat query stays as a secondary path.
+
+Owner-channel discipline: the channel chosen at setup may be a phone, so it
+receives only finalized messages. Ticks announce nothing unless the desk
+itself fails; workers never announce; the redundant "unresolved review" chat
+alert is gone because the brief is the notification.
 
 ### 2.7 Records, evidence, and audit (exists today)
 

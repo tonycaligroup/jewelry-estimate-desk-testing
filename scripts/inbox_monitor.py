@@ -888,6 +888,7 @@ def run_report(
     claim_root: Path | None = None,
     announce: bool = False,
     in_flight_ok: bool = False,
+    review_lines: bool = True,
 ) -> dict[str, Any]:
     """Derive the owner-facing run summary from durable state alone.
 
@@ -945,7 +946,7 @@ def run_report(
             f"{counts['processing'] - (delegated if in_flight_ok else 0)} claimed "
             "item(s) still processing; this run did not settle."
         )
-    if reviews:
+    if reviews and review_lines:
         codes = ", ".join(sorted({review["reason_code"] for review in reviews}))
         lines.append(f"{len(reviews)} item(s) awaiting manual review ({codes}).")
         lines.append("Ask Kolo to show unresolved Jewelry Estimate Desk reviews.")

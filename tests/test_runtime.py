@@ -6771,7 +6771,8 @@ class WatcherTickTests(unittest.TestCase):
             self.assertEqual(argv[argv.index("--model") + 1], cron_config.MODEL)
             self.assertEqual(argv[argv.index("--thinking") + 1], "off")
             self.assertEqual(argv[argv.index("--timeout-seconds") + 1], "900")
-            self.assertEqual(argv[argv.index("--to") + 1], "kolo:test-owner")
+            self.assertIn("--no-deliver", argv)
+            self.assertNotIn("--announce", argv)
             self.assertEqual(runner.call_args.kwargs.get("shell"), False)
             message = argv[argv.index("--message") + 1]
             self.assertIn("--message-id 'inquiry-1'", message)
@@ -6872,3 +6873,95 @@ class WorkerTemplateTests(unittest.TestCase):
         self.assertIn("cost_components.py prepare", text)
         self.assertIn("Never read the bundled scripts' source code", text)
         self.assertNotIn("gmail_fetch.py discover", text)
+
+
+class ReviewBriefTests(unittest.TestCase):
+    def test_review_brief_is_flat_readable_and_carries_an_executable_payload(self) -> None:
+        key = "a" * 64
+        argv = kolo_safe.build_request_review_approval(
+            key, "invalid_cost_components", "msg-1", "agent:main:kolo:direct:chat-1",
+            {"From": "Pat <pat@example.net>", "Subject": "Ring", "Date": "Wed, 2 Sep 2026"},
+        )
+        self.assertEqual(argv[:2], ["kolo", "request-approval"])
+        details = json.loads(argv[argv.index("--details") + 1])
+        self.assertTrue(all(isinstance(v, str) for v in details.values()))
+        self.assertIn("rate card", details["Why it needs you"])
+        self.assertEqual(details["Review key"], key[:12])
+        payload = json.loads(argv[argv.index("--execution-payload") + 1])
+        self.assertEqual(payload, {
+            "action_type": "manual_review", "review_key": key,
+            "reason_code": "invalid_cost_components", "gmail_message_id": "msg-1",
+        })
+        self.assertEqual(argv[argv.index("--session-key") + 1], "agent:main:kolo:direct:chat-1")
+        with self.assertRaises(ValueError):
+            kolo_safe.build_request_review_approval("short", "x_y", "m", "agent:main:kolo:direct:chat-1")
+
+    def test_manual_review_files_a_brief_when_the_approver_is_bound(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = helper.claimed(directory, sender="sam@shop.example")
+            activation_binding.create(
+                activation_binding.binding_path(args.monitor_root), "agent:main:kolo:direct:chat-1"
+            )
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"status":"ok","brief":{"briefId":"b-1"}}', ""))
+            item, result = kolo_safe.manual_review_claimed(
+                args.monitor_root, args.claim_root, "inquiry-1", None, "uncertain_classification", runner=runner
+            )
+            self.assertEqual(item["processing_status"], "manual_review")
+            argv = runner.call_args.args[0]
+            self.assertEqual(argv[1], "request-approval")
+            details = json.loads(argv[argv.index("--details") + 1])
+            self.assertIn("sam@shop.example", details["From"])
+            self.assertEqual(details["Subject"], "Custom ring inquiry")
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["manual_review_notification"]["status"], "sent")
+            # A repeat never files a second brief.
+            runner.reset_mock()
+            kolo_safe.review_brief_claimed(
+                args.monitor_root, args.claim_root, "inquiry-1", state["claim_token"],
+                item["gmail_message_id_sha256"], "uncertain_classification", {}, runner=runner,
+            )
+            runner.assert_not_called()
+
+    def test_manual_review_falls_back_to_the_chat_alert_without_a_binding(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = helper.claimed(directory)
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "{}", ""))
+            kolo_safe.manual_review_claimed(
+                args.monitor_root, args.claim_root, "inquiry-1", None, "uncertain_classification", runner=runner
+            )
+            self.assertEqual(runner.call_args.args[0][1], "notify-owner")
+
+    def test_resolve_review_approval_closes_and_reports(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = helper.claimed(directory)
+            with patch.object(kolo_safe, "run_command"):
+                item, _ = kolo_safe.manual_review_claimed(
+                    args.monitor_root, args.claim_root, "inquiry-1", None, "uncertain_classification"
+                )
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "{}", ""))
+            close = argparse.Namespace(
+                monitor_root=args.monitor_root, review_key=item["gmail_message_id_sha256"],
+                brief_id="01a0642c-0e88-7ac0-b6c1-6fec9cdcf3eb", runner=runner,
+            )
+            result = workflow_safe.resolve_review_approval(close)
+            self.assertEqual(result["outcome"], "resolved")
+            self.assertEqual(runner.call_args.args[0][:4], ["kolo", "update-brief", "--brief-id", close.brief_id])
+            self.assertEqual(inbox_monitor.list_manual_reviews(args.monitor_root), [])
+            again = workflow_safe.resolve_review_approval(close)
+            self.assertEqual(again["outcome"], "already_resolved")
+
+    def test_watcher_report_is_silent_about_open_reviews(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            args, _paths = helper.claimed(directory)
+            with patch.object(kolo_safe, "run_command"):
+                kolo_safe.manual_review_claimed(
+                    args.monitor_root, args.claim_root, "inquiry-1", None, "uncertain_classification"
+                )
+            quiet = inbox_monitor.run_report(args.monitor_root, args.claim_root, review_lines=False)
+            self.assertEqual(quiet["message"], "NO_REPLY")
+            loud = inbox_monitor.run_report(args.monitor_root, args.claim_root)
+            self.assertIn("awaiting manual review", loud["message"])
