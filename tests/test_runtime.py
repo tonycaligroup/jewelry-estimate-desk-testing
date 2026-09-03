@@ -7594,6 +7594,58 @@ class DecisionQuestionTests(unittest.TestCase):
             root = owner_questions.questions_root(args.monitor_root)
             self.assertEqual(owner_questions.find(root, asked["reference"])["answer"]["outcome"], "new")
 
+    def test_same_sender_new_can_be_run_again_after_a_failed_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, existing, asked = self.parked_same_sender(directory)
+            spawner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-2"}', ""))
+            namespace = lambda: argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=None, answer="new piece", openclaw="openclaw", runner=spawner,
+            )
+            # First attempt: the claim reopens, then intake blows up. Nothing is recorded.
+            with (
+                patch.object(workflow_safe, "intake", side_effect=ValueError("estimate route is immutable")),
+                self.assertRaises(ValueError),
+            ):
+                workflow_safe.answer_question(namespace())
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "processing")
+            root = owner_questions.questions_root(args.monitor_root)
+            self.assertEqual(owner_questions.find(root, asked["reference"])["status"], "answered")
+            # Second attempt, same command: carries on from the processing claim.
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                out = workflow_safe.answer_question(namespace())
+            self.assertEqual(out["decision"], "new")
+            self.assertTrue(out["replayed"])
+            self.assertEqual(out["worker_job_id"], "job-2")
+            self.assertEqual(owner_questions.find(root, asked["reference"])["answer"]["outcome"], "new")
+            # Once the inquiry has moved on, a third run is just already answered.
+            again = workflow_safe.answer_question(argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=asked["reference"], answer="new", openclaw="openclaw", runner=spawner,
+            ))
+            self.assertEqual(again["outcome"], "already_answered")
+            self.assertEqual(spawner.call_count, 1)
+
+    def test_recorded_answer_is_replayed_when_the_claim_never_left_the_park(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, existing, asked = self.parked_same_sender(directory)
+            root = owner_questions.questions_root(args.monitor_root)
+            # An older build recorded the answer first and then failed to reopen.
+            owner_questions.record_decision(root, owner_questions.find(root, asked["reference"]), "new", "new")
+            spawner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-3"}', ""))
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                out = workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=None, answer="whatever", openclaw="openclaw", runner=spawner,
+                ))
+            self.assertTrue(out["replayed"])
+            self.assertEqual(out["decision"], "new")
+            self.assertEqual(out["worker_job_id"], "job-3")
+
     def test_same_sender_same_closes_the_claim_without_a_card(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ws, args, existing, asked = self.parked_same_sender(directory)

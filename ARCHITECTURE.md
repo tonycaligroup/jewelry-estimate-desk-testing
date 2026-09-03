@@ -381,6 +381,15 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Answer replay (built 3 September 2026).** `answer-question` leases the
+parked claim before it records the answer, so a failure leaves nothing half
+done; run again, it continues from a claim an earlier attempt already
+reopened and replays a recorded decision whose claim is still parked or has
+no intake result yet. Once the inquiry has moved on it reports
+`already_answered` and does nothing. Motivation: a session-made record with an
+invented route made the first answer fail after recording, and every tick
+after that failed on the same record until the file was quarantined.
+
 **Batch 1 (built 3 September 2026).** Same-sender and unclear-reply reviews
 are owner questions with fixed outcomes (`owner_questions.create_decision`,
 `match_option`; `answer-question` applies them: a new piece is quoted through

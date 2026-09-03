@@ -966,10 +966,15 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
     workspace = args.workspace.resolve()
     p = inbox_watcher.paths_for(workspace)
     root = owner_questions.questions_root(p["monitor_root"])
-    question = (
-        owner_questions.find(root, args.question) if args.question else owner_questions.only_open(root)
-    )
+    question = _question_to_answer(args, p, root)
     if question["status"] == "answered":
+        if question["kind"] in owner_questions.DECISION_KINDS and _claim_still_waiting(p, question):
+            # An earlier run recorded the answer and then failed before the
+            # inquiry moved; replay the recorded answer rather than refusing.
+            args.answer = question["answer"]["text"]
+            replayed = answer_decision(args, workspace, p, root, question)
+            replayed["replayed"] = True
+            return replayed
         return {
             "outcome": "already_answered",
             "question_id": question["question_id"],
@@ -1058,11 +1063,65 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
-def _close_parked_claim(p: dict[str, Path], message_id: str, reason: str) -> None:
-    """Finish a parked claim on the owner's word: terminal, reviewed, no card."""
+def _question_to_answer(args: argparse.Namespace, p: dict[str, Path], root: Path) -> dict[str, Any]:
+    """The named question, the only open one, or an answered one whose inquiry is still waiting."""
+    if args.question:
+        return owner_questions.find(root, args.question)
+    try:
+        return owner_questions.only_open(root)
+    except ValueError:
+        answered = [
+            q for q in owner_questions.list_questions(root, "answered")
+            if q["kind"] in owner_questions.DECISION_KINDS and _claim_still_waiting(p, q)
+        ]
+        if len(answered) == 1:
+            return answered[0]
+        raise
+
+
+def _claim_still_waiting(p: dict[str, Path], question: dict[str, Any]) -> bool:
+    """True while the answered question's inquiry has not moved past the answer.
+
+    Parked means the answer never took; processing without an intake result
+    means an earlier attempt reopened the claim and failed before intake.
+    Anything else has moved on, and replaying would double the work.
+    """
+    try:
+        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], question["gmail_message_id"]))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    if state.get("status") == "awaiting_owner":
+        return True
+    if state.get("status") != "processing":
+        return False
+    work_dir = p["monitor_root"].resolve().parent / "work" / inbox_claim.claim_key(question["gmail_message_id"])
+    return not (work_dir / "intake-result.json").exists()
+
+
+def _resume_parked_claim(p: dict[str, Path], message_id: str) -> dict[str, Any]:
+    """Lease the parked claim for the answer; carry on if an earlier attempt already reopened it."""
     import cron_config  # local import keeps module import order unchanged
 
-    inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
+    state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], message_id))
+    if state.get("status") == "awaiting_owner":
+        return inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
+    if state.get("status") == "processing":
+        token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+        state = inbox_claim.delegate(p["claim_root"], message_id, token, cron_config.WORKER_LEASE_SECONDS)
+        queue_item = inbox_monitor.sync_claim(p["monitor_root"], message_id, {"acquired": True, **state})
+        return {
+            "queue_item": queue_item,
+            "claim": {"acquired": True, "resumed": True, **state},
+            "work_paths": inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id),
+        }
+    raise ValueError(
+        f"claim is {state.get('status')}; the inquiry is no longer waiting on this answer"
+    )
+
+
+def _close_parked_claim(p: dict[str, Path], message_id: str, reason: str) -> None:
+    """Finish a parked claim on the owner's word: terminal, reviewed, no card."""
+    _resume_parked_claim(p, message_id)
     token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
     inbox_claim.finish(p["claim_root"], message_id, token, "manual_review", reason)
     inbox_monitor.reconcile_terminal(p["monitor_root"], message_id, p["claim_root"])
@@ -1084,8 +1143,11 @@ def answer_decision(
         "outcome": "answered", "question_id": question["question_id"], "kind": question["kind"], "decision": outcome,
     }
     if question["kind"] == "same_sender" and outcome == "new":
-        owner_questions.record_decision(root, question, args.answer, outcome)
-        reopened = inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
+        # Lease the claim first: if that fails nothing is recorded, so the
+        # same command can simply be run again.
+        reopened = _resume_parked_claim(p, message_id)
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
         if not Path(reopened["work_paths"]["gmail_message"]).exists():
             import gmail_fetch  # local import; only needed when the work file was cleaned up
 
@@ -1125,9 +1187,10 @@ def answer_decision(
         )
         return result
     # Every other outcome: the owner takes the conversation from here.
-    owner_questions.record_decision(root, question, args.answer, outcome)
     reason = f"owner_decided_{outcome}"
     _close_parked_claim(p, message_id, reason)
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
     result["claim"] = reason
     return result
 
