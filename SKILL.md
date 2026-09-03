@@ -53,9 +53,9 @@ and delivery commitment behind owner approval.
    user explicitly resumes the workflow.
 
 Run this skill through the dedicated Kolo agent pinned to
-`litellm-fireworks/glm-5-3`, with no fallback. Monitoring crons must use
-the same model and `--fallbacks ""`. If Kolo cannot verify the model, stop and
-route to the pinned agent.
+`litellm-fireworks/qwen-3-7-plus`, with no fallback. Worker jobs use the
+same model with thinking off and `--fallbacks ""`. If Kolo cannot verify the
+model, stop and route to the pinned agent.
 
 ## Bundled resources
 
