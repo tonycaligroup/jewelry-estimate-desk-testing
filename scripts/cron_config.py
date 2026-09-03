@@ -44,8 +44,36 @@ def template_path() -> Path:
     return Path(__file__).resolve().parents[1] / "templates" / "inbox-monitor-cron.txt"
 
 
-def worker_template_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "templates" / "inbox-worker-cron.txt"
+WORKER_BRANCHES = {
+    # record status at intake -> the one branch prompt the worker receives.
+    "awaiting_specs": "intake",
+    "estimate_sent": "post_estimate",
+    "appointment_booked": "post_estimate",
+    "approved": "post_estimate",
+}
+
+
+def worker_branch(record_status: str | None) -> str:
+    """Pick the worker's branch from the record status the intake reported."""
+    try:
+        return WORKER_BRANCHES[record_status or ""]
+    except KeyError as exc:
+        raise ValueError(f"no worker branch for record status {record_status!r}") from exc
+
+
+def worker_template_path(branch: str = "intake") -> Path:
+    """The branch prompt; the shared preamble lives in worker-common.txt.
+
+    A worker never reads SKILL.md. Its whole instruction set is the common
+    preamble plus one branch (Stage B): a few kilobytes instead of the full
+    runbook, so a claim fits comfortably inside the job's clock.
+    """
+    templates = Path(__file__).resolve().parents[1] / "templates"
+    if branch == "common":
+        return templates / "worker-common.txt"
+    if branch not in set(WORKER_BRANCHES.values()):
+        raise ValueError(f"unknown worker branch {branch!r}")
+    return templates / f"worker-{branch.replace('_', '-')}.txt"
 
 
 def watcher_command(workspace: Path, base_dir: Path, owner_target: str) -> str:
@@ -65,14 +93,19 @@ def render_worker_message(
     message_id: str,
     estimate_id: str,
     work_dir: str,
+    branch: str = "intake",
 ) -> str:
-    """Render one worker job's prompt for a single claimed message."""
+    """Render one worker job's prompt: the common preamble plus one branch."""
     for value, label in ((message_id, "message_id"), (estimate_id, "estimate_id")):
         if not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", value or ""):
             raise ValueError(f"{label} must be a plain provider identifier")
     if not work_dir.startswith("/") or any(ch.isspace() for ch in work_dir):
         raise ValueError("work_dir must be an absolute path without spaces")
-    text = worker_template_path().read_text(encoding="utf-8").rstrip("\n")
+    text = (
+        worker_template_path("common").read_text(encoding="utf-8").rstrip("\n")
+        + "\n\n"
+        + worker_template_path(branch).read_text(encoding="utf-8").rstrip("\n")
+    )
     return (
         text.replace("<WORKSPACE>", str(workspace.resolve()))
         .replace("<BASE_DIR>", str(base_dir.resolve()))
