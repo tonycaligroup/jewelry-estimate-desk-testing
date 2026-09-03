@@ -3,6 +3,10 @@
 Fill the brackets. Never send below the trust stage that authorizes it.
 Nothing here contains a price except the estimate template.
 
+> **Plain text only.** Customer mail is sent as plain text: no bold stars,
+> heading hashes, or backticks. The send helper strips them, but write
+> without them.
+>
 > **These are body templates only. Never draft or replace the subject.** Every
 > email must be sent as a reply in the original inquiry thread through
 > `workflow_safe.py`; the original subject is preserved by the reply headers.
