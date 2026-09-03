@@ -79,14 +79,13 @@ model with thinking off. If Kolo cannot verify the model, stop.
 - `scripts/inbox_watcher.py`: the model-free scheduled tick: validate,
   reconcile, discover, claim, fetch, intake, close mail no customer wrote,
   and start one worker job per claim that needs judgment.
-- `scripts/owner_questions.py`: plain-English questions to the owner (a
-  missing rate today), one reminder, and the answer saved to the rate card.
+- `scripts/owner_questions.py`: plain-English owner questions (a missing
+  rate today), one reminder, the answer saved to the rate card.
 - `scripts/cron_config.py`: render the watcher command and the per-claim
   worker prompt, and bind durable monitor state to the complete
   behavior-bearing live Kolo cron configuration.
-- `templates/worker-common.txt`, `worker-intake.txt`, `worker-post-estimate.txt`:
-  a worker's whole instruction set, preamble plus one branch by record
-  status; workers never read SKILL.md.
+- `templates/worker-*.txt`: a worker's whole instruction set, the common
+  preamble plus one branch by record status; workers never read SKILL.md.
 - `scripts/gmail_classify.py`: from deterministic Gmail headers alone, set
   aside mail no customer wrote (bounces, automatic replies, calendar
   invitations and RSVPs, automated notifications, mailing-list mail, and
@@ -224,8 +223,10 @@ each remaining claim to a one-shot worker job whose prompt is
 `templates/worker-common.txt` plus one branch prompt (intake or
 post-estimate, by record status), with a 900-second clock, the pinned
 model, thinking off, and the safe tool allowlist. The worker begins with
-`workflow_safe.py worker-start`, which proves the lease and returns the intake
-result and `work_paths`; it never discovers, claims, or reports. If a worker
+`workflow_safe.py worker-start` (lease proof, intake result, thread as
+text, `work_paths`), makes one judgment, runs `review-thread` (the review
+plus every deterministic step after it) and at most `price`; it never
+discovers, claims, or reports. If a worker
 dies, its lease lapses, the stale reconciler resumes the claim once, and the
 next tick starts a new worker; `worker-start` says where to resume (a
 `resume` object: send the recorded follow-up, review nothing again;
@@ -793,7 +794,7 @@ accent-stone lines by copying `stone_catalog` entries with a quantity. Never
 edit a `rate_key`, `unit_cost`, `spot_price_per_gram`, `purity`, or `rate`
 that the helper filled, and never read the scripts' source to work out a
 format. If `unresolved` is not empty, the shop has no single rate for that
-line. That is a question for the owner, not a review:
+line; ask the owner:
 
 ```bash
 python3 {baseDir}/scripts/workflow_safe.py ask-missing-rate \
@@ -806,7 +807,7 @@ python3 {baseDir}/scripts/workflow_safe.py ask-missing-rate \
 ```
 
 It asks the owner which rate to use, parks the claim, and finalizes; reply
-`NO_REPLY`. Never ask the owner yourself or guess a rate. Otherwise finalize:
+`NO_REPLY`. Never guess a rate. Otherwise finalize:
 
 ```bash
 python3 {baseDir}/scripts/cost_components.py finalize \

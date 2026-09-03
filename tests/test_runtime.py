@@ -32,6 +32,7 @@ import customer_state_reset
 import inbox_claim
 import inbox_watcher
 import owner_questions
+import gmail_text
 import cost_components as cost_components_module
 import inbox_monitor
 import estimate_record
@@ -6693,12 +6694,13 @@ class WatcherBindingTests(unittest.TestCase):
         self.assertIn("do not read SKILL.md", message)
         self.assertIn("Branch: `record_status` is `awaiting_specs`", message)
         self.assertNotIn("post_estimate_artifact", message)
+        self.assertLess(len(message.encode("utf-8")), 17_000)
         post = cron_config.render_worker_message(
             Path("/workspace"), ROOT, "1a06400e05547c1c", "jed-0123456789abcdef", "/workspace/estimate-desk/work/abc",
             branch="post_estimate",
         )
         self.assertIn("post_estimate_artifact", post)
-        self.assertNotIn("cost_components.py prepare", post)
+        self.assertNotIn("workflow_safe.py price", post)
         self.assertLess(len(message.encode("utf-8")), 20_000)
         self.assertLess(len(post.encode("utf-8")), 20_000)
         self.assertEqual(cron_config.worker_branch("awaiting_specs"), "intake")
@@ -6954,12 +6956,16 @@ class WorkerTemplateTests(unittest.TestCase):
         self.assertIn("do not read SKILL.md", common)
         self.assertIn("manual-review-claimed", common)
         self.assertIn("not-an-inquiry", intake)
-        self.assertIn("cost_components.py prepare", intake)
-        self.assertIn("ask-missing-rate", intake)
+        self.assertIn("review-thread", intake)
+        self.assertIn("workflow_safe.py price", intake)
         self.assertIn("send-spec-followup", intake)
-        self.assertIn("request-approval", intake)
-        self.assertNotIn("invalid_cost_components` and let the owner", intake)
-        self.assertIn("finalize-post-estimate", post)
+        # The deterministic steps are inside the commands now, not in the prompt.
+        for gone in ("cost_components.py prepare", "cost_components.py finalize", "spot_price.py",
+                     "ask-missing-rate", "record-thread-review", "request-approval "):
+            self.assertNotIn(gone, intake)
+        self.assertNotIn("gmail_message", common)
+        self.assertIn("review-thread", post)
+        self.assertNotIn("finalize-post-estimate", post)
         self.assertIn("send-rendering", post)
         self.assertIn("request-appointment-approval", post)
         self.assertIn("rendering_wait.py wait", post)
@@ -7112,6 +7118,164 @@ class ReviewBriefTests(unittest.TestCase):
             self.assertEqual(quiet["message"], "NO_REPLY")
             loud = inbox_monitor.run_report(args.monitor_root, args.claim_root)
             self.assertIn("awaiting manual review", loud["message"])
+
+
+class BundledWorkerStepTests(unittest.TestCase):
+    """Fix 1 of the speed plan: the worker judges, the commands do the rest."""
+
+    def encoded(self, text: str) -> str:
+        import base64
+        return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
+
+    def test_thread_digest_decodes_bodies_in_order_and_marks_the_shop(self) -> None:
+        html_body = "<div>Hi,<br>size <b>6</b> please</div><style>x{}</style>"
+        thread = {"id": "thread-1", "messages": [
+            {"id": "m2", "internalDate": "2000", "payload": {"headers": [
+                {"name": "From", "value": "Shop <shop@example.com>"}, {"name": "Subject", "value": "Re: ring"}],
+                "mimeType": "text/html", "body": {"data": self.encoded(html_body)}}},
+            {"id": "m1", "internalDate": "1000", "payload": {"headers": [
+                {"name": "From", "value": "Pat <pat@example.net>"}, {"name": "Date", "value": "Wed"}],
+                "mimeType": "multipart/alternative", "parts": [
+                    {"mimeType": "text/plain", "body": {"data": self.encoded("I want a ring\r\n\r\n\r\nthanks")}},
+                    {"mimeType": "text/html", "body": {"data": self.encoded("<p>ignored</p>")}}]}},
+            {"id": "m3", "internalDate": "3000", "snippet": "just a snippet &amp; more", "payload": {"headers": []}},
+        ]}
+        digest = gmail_text.thread_digest(thread, "m3", "shop@example.com")
+        self.assertEqual(digest["message_ids"], ["m1", "m2", "m3"])
+        self.assertEqual(digest["messages"][0]["body"], "I want a ring\n\nthanks")
+        self.assertEqual(digest["messages"][0]["sent_by"], "customer")
+        self.assertEqual(digest["messages"][1]["sent_by"], "shop")
+        self.assertEqual(digest["messages"][1]["body"], "Hi,\nsize 6 please")
+        self.assertTrue(digest["messages"][2]["claimed"])
+        self.assertEqual(digest["messages"][2]["body"], "just a snippet & more")
+        long = {"id": "t", "messages": [{"id": "x", "payload": {"mimeType": "text/plain", "headers": [],
+                "body": {"data": self.encoded("a" * 7000)}}}]}
+        self.assertTrue(gmail_text.thread_digest(long, "x")["messages"][0]["body"].endswith("[truncated]"))
+
+    def parked_workspace(self, directory: str, spec: dict, profile: dict, sender: str = "pat@example.net"):
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        ws = Path(directory) / "ws"
+        desk = ws / "estimate-desk"
+        desk.mkdir(parents=True)
+        args, paths = helper.claimed(str(desk), sender=sender)
+        (desk / "monitor").rename(desk / "inbox-monitor")
+        (desk / "claims").rename(desk / "inbox-claims")
+        args.monitor_root = desk / "inbox-monitor"
+        args.claim_root = desk / "inbox-claims"
+        args.record_root = desk / "records"
+        args.shop_profile = desk / "shop-profile.json"
+        args.shop_profile.write_text(json.dumps(profile), encoding="utf-8")
+        with (
+            patch.object(workflow_safe, "mirror_record"),
+            patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+        ):
+            estimate_id = workflow_safe.intake(args)["estimate_id"]
+        activation_binding.create(
+            activation_binding.binding_path(args.monitor_root), "agent:main:kolo:direct:chat-1"
+        )
+        token = inbox_claim.authoritative_claim_token(args.claim_root, "inquiry-1")
+        inbox_claim.delegate(args.claim_root, "inquiry-1", token, 1020)
+        work_dir = Path(inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, "inquiry-1")["work_dir"])
+        workflow_safe.write_private(work_dir / "intake-result.json", {
+            "message_id": "inquiry-1", "estimate_id": estimate_id, "next_action": "review_thread",
+            "record_status": "awaiting_specs", "decision": "new_inquiry",
+        })
+        review = argparse.Namespace(
+            monitor_root=args.monitor_root, claim_root=args.claim_root, record_root=args.record_root,
+            shop_profile=args.shop_profile, message_id="inquiry-1", estimate_id=estimate_id,
+            review=work_dir / "review.json", runner=Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),
+        )
+        return args, estimate_id, work_dir, review
+
+    def profile(self, **stones) -> dict:
+        return {
+            "shop": {"outbound_mailbox": "shop@example.com"},
+            "pricing": {
+                "model": "cost_plus_multiplier", "markup_multiplier": 2.0,
+                "spot_metal": {"enabled": False},
+                "metal_per_gram": {"14k_white_gold": 60.0},
+                "stones_per_carat": {"lab_grown_sapphire": 450.0, "natural_diamond_melee": 900.0, **stones},
+                "fees": {"casting": 120.0, "setting": 80.0},
+                "bench_labor_per_hour": 90,
+                "typical_finished_weights": {"pendant": 4.5},
+            },
+            "defaults": {"stone_origin": "customer_choice"},
+        }
+
+    def test_worker_start_hands_over_the_thread_as_text(self) -> None:
+        spec = {"piece_type": "pendant", "metal": "14k white gold", "center_stone": {"type": "lab-grown sapphire", "carat": 0.75}, "setting_style": "bezel"}
+        with tempfile.TemporaryDirectory() as directory:
+            args, estimate_id, work_dir, review = self.parked_workspace(directory, spec, self.profile())
+            started = workflow_safe.worker_start(argparse.Namespace(
+                monitor_root=args.monitor_root, claim_root=args.claim_root, message_id="inquiry-1"
+            ))
+            self.assertEqual(started["thread"]["message_ids"], ["inquiry-1"])
+            self.assertEqual(started["thread"]["messages"][0]["subject"], "Custom ring inquiry")
+            self.assertTrue(started["thread"]["messages"][0]["claimed"])
+
+    def test_review_thread_prepares_a_followup_or_a_priced_skeleton(self) -> None:
+        spec = {"piece_type": "pendant", "metal": "14k white gold", "center_stone": {"type": "lab-grown sapphire", "carat": 0.75}}
+        with tempfile.TemporaryDirectory() as directory:
+            args, estimate_id, work_dir, review = self.parked_workspace(directory, spec, self.profile())
+            # Missing setting style: the command names the follow-up and where to write it.
+            workflow_safe.write_private(review.review, {"specification": spec, "missing_required_fields": ["setting_style"]})
+            out = workflow_safe.review_thread(review)
+            self.assertEqual(out["next"], "send_spec_followup")
+            self.assertEqual(out["missing_required_fields"], ["setting_style"])
+            self.assertTrue(out["initiating"])
+            self.assertTrue(out["customer_reply"].endswith("customer-reply.txt"))
+            record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
+            self.assertEqual(record["thread_reviews"][0]["thread_message_count"], 1)
+        with tempfile.TemporaryDirectory() as directory:
+            args, estimate_id, work_dir, review = self.parked_workspace(directory, {**spec, "setting_style": "bezel"}, self.profile())
+            workflow_safe.write_private(review.review, {"specification": {**spec, "setting_style": "bezel"}, "missing_required_fields": []})
+            out = workflow_safe.review_thread(review)
+            self.assertEqual(out["next"], "price")
+            self.assertIn("labor_lines[0].hours", out["fill"])
+            self.assertEqual(sorted(out["fee_catalog"]), ["casting", "setting"])
+            self.assertIn("natural_diamond_melee", out["stone_catalog"])
+            self.assertTrue((work_dir / "cost-skeleton.json").exists())
+            # Now the worker's only job: a few numbers.
+            with (
+                patch.object(workflow_safe.kolo_safe, "run_command",
+                             return_value=subprocess.CompletedProcess([], 0, '{"status":"ok","brief":{"briefId":"b-1"}}', "")) as brief,
+                patch.object(workflow_safe, "mirror_record"),
+            ):
+                priced = workflow_safe.price(argparse.Namespace(
+                    monitor_root=args.monitor_root, claim_root=args.claim_root, record_root=args.record_root,
+                    shop_profile=args.shop_profile, message_id="inquiry-1", estimate_id=estimate_id,
+                    finished_grams=4.5, bench_hours=3, center_carat=None, fees=["casting"], accents=["natural_diamond_melee:0.2"],
+                ))
+            self.assertEqual(priced["outcome"], "approval_requested")
+            self.assertEqual(priced["record_status"], "pending_approval")
+            self.assertEqual(brief.call_args.args[0][:2], ["kolo", "request-approval"])
+            lines = priced["cost_components"]
+            self.assertEqual(lines["metal_lines"][0]["quantity_grams"], 4.5)
+            self.assertEqual(lines["labor_lines"][0]["hours"], 3.0)
+            self.assertEqual([l["rate_key"] for l in lines["stone_lines"]], ["lab_grown_sapphire", "natural_diamond_melee"])
+            self.assertEqual(lines["other_hard_cost_lines"][0]["rate_key"], "casting")
+            self.assertGreater(priced["proposed_price"], 0)
+            claim = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(claim["status"], "processed")
+            with self.assertRaises(ValueError):
+                workflow_safe.price(argparse.Namespace(
+                    monitor_root=args.monitor_root, claim_root=args.claim_root, record_root=args.record_root,
+                    shop_profile=args.shop_profile, message_id="inquiry-1", estimate_id=estimate_id,
+                    finished_grams=4.5, bench_hours=3, center_carat=None, fees=["gold_plating"], accents=[],
+                ))
+
+    def test_review_thread_asks_the_owner_when_a_rate_is_missing(self) -> None:
+        spec = {"piece_type": "ring", "metal": "14k white gold", "center_stone": {"type": "natural emerald", "carat": 2}, "setting_style": "bezel", "finger_size": 6}
+        with tempfile.TemporaryDirectory() as directory:
+            args, estimate_id, work_dir, review = self.parked_workspace(directory, spec, self.profile())
+            workflow_safe.write_private(review.review, {"specification": spec, "missing_required_fields": []})
+            out = workflow_safe.review_thread(review)
+            self.assertEqual(out["next"], "done")
+            self.assertEqual(out["outcome"], "awaiting_owner")
+            self.assertEqual(out["rate_key"], "natural_emerald")
+            self.assertEqual(review.runner.call_args.args[0][:2], ["kolo", "notify-owner"])
+            claim = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(claim["status"], "awaiting_owner")
 
 
 class OwnerQuestionTests(unittest.TestCase):
