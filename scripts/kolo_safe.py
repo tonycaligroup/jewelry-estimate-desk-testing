@@ -244,6 +244,8 @@ REVIEW_REASON_TEXT = {
         "whether to ask again yourself or close it."
     ),
     "spot_price_unavailable": "The live metal price could not be fetched, so pricing stopped.",
+    "same_sender_question": "The desk asked you whether this is the same piece or a new one.",
+    "unclear_reply_question": "The desk asked you what this reply meant.",
     "customer_escalation": (
         "The customer is upset, disputing, or asking for something the desk must "
         "not answer on its own. Please take this conversation over."
@@ -364,6 +366,30 @@ def build_update_brief(brief_id: str, status: str, result: dict[str, Any]) -> li
         "--execution-result",
         json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     ]
+
+
+def owner_channel_args(monitor_root: Path | None) -> list[str]:
+    """Extra notify-owner arguments for the channel the owner chose at setup.
+
+    The shop profile may carry `owner_channel.session_key`; when it does, every
+    owner-facing message is addressed there instead of the default main chat.
+    """
+    if monitor_root is None:
+        return []
+    try:
+        profile = json.loads((monitor_root.resolve().parent / "shop-profile.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+    channel = profile.get("owner_channel") if isinstance(profile, dict) else None
+    if not isinstance(channel, dict):
+        return []
+    key = channel.get("session_key")
+    if isinstance(key, str) and key.strip():
+        try:
+            return ["--session-key", validate_session_key(key.strip())]
+        except ValueError:
+            return []
+    return []
 
 
 def build_notify_owner(estimate_id: str, event: str = "approval-ready") -> list[str]:
@@ -741,6 +767,50 @@ def review_brief_claimed(
     return result
 
 
+def review_notice_text(reason_code: str, headers: dict[str, str]) -> str:
+    who = _sender_display(headers.get("From", "")) if headers.get("From") else "a customer"
+    subject = " ".join((headers.get("Subject") or "").split())[:90]
+    about = f' about "{subject}"' if subject else ""
+    return (
+        f"I could not finish an email from {who}{about}. {review_reason_text(reason_code)} "
+        "I have stepped back from that thread; please handle it yourself."
+    )
+
+
+def review_notice_claimed(
+    monitor_root: Path,
+    claim_root: Path,
+    message_id: str,
+    claim_token: str,
+    reason_code: str,
+    headers: dict[str, str],
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> subprocess.CompletedProcess[str]:
+    """Tell the owner once, in their channel, that the desk stepped back."""
+    command = ["kolo", "notify-owner", "-m", review_notice_text(reason_code, headers), *owner_channel_args(monitor_root)]
+    acquired, state = inbox_claim.acquire_notification(
+        claim_root, message_id, claim_token,
+        f"manual_review_notice:{reason_code}:{message_id}",
+        notification_field="manual_review_notification",
+    )
+    if not acquired:
+        status = state["manual_review_notification"]["status"]
+        return subprocess.CompletedProcess(command, 0, f"notification already {status}\n", "")
+    try:
+        result = run_command(command, runner=runner)
+    except (OSError, subprocess.CalledProcessError):
+        inbox_claim.finish_notification(
+            claim_root, message_id, claim_token, "uncertain",
+            notification_field="manual_review_notification",
+        )
+        raise
+    inbox_claim.finish_notification(
+        claim_root, message_id, claim_token, "sent",
+        notification_field="manual_review_notification",
+    )
+    return result
+
+
 def manual_review_claimed(
     monitor_root: Path,
     claim_root: Path,
@@ -768,15 +838,11 @@ def manual_review_claimed(
     )
     binding = activation_binding.binding_path(monitor_root)
     if binding.exists():
-        result = review_brief_claimed(
-            monitor_root,
-            claim_root,
-            message_id,
-            claim_token,
-            queue_item["gmail_message_id_sha256"],
-            reason_code,
-            headers,
-            runner=runner,
+        # A desk failure is a plain notice in the owner's channel, not a
+        # card to click: who wrote, what stopped, and that the desk stepped
+        # back from the thread. Reviews that need a decision are questions.
+        result = review_notice_claimed(
+            monitor_root, claim_root, message_id, claim_token, reason_code, headers, runner=runner,
         )
     else:
         result = notify_monitor_claimed(

@@ -27,7 +27,21 @@ from pathlib import Path
 from typing import Any, Callable
 
 SCHEMA_VERSION = 1
-QUESTION_KINDS = {"missing_rate"}
+QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply"}
+DECISION_KINDS = {"same_sender", "unclear_reply"}
+# Fixed outcomes per decision kind, with the words an owner is likely to use.
+DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    "same_sender": {
+        "same": ("same", "same piece", "same one", "existing", "that one", "yes", "it is the same"),
+        "new": ("new", "new piece", "different", "separate", "another", "second", "no"),
+    },
+    "unclear_reply": {
+        "second_piece": ("second piece", "another piece", "new piece", "additional", "second one", "separate piece"),
+        "design_change": ("change", "changed", "changes", "modify", "modification", "different design", "update the design", "revise"),
+        "accepts": ("accept", "accepts", "accepted", "go ahead", "approved", "wants it", "yes to the estimate", "take it", "they want it"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
+    },
+}
 RATE_KINDS = {"metal_per_gram": "per gram", "stones_per_carat": "per carat"}
 REMINDER_AFTER_SECONDS = 24 * 60 * 60
 DELIVERY_STATUSES = {"pending", "sent", "uncertain"}
@@ -97,6 +111,10 @@ def validate(question: Any) -> dict[str, Any]:
     delivery = question["delivery"]
     if not isinstance(delivery, dict) or delivery.get("status") not in DELIVERY_STATUSES:
         raise ValueError("invalid question delivery state")
+    if question["kind"] in DECISION_KINDS:
+        options = question.get("options")
+        if not isinstance(options, dict) or not options or set(options) != set(DECISION_OPTIONS[question["kind"]]):
+            raise ValueError("decision question options do not match its kind")
     if question["kind"] == "missing_rate":
         rate = question.get("rate")
         if (
@@ -233,8 +251,94 @@ def create_missing_rate(
     return True, save(root, question)
 
 
-def notify_command(text: str) -> list[str]:
-    return ["kolo", "notify-owner", "-m", text]
+def create_decision(
+    root: Path,
+    kind: str,
+    estimate_id: str,
+    message_id: str,
+    text: str,
+    context: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """File a fixed-outcome question once; a repeat returns the existing one."""
+    if kind not in DECISION_KINDS:
+        raise ValueError("unsupported decision kind")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("decision text must be non-empty")
+    qid = question_id(estimate_id, kind, message_id)
+    path = question_path(root, qid)
+    if path.exists():
+        return False, load(root, qid)
+    question = {
+        "schema_version": SCHEMA_VERSION,
+        "question_id": qid,
+        "kind": kind,
+        "estimate_id": estimate_id,
+        "gmail_message_id": message_id,
+        "asked_at": _now(now).isoformat(),
+        "status": "open",
+        "options": {key: " / ".join(words[:2]) for key, words in DECISION_OPTIONS[kind].items()},
+        "context": dict(context or {}),
+        "delivery": {"status": "pending"},
+        "reminder": None,
+        "text": text.strip() + f" (Question {reference(qid)})",
+    }
+    return True, save(root, question)
+
+
+def match_option(question: dict[str, Any], answer: str) -> str:
+    """The one fixed outcome the owner's words point to; refuse when unclear."""
+    if question.get("kind") not in DECISION_KINDS:
+        raise ValueError("not a decision question")
+    words = " " + re.sub(r"[^a-z0-9' ]+", " ", (answer or "").lower()) + " "
+    words = re.sub(r"\s+", " ", words)
+    hits: dict[str, int] = {}
+    for key, phrases in DECISION_OPTIONS[question["kind"]].items():
+        if f" {key.replace('_', ' ')} " in words or f" {key} " in words:
+            hits[key] = hits.get(key, 0) + 2
+        for phrase in phrases:
+            if f" {phrase} " in words:
+                hits[key] = hits.get(key, 0) + 1
+    if not hits:
+        raise ValueError(
+            "could not tell which answer was meant; reply with one of: "
+            + ", ".join(DECISION_OPTIONS[question["kind"]])
+        )
+    ranked = sorted(hits.items(), key=lambda item: item[1], reverse=True)
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        raise ValueError(
+            "the answer matched more than one option; reply with one of: "
+            + ", ".join(DECISION_OPTIONS[question["kind"]])
+        )
+    return ranked[0][0]
+
+
+def record_decision(
+    root: Path, question: dict[str, Any], text: str, outcome: str, now: datetime | None = None
+) -> dict[str, Any]:
+    if question["status"] != "open":
+        raise ValueError("question is already answered")
+    if outcome not in DECISION_OPTIONS[question["kind"]]:
+        raise ValueError("outcome is not one of the question's options")
+    question["status"] = "answered"
+    question["answer"] = {
+        "text": text.strip()[:400],
+        "outcome": outcome,
+        "answered_at": _now(now).isoformat(),
+        "answered_by": "owner",
+    }
+    return save(root, question)
+
+
+def question_text(question: dict[str, Any], reminder: bool = False) -> str:
+    if question["kind"] == "missing_rate":
+        return missing_rate_text(question, reminder)
+    text = question["text"]
+    return f"Reminder, still waiting on this: {text}" if reminder else text
+
+
+def notify_command(text: str, extra: list[str] | None = None) -> list[str]:
+    return ["kolo", "notify-owner", "-m", text, *(extra or [])]
 
 
 def deliver(
@@ -243,6 +347,7 @@ def deliver(
     runner: Runner = subprocess.run,
     reminder: bool = False,
     now: datetime | None = None,
+    extra_args: list[str] | None = None,
 ) -> dict[str, Any]:
     """Send the question (or its one reminder) with write-ahead journaling.
 
@@ -254,7 +359,7 @@ def deliver(
     if reminder:
         if question["status"] != "open" or question.get("reminder"):
             return question
-        text = missing_rate_text(question, reminder=True)
+        text = question_text(question, reminder=True)
         question["reminder"] = {"status": "pending", "attempted_at": current}
         field = "reminder"
     else:
@@ -265,7 +370,7 @@ def deliver(
         field = "delivery"
     save(root, question)
     try:
-        runner(notify_command(text), check=True, capture_output=True, text=True, shell=False)
+        runner(notify_command(text, extra_args), check=True, capture_output=True, text=True, shell=False)
     except (OSError, subprocess.CalledProcessError):
         question[field]["status"] = "uncertain"
         save(root, question)
@@ -294,11 +399,12 @@ def due_reminders(
 
 
 def send_due_reminders(
-    root: Path, runner: Runner = subprocess.run, now: datetime | None = None
+    root: Path, runner: Runner = subprocess.run, now: datetime | None = None,
+    extra_args: list[str] | None = None,
 ) -> int:
     sent = 0
     for question in due_reminders(root, now):
-        deliver(root, question, runner=runner, reminder=True, now=now)
+        deliver(root, question, runner=runner, reminder=True, now=now, extra_args=extra_args)
         sent += 1
     return sent
 

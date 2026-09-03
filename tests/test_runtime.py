@@ -805,21 +805,18 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
                 assessment="changed",
                 changed_fields=["metal"],
             )
+            # A reply that may change the design is a question to the owner, not a review.
+            asked = {"outcome": "awaiting_owner", "question_id": "q-000000000000", "reference": "000000",
+                     "delivery": "sent", "next_action": "done"}
             with (
                 patch.object(workflow_safe, "mirror_record"),
-                patch.object(
-                    workflow_safe.kolo_safe, "manual_review_claimed"
-                ) as manual,
+                patch.object(workflow_safe, "ask_unclear_reply", return_value=asked) as ask,
             ):
                 result = workflow_safe.finalize_post_estimate(args)
-            manual.assert_called_once_with(
-                args.monitor_root,
-                args.claim_root,
-                args.message_id,
-                None,
-                "design_change_detected",
-            )
-            self.assertEqual(result["next_action"], "manual_review")
+            ask.assert_called_once()
+            self.assertEqual(ask.call_args.args[2], "design_change_detected")
+            self.assertEqual(result["next_action"], "done")
+            self.assertEqual(result["outcome"], "design_change_detected")
 
     def test_rendering_and_appointment_commands_require_the_bound_intent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6310,14 +6307,20 @@ class IntakeTests(unittest.TestCase):
             args, _paths = self.claimed(directory)
             other = gmail_route.build_route(self.gmail_message("other-1", "other-thread"), "shop@example.com")
             estimate_record.create_initial_record(args.record_root, other, 900)
-            with (
-                patch.object(workflow_safe.kolo_safe, "manual_review_claimed") as manual,
-                patch.object(workflow_safe, "mirror_record") as mirror,
-            ):
+            # Same customer on a new thread: a question to the owner, not a review.
+            args.runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            with patch.object(workflow_safe, "mirror_record") as mirror:
                 result = workflow_safe.intake(args)
             self.assertEqual(result["decision"], "manual_review")
             self.assertEqual(result["reason_code"], "identity_has_active_estimate_on_another_thread")
-            self.assertEqual(manual.call_args.args[4], "identity_has_active_estimate_on_another_thread")
+            self.assertEqual(result["outcome"], "awaiting_owner")
+            sent = args.runner.call_args.args[0]
+            self.assertEqual(sent[:3], ["kolo", "notify-owner", "-m"])
+            self.assertIn("same piece, or a new one", sent[3])
+            self.assertIn("Pat Customer", sent[3])
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "awaiting_owner")
+            self.assertEqual(inbox_monitor.list_manual_reviews(args.monitor_root), [])
             mirror.assert_not_called()
 
     def test_intake_cli_prints_the_result(self) -> None:
@@ -7097,18 +7100,20 @@ class ReviewBriefTests(unittest.TestCase):
                 args.monitor_root, args.claim_root, "inquiry-1", None, "uncertain_classification", runner=runner
             )
             self.assertEqual(item["processing_status"], "manual_review")
+            # A desk failure is a plain notice in the owner's channel, never a card.
             argv = runner.call_args.args[0]
-            self.assertEqual(argv[1], "request-approval")
-            details = json.loads(argv[argv.index("--details") + 1])
-            self.assertIn("sam@shop.example", details["From"])
-            self.assertEqual(details["Subject"], "Custom ring inquiry")
+            self.assertEqual(argv[:3], ["kolo", "notify-owner", "-m"])
+            self.assertIn("Pat Customer", argv[3])
+            self.assertIn("Custom ring inquiry", argv[3])
+            self.assertIn("stepped back", argv[3])
+            self.assertNotIn("--session-key", argv)
             state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
             self.assertEqual(state["manual_review_notification"]["status"], "sent")
-            # A repeat never files a second brief.
+            # A repeat never sends a second notice.
             runner.reset_mock()
-            kolo_safe.review_brief_claimed(
+            kolo_safe.review_notice_claimed(
                 args.monitor_root, args.claim_root, "inquiry-1", state["claim_token"],
-                item["gmail_message_id_sha256"], "uncertain_classification", {}, runner=runner,
+                "uncertain_classification", {}, runner=runner,
             )
             runner.assert_not_called()
 
@@ -7527,6 +7532,85 @@ class InlinePipelineTests(unittest.TestCase):
             with patch.object(inbox_watcher.pipeline, "process_claim", return_value={"outcome": "needs_worker", "branch": "post_estimate", "next_action": "send_rendering"}):
                 summary, runner = watcher.run_tick(ws)
             self.assertEqual(len(summary["workers"]), 1)
+
+
+class DecisionQuestionTests(unittest.TestCase):
+    """Reviews that need the owner's judgment are questions with fixed outcomes."""
+
+    def test_match_option_reads_plain_answers_and_refuses_ambiguity(self) -> None:
+        q = {"kind": "same_sender", "options": {"same": "x", "new": "y"}}
+        self.assertEqual(owner_questions.match_option(q, "new"), "new")
+        self.assertEqual(owner_questions.match_option(q, "It's the same piece, I'll deal with it"), "same")
+        self.assertEqual(owner_questions.match_option(q, "Separate estimate please"), "new")
+        with self.assertRaises(ValueError):
+            owner_questions.match_option(q, "hmm not sure")
+        u = {"kind": "unclear_reply", "options": {k: "" for k in owner_questions.DECISION_OPTIONS["unclear_reply"]}}
+        self.assertEqual(owner_questions.match_option(u, "they accept, go ahead"), "accepts")
+        self.assertEqual(owner_questions.match_option(u, "I will handle it"), "handle_myself")
+        self.assertEqual(owner_questions.match_option(u, "second piece"), "second_piece")
+        self.assertEqual(owner_questions.match_option(u, "it's a change to the design"), "design_change")
+
+    def parked_same_sender(self, directory: str):
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        ws = Path(directory) / "ws"
+        desk = ws / "estimate-desk"
+        desk.mkdir(parents=True)
+        args, _paths = helper.claimed(str(desk))
+        (desk / "monitor").rename(desk / "inbox-monitor")
+        (desk / "claims").rename(desk / "inbox-claims")
+        args.monitor_root = desk / "inbox-monitor"
+        args.claim_root = desk / "inbox-claims"
+        args.record_root = desk / "records"
+        args.shop_profile = desk / "shop-profile.json"
+        other = gmail_route.build_route(helper.gmail_message("other-1", "other-thread"), "shop@example.com")
+        existing = estimate_record.create_initial_record(args.record_root, other, 900)
+        args.runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+        with patch.object(workflow_safe, "mirror_record"):
+            asked = workflow_safe.intake(args)
+        self.assertEqual(asked["outcome"], "awaiting_owner")
+        return ws, args, existing, asked
+
+    def test_same_sender_new_reopens_and_quotes_a_separate_estimate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, existing, asked = self.parked_same_sender(directory)
+            spawner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-2"}', ""))
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                out = workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=asked["reference"], answer="new piece",
+                    openclaw="openclaw", runner=spawner,
+                ))
+            self.assertEqual(out["decision"], "new")
+            self.assertEqual(out["intake"]["decision"], "new_inquiry")
+            self.assertEqual(out["worker_job_id"], "job-2")
+            new_id = out["intake"]["estimate_id"]
+            self.assertNotEqual(new_id, existing["estimate_id"])
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "processing")
+            self.assertTrue(inbox_claim.recovery_lease_active(state))
+            root = owner_questions.questions_root(args.monitor_root)
+            self.assertEqual(owner_questions.find(root, asked["reference"])["answer"]["outcome"], "new")
+
+    def test_same_sender_same_closes_the_claim_without_a_card(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, existing, asked = self.parked_same_sender(directory)
+            out = workflow_safe.answer_question(argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=None, answer="same one, I'll reply", openclaw="openclaw",
+                runner=Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),
+            ))
+            self.assertEqual(out["decision"], "same")
+            self.assertEqual(out["claim"], "owner_decided_same")
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "manual_review")
+            self.assertEqual(state["reason_code"], "owner_decided_same")
+            self.assertEqual(inbox_monitor.list_manual_reviews(args.monitor_root), [])
+            with self.assertRaises(ValueError):
+                workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=None, answer="same", openclaw="openclaw",
+                    runner=Mock(),
+                ))
 
 
 class OwnerQuestionTests(unittest.TestCase):

@@ -216,7 +216,8 @@ def tick(
     # A question the owner has not answered for a working day gets one
     # reminder, then waits (WORKFLOW.md 6.10).
     summary["reminders"] = owner_questions.send_due_reminders(
-        owner_questions.questions_root(p["monitor_root"]), runner=runner
+        owner_questions.questions_root(p["monitor_root"]), runner=runner,
+        extra_args=kolo_safe.owner_channel_args(p["monitor_root"]),
     )
     discovery = gmail_fetch.discover(p["monitor_root"], token)
     summary["discovered"] = discovery.get("discovered", 0)
