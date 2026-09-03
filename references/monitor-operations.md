@@ -108,11 +108,13 @@ every pre-activation inquiry manually.
 
 ## Owner channel
 
-Questions and finalized notices go to the main Kolo chat unless the shop
-profile carries `owner_channel` (`{"kind": "sms" | "slack" | "kolo",
-"session_key": "<session key from kolo list-chats>"}`); then every
-`kolo notify-owner` call adds `--session-key`. Approval briefs always go to
-the approval queue. Change it by editing the profile; no rebind.
+Questions, notices, and rendering previews go to the thread that activated
+the desk (the session in the activation binding, where the approval cards
+appear) unless the shop profile carries `owner_channel` (`{"kind": "sms" |
+"slack" | "kolo", "session_key": "<session key from kolo list-chats>"}`);
+every `kolo notify-owner` call adds `--session-key` either way. Approval
+briefs always go to the approval queue. Change it by editing the profile; no
+rebind.
 
 ## Inline judgment (no worker jobs)
 

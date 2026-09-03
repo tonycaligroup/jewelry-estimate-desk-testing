@@ -7107,7 +7107,8 @@ class ReviewBriefTests(unittest.TestCase):
             self.assertIn("Pat Customer", argv[3])
             self.assertIn("Custom ring inquiry", argv[3])
             self.assertIn("stepped back", argv[3])
-            self.assertNotIn("--session-key", argv)
+            # It lands in the thread that activated the desk, beside the approval cards.
+            self.assertEqual(argv[-2:], ["--session-key", "agent:main:kolo:direct:chat-1"])
             state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
             self.assertEqual(state["manual_review_notification"]["status"], "sent")
             # A repeat never sends a second notice.
@@ -7664,6 +7665,22 @@ class DecisionQuestionTests(unittest.TestCase):
                     workspace=ws, base_dir=ROOT, question=None, answer="same", openclaw="openclaw",
                     runner=Mock(),
                 ))
+
+
+class OwnerChannelDefaultTests(unittest.TestCase):
+    def test_owner_messages_default_to_the_activation_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            desk = Path(directory) / "estimate-desk"
+            monitor_root = desk / "inbox-monitor"
+            monitor_root.mkdir(parents=True)
+            (desk / "shop-profile.json").write_text(json.dumps({"business_name": "Shop"}), encoding="utf-8")
+            self.assertEqual(kolo_safe.owner_channel_args(monitor_root), [])
+            activation_binding.create(activation_binding.binding_path(monitor_root), "agent:main:kolo:direct:chat-9")
+            self.assertEqual(kolo_safe.owner_channel_args(monitor_root), ["--session-key", "agent:main:kolo:direct:chat-9"])
+            (desk / "shop-profile.json").write_text(
+                json.dumps({"owner_channel": {"kind": "sms", "session_key": "agent:main:sms:direct:owner-1"}}), encoding="utf-8"
+            )
+            self.assertEqual(kolo_safe.owner_channel_args(monitor_root), ["--session-key", "agent:main:sms:direct:owner-1"])
 
 
 class PlainTextMailTests(unittest.TestCase):

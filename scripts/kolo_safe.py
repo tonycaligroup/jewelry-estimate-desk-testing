@@ -500,15 +500,27 @@ def owner_channel_args(monitor_root: Path | None) -> list[str]:
     except (OSError, ValueError, json.JSONDecodeError):
         return []
     channel = profile.get("owner_channel") if isinstance(profile, dict) else None
-    if not isinstance(channel, dict):
-        return []
-    key = channel.get("session_key")
+    key = channel.get("session_key") if isinstance(channel, dict) else None
+    if not (isinstance(key, str) and key.strip()):
+        # No channel chosen at setup: use the thread that activated the desk,
+        # which is where the approval cards appear, so everything the owner
+        # sees is in one place.
+        key = _activation_session_key(monitor_root)
     if isinstance(key, str) and key.strip():
         try:
             return ["--session-key", validate_session_key(key.strip())]
         except ValueError:
             return []
     return []
+
+
+def _activation_session_key(monitor_root: Path) -> str | None:
+    try:
+        import activation_binding
+
+        return activation_binding.load(activation_binding.binding_path(monitor_root))["session_key"]
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, ImportError):
+        return None
 
 
 def build_notify_owner(estimate_id: str, event: str = "approval-ready") -> list[str]:
