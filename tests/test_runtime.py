@@ -7289,6 +7289,10 @@ class JudgeTests(unittest.TestCase):
         return Mock(side_effect=results)
 
     def test_unwrap_handles_the_cli_envelopes_and_raw_text(self) -> None:
+        documented = '{"ok": true, "capability": "model.run", "transport": "local", "provider": "litellm-fireworks", "model": "qwen-3-7-plus", "attempts": [], "outputs": [{"text": "{\\"kind\\": \\"escalation\\"}", "mediaUrl": null}]}'
+        self.assertEqual(judge._unwrap(documented), '{"kind": "escalation"}')
+        with self.assertRaises(judge.JudgmentError):
+            judge._unwrap('{"ok": false, "error": "provider unreachable", "outputs": []}')
         self.assertEqual(judge._unwrap('{"text": "hello"}'), "hello")
         self.assertEqual(judge._unwrap('{"result": {"output": "nested"}}'), "nested")
         self.assertEqual(judge._unwrap('{"choices": [{"message": {"content": "deep"}}]}'), "deep")
@@ -7308,7 +7312,10 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(runner.call_count, 2)
         second_prompt = runner.call_args_list[1].args[0][-1]
         self.assertIn("Your previous answer was rejected", second_prompt)
-        self.assertEqual(runner.call_args_list[0].args[0][:5], ["openclaw", "infer", "model", "run", "--model"])
+        argv = runner.call_args_list[0].args[0]
+        self.assertEqual(argv[:5], ["openclaw", "infer", "model", "run", "--model"])
+        self.assertEqual(argv[argv.index("--thinking") + 1], "off")
+        self.assertIn("--json", argv)
         bad = self.runner_returning("garbage", "more garbage")
         with self.assertRaises(judge.JudgmentError) as ctx:
             judge.ask_json("Q", judge.check_triage, runner=bad, openclaw="openclaw")
