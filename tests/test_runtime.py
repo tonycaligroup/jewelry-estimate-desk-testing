@@ -7259,6 +7259,58 @@ class OwnerQuestionTests(unittest.TestCase):
                     workspace=ws, base_dir=ROOT, question=None, answer="450", openclaw="openclaw", runner=spawner,
                 ))
 
+    def test_answer_question_refuses_a_hand_edited_record_before_saving_anything(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            desk = ws / "estimate-desk"
+            desk.mkdir(parents=True)
+            args, _paths = helper.claimed(str(desk), sender="tony@example.net")
+            (desk / "monitor").rename(desk / "inbox-monitor")
+            (desk / "claims").rename(desk / "inbox-claims")
+            args.monitor_root = desk / "inbox-monitor"
+            args.claim_root = desk / "inbox-claims"
+            args.record_root = desk / "records"
+            args.shop_profile = desk / "shop-profile.json"
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                estimate_id = workflow_safe.intake(args)["estimate_id"]
+            estimate_record.record_thread_review(
+                args.record_root, estimate_id,
+                {"thread_id": "thread-1", "source_message_id": "inquiry-1",
+                 "message_ids": ["inquiry-1"], "specification": self.spec(),
+                 "missing_required_fields": []},
+            )
+            args.shop_profile.write_text(json.dumps(self.profile()), encoding="utf-8")
+            notify = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            out = workflow_safe.ask_missing_rate(argparse.Namespace(
+                monitor_root=args.monitor_root, claim_root=args.claim_root,
+                record_root=args.record_root, shop_profile=args.shop_profile,
+                message_id="inquiry-1", estimate_id=estimate_id, runner=notify,
+            ))
+            # A chat session "helped" by writing a status the desk never uses.
+            path = estimate_record.record_path(args.record_root, estimate_id)
+            record = json.loads(path.read_text(encoding="utf-8"))
+            record["status"] = "specs_complete"
+            record["proposed_price"] = 4563.12
+            path.write_text(json.dumps(record), encoding="utf-8")
+            spawner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-9"}', ""))
+            with self.assertRaisesRegex(ValueError, "repair it before answering"):
+                workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=out["reference"], answer="700",
+                    openclaw="openclaw", runner=spawner,
+                ))
+            # Nothing moved: question still open, no rate saved, claim still parked, no worker.
+            root = owner_questions.questions_root(args.monitor_root)
+            self.assertEqual(owner_questions.find(root, out["reference"])["status"], "open")
+            profile = json.loads(args.shop_profile.read_text(encoding="utf-8"))
+            self.assertNotIn("lab_grown_sapphire", profile["pricing"]["stones_per_carat"])
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "awaiting_owner")
+            spawner.assert_not_called()
+
     def test_watcher_tick_sends_due_reminders(self) -> None:
         watcher = WatcherTickTests("test_tick_closes_machine_mail_and_spawns_one_worker_per_inquiry")
         watcher.setUp()
