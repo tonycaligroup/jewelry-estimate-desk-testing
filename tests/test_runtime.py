@@ -6883,10 +6883,28 @@ class ReviewBriefTests(unittest.TestCase):
             {"From": "Pat <pat@example.net>", "Subject": "Ring", "Date": "Wed, 2 Sep 2026"},
         )
         self.assertEqual(argv[:2], ["kolo", "request-approval"])
+        # The title names the sender and subject so the owner can find the email.
+        self.assertEqual(argv[argv.index("--action") + 1], "Check email from Pat: Ring")
+        reasoning = argv[argv.index("--reasoning") + 1]
+        self.assertIn("Approve = yes", reasoning)
+        self.assertIn("Reject = not yet", reasoning)
         details = json.loads(argv[argv.index("--details") + 1])
         self.assertTrue(all(isinstance(v, str) for v in details.values()))
         self.assertIn("rate card", details["Why it needs you"])
+        self.assertIn("Open this email", details["What to do"])
+        self.assertEqual(details["From"], "Pat <pat@example.net>")
+        self.assertEqual(details["Subject"], "Ring")
+        self.assertTrue(details["Approve"].startswith("Yes"))
+        self.assertTrue(details["Reject"].startswith("Not yet"))
         self.assertEqual(details["Review key"], key[:12])
+        # Without headers the title still tells the owner to check the inbox.
+        bare = kolo_safe.build_request_review_approval(
+            key, "invalid_cost_components", "msg-1", "agent:main:kolo:direct:chat-1"
+        )
+        self.assertEqual(bare[bare.index("--action") + 1], "Check email from an unknown sender")
+        self.assertEqual(json.loads(bare[bare.index("--details") + 1])["From"], "unknown")
+        self.assertEqual(kolo_safe._sender_display('"Doe, Pat" <pat@example.net>'), "Doe, Pat")
+        self.assertEqual(kolo_safe._sender_display("pat@example.net"), "pat@example.net")
         payload = json.loads(argv[argv.index("--execution-payload") + 1])
         self.assertEqual(payload, {
             "action_type": "manual_review", "review_key": key,
@@ -6895,6 +6913,37 @@ class ReviewBriefTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--session-key") + 1], "agent:main:kolo:direct:chat-1")
         with self.assertRaises(ValueError):
             kolo_safe.build_request_review_approval("short", "x_y", "m", "agent:main:kolo:direct:chat-1")
+
+    def test_headers_fall_back_to_the_work_file_and_then_the_record(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            args, paths = helper.claimed(directory, sender="sam@shop.example")
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                workflow_safe.intake(args)
+            # While processing: read from the claim work directory.
+            found = kolo_safe.claimed_message_headers(args.monitor_root, args.claim_root, "inquiry-1")
+            self.assertIn("sam@shop.example", found["From"])
+            # After the claim is terminal the work file, if still present, is used.
+            inbox_monitor.finalize_item(
+                args.monitor_root, "inquiry-1", args.claim_root,
+                inbox_claim.authoritative_claim_token(args.claim_root, "inquiry-1"),
+                "manual_review", "uncertain_classification",
+            )
+            work_dir = Path(paths["work_dir"])
+            if work_dir.exists():
+                found = kolo_safe.claimed_message_headers(args.monitor_root, args.claim_root, "inquiry-1")
+                self.assertEqual(found.get("Subject"), "Custom ring inquiry")
+                shutil.rmtree(work_dir)
+            # With no work file left, the estimate record's route still names the sender.
+            found = kolo_safe.claimed_message_headers(args.monitor_root, args.claim_root, "inquiry-1")
+            self.assertEqual(found.get("From"), "sam@shop.example")
+            self.assertEqual(found.get("Subject"), "Custom ring inquiry")
+            self.assertEqual(
+                kolo_safe.claimed_message_headers(args.monitor_root, args.claim_root, "never-seen"), {}
+            )
 
     def test_manual_review_files_a_brief_when_the_approver_is_bound(self) -> None:
         helper = IntakeTests("test_intake_cli_prints_the_result")

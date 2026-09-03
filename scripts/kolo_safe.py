@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import activation_binding
+import estimate_record
 import inbox_claim
 import inbox_monitor
 
@@ -188,8 +189,9 @@ REVIEW_REASON_TEXT = {
         "or asks for something new."
     ),
     "invalid_cost_components": (
-        "Pricing needs a rate that is not on the rate card. Add the rate to the "
-        "shop settings, then approve so the desk can price it."
+        "Pricing stopped because a rate is missing from the rate card. Add the "
+        "rate in the shop settings and answer the customer yourself; the desk "
+        "does not retry on its own."
     ),
     "uncorrelated_dsn": "A delivery failure bounced back that does not match a known estimate.",
     "missing_thread_ownership": "The desk could not prove which estimate this thread belongs to.",
@@ -206,6 +208,16 @@ def review_reason_text(reason_code: str) -> str:
     return REVIEW_REASON_TEXT.get(reason_code, reason_code.replace("_", " "))
 
 
+def _sender_display(value: str) -> str:
+    """'Pat Doe <pat@example.net>' -> 'Pat Doe'; bare addresses pass through."""
+    value = " ".join((value or "").split())
+    match = re.fullmatch(r'"?([^"<]*?)"?\s*<([^>]+)>', value)
+    if match:
+        name, address = match.group(1).strip(), match.group(2).strip()
+        return name or address
+    return value
+
+
 def build_request_review_approval(
     review_key: str,
     reason_code: str,
@@ -216,11 +228,13 @@ def build_request_review_approval(
 ) -> list[str]:
     """File one manual-review item as a Kolo approval brief.
 
-    The review queue inside the skill is invisible unless the owner asks for
-    it. The approval queue is where the owner already looks, so every review
-    becomes a brief there: flat text fields only (nested objects render as
-    noise in the card), the reason in plain words, and an execution payload
-    that lets the executor close the review when the owner approves.
+    The approval card is a yes/no control, so the brief asks one yes/no
+    question: did you handle this email? The title names the sender and
+    subject so the owner can find the email in the shop inbox without
+    opening anything else; the details repeat them as flat text fields
+    (nested objects render as noise in the card), say what to do, and spell
+    out what approve and reject mean. The execution payload lets the
+    approval executor close the review when the owner approves.
     """
     if not re.fullmatch(r"[0-9a-f]{64}", review_key or ""):
         raise ValueError("review_key must be a lowercase SHA-256 value")
@@ -228,14 +242,26 @@ def build_request_review_approval(
         raise ValueError("invalid review reason code")
     session_key = validate_session_key(session_key)
     headers = headers or {}
+    sender = (headers.get("From") or "").strip()
+    subject = " ".join((headers.get("Subject") or "").split())
+    received = (headers.get("Date") or "").strip()
+    who = _sender_display(sender)[:60] if sender else "an unknown sender"
+    title = f"Check email from {who}"
+    if subject:
+        title += f": {subject[:90]}"
+    why = review_reason_text(reason_code)
     details = {
-        "Why it needs you": review_reason_text(reason_code),
-        "From": (headers.get("From") or "unknown")[:120],
-        "Subject": (headers.get("Subject") or "unknown")[:160],
-        "Received": (headers.get("Date") or "unknown")[:60],
+        "What to do": (
+            "Open this email in the shop inbox and handle it yourself, "
+            "then answer here."
+        ),
+        "From": sender[:120] or "unknown",
+        "Subject": subject[:160] or "unknown",
+        "Received": received[:60] or "unknown",
+        "Why it needs you": why,
+        "Approve": "Yes, I handled this email. The desk closes the review.",
+        "Reject": "Not yet. The review stays on the list and nothing changes.",
         "Review key": review_key[:12],
-        "Approve means": "I have handled this; close the review.",
-        "Reject means": "Leave it open in the review list.",
     }
     payload = {
         "action_type": "manual_review",
@@ -249,10 +275,11 @@ def build_request_review_approval(
         "--agent-id",
         agent_id,
         "--action",
-        f"Manual review \u2014 {reason_code.replace('_', ' ')}",
+        title,
         "--reasoning",
-        "A message needs a human decision before the desk can act. "
-        "Approve when you have handled it; reject to keep it open.",
+        f"{why} Open the email in the shop inbox and handle it yourself. "
+        "Approve = yes, I handled it (the desk closes this review). "
+        "Reject = not yet (it stays on the review list).",
         "--risk-level",
         "low",
         "--details",
@@ -562,23 +589,58 @@ def notify_monitor_claimed(
     return result
 
 
+def _headers_from_gmail_message(message: dict[str, Any]) -> dict[str, str]:
+    headers = (message.get("payload") or {}).get("headers") or []
+    wanted: dict[str, str] = {}
+    for header in headers:
+        if isinstance(header, dict) and header.get("name") in ("From", "Subject", "Date"):
+            value = header.get("value")
+            if isinstance(value, str) and header["name"] not in wanted:
+                wanted[header["name"]] = value.strip()
+    return wanted
+
+
 def claimed_message_headers(
     monitor_root: Path, claim_root: Path, message_id: str
 ) -> dict[str, str]:
-    """Best-effort From/Subject/Date of the claimed message, for the brief only."""
+    """Best-effort From/Subject/Date of the claimed message, for the brief only.
+
+    Reads the fetched message in the claim work directory while the claim is
+    processing; after that (a backfilled brief, a re-filed one) it falls back
+    to the work file if it still exists, then to the estimate record that the
+    message opened, so the owner always sees who wrote and about what.
+    """
     try:
         paths = inbox_monitor.prepare_claim_work(monitor_root, claim_root, message_id)
-        message = json.loads(Path(paths["gmail_message"]).read_text(encoding="utf-8"))
-        headers = (message.get("payload") or {}).get("headers") or []
-        wanted: dict[str, str] = {}
-        for header in headers:
-            if isinstance(header, dict) and header.get("name") in ("From", "Subject", "Date"):
-                value = header.get("value")
-                if isinstance(value, str) and header["name"] not in wanted:
-                    wanted[header["name"]] = value.strip()
-        return wanted
+        message_path = Path(paths["gmail_message"])
     except (OSError, ValueError, json.JSONDecodeError, KeyError):
+        message_path = (
+            monitor_root.resolve().parent
+            / "work"
+            / inbox_monitor.message_key(message_id)
+            / inbox_monitor.WORK_ARTIFACTS["gmail_message"]
+        )
+    try:
+        message = json.loads(message_path.read_text(encoding="utf-8"))
+        found = _headers_from_gmail_message(message)
+        if found:
+            return found
+    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+        pass
+    try:
+        record_root = monitor_root.resolve().parent / "records"
+        matches = estimate_record.lookup_by_initiating_message(record_root, message_id)
+    except (OSError, ValueError, KeyError):
         return {}
+    if not matches:
+        return {}
+    route = matches[0].get("route") or {}
+    found = {}
+    if isinstance(route.get("recipient"), str) and route["recipient"]:
+        found["From"] = route["recipient"]
+    if isinstance(route.get("original_subject"), str) and route["original_subject"]:
+        found["Subject"] = route["original_subject"]
+    return found
 
 
 def review_brief_claimed(
