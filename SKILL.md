@@ -151,12 +151,13 @@ location and collect:
 6. Whether spot metal pricing is enabled; provider (`stackerscan` or
    `gold-api`), refresh frequency (`per_estimate`, `daily`, or `weekly`), and
    unit. StackerScan is the default and supports grams; gold-api uses troy oz.
-7. Requested owner-notification channel: main Kolo chat, email, or SMS, plus
-   the destination for email/SMS. Store the request, but set `active_channel`
-   to `kolo_chat`: this Kolo release has no supported durable owner-email or
-   owner-SMS delivery mechanism. Never attempt or imply those channels are
-   active until a future supported integration is configured and tested. This
-   request never changes the customer's original-channel routing.
+7. The owner's channel for questions and finalized notices: the main Kolo
+   chat (default), or an SMS or Slack chat the owner already has with Kolo.
+   Run `kolo list-chats`, let the owner pick the chat, and store its session
+   key as `owner_channel.session_key` (kind under `owner_channel.kind`) in the
+   shop profile; every owner message then goes there. Leave `owner_channel`
+   absent for the main chat. Approval briefs always go to the approval queue.
+   This never changes the customer's original-channel routing.
 8. Trust stage. Default to Stage 1.
 9. Booking mode, IANA timezone, and near-term meeting-offer window. Default the
    window to 7 days so the first meeting is offered ASAP, never near delivery.
@@ -520,9 +521,10 @@ For each returned message:
      --reason-code '<fixed_reason>'
    ```
 
-   That notification tells the owner to ask Kolo for unresolved Jewelry
-   Estimate Desk reviews; it contains no customer data. The terminal claim is
-   authoritative for processing side effects and the queue is authoritative
+   That is for failures of the desk itself; it sends the owner one plain
+   notice (who wrote, what stopped, that the desk stepped back). Anything
+   that needs the owner's judgment is a question, never a review. The
+   terminal claim is authoritative for processing side effects and the queue
    only for discovery. Repeating the same terminal outcome with the same token
    is a successful no-op. A different token, outcome, or reason remains an
    error. Any impossible mismatch becomes manual review—never a customer send.
@@ -794,20 +796,8 @@ accent-stone lines by copying `stone_catalog` entries with a quantity. Never
 edit a `rate_key`, `unit_cost`, `spot_price_per_gram`, `purity`, or `rate`
 that the helper filled, and never read the scripts' source to work out a
 format. If `unresolved` is not empty, the shop has no single rate for that
-line; ask the owner:
-
-```bash
-python3 {baseDir}/scripts/workflow_safe.py ask-missing-rate \
-  --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-  --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-  --record-root '<absolute-workspace>/estimate-desk/records' \
-  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
-  --message-id '<gmail-id>' \
-  --estimate-id '<estimate-id>'
-```
-
-It asks the owner which rate to use, parks the claim, and finalizes; reply
-`NO_REPLY`. Never guess a rate. Otherwise finalize:
+line; the worker asks the owner with `workflow_safe.py ask-missing-rate`
+(never guess a rate, never file a review for one). Otherwise finalize:
 
 ```bash
 python3 {baseDir}/scripts/cost_components.py finalize \
@@ -1012,9 +1002,11 @@ and never resolve a review the owner did not approve.
 
 ### Handling the owner's answer to a desk question in the main Kolo session
 
-When pricing lacks a rate, the desk asks the owner here in plain words with a
-six-character question code and parks the claim. When the owner replies with
-a number, run exactly one command, words verbatim:
+The desk asks the owner questions in plain words with a six-character code
+and parks the claim: which rate to use, whether a new thread from a known
+customer is the same piece or a new one, what an unclear reply after an
+estimate meant. When the owner answers, run exactly one command, words
+verbatim, whatever the question was:
 
 ```bash
 python3 {baseDir}/scripts/workflow_safe.py answer-question \
@@ -1023,11 +1015,11 @@ python3 {baseDir}/scripts/workflow_safe.py answer-question \
   --answer '<the owner's reply, verbatim>'
 ```
 
-Omit `--question` when exactly one question is open. It saves the rate,
-reopens the claim, and starts the worker; the price still arrives as an
-approval brief. If it refuses (no number, two numbers, several open
-questions, an invalid record), tell the owner what it said and wait; never
-pick a number or re-run with a different answer.
+Omit `--question` when exactly one question is open. It applies the answer
+(saves the rate and prices; quotes a new piece; or closes the thread to the
+owner) and reports what it did. If it refuses (no number, an unclear answer,
+several open questions, an invalid record), tell the owner what it said and
+wait; never pick an answer or re-run with a different one.
 
 ### Handling approved appointment requests in the main Kolo session
 

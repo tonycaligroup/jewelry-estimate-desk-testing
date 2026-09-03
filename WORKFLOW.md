@@ -434,11 +434,12 @@ closed by follow-up changes:
 - Stage 3 currently books meetings autonomously inside declared windows. This
   document requires owner approval for every booking at every stage; Stage 3
   may only offer times.
-- A missing rate is now asked as a question (6.10) and the answer saved to
-  the rate card (built 3 September 2026). An unclear customer reply and a
-  sender with another open estimate are still raised as manual-review items
-  and filed as approval briefs; this document requires questions for those
-  too, and the review list is to be reduced to failures of the desk itself.
+- Questions (6.10) are built for a missing rate, a known sender writing on a
+  new thread (same piece or new), and an unclear reply after an estimate
+  (second piece, change, accepts, or the owner handles it), 3 September 2026.
+  Failures of the desk itself are a plain notice. An owner's "change" or
+  "second piece" answer closes the thread to the owner for now; the desk does
+  not yet reopen the gate or open a second estimate on the same thread.
 - The implementation still carries a wholesale mode, wholesale email wording,
   and a trade markup setting. This document is retail only; those are to be
   removed. The tests that pin customer wording and phase order

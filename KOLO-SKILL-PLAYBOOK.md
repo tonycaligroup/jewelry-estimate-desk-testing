@@ -92,7 +92,13 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   the sub-agent lane running concurrently with its parent is verified**
 - Completions made by a script (`openclaw infer model run`) are direct
   provider calls and take no agent slot. This is the main reason to move
-  judgment out of agent turns. **reported 3 Sep; to verify live**
+  judgment out of agent turns. **reported 3 Sep; consistent with the live
+  run: two claims finished inside their ticks with the owner's chat idle**
+- A watcher tick that judges inline finishes an intake claim in one tick
+  (follow-up sent at 15:50, price brief filed at 16:02 on the reply) with no
+  worker job. One tick reported a timeout at the 300 s clock during the
+  pricing tick; the tick now stops taking new claims after 170 s. **verified
+  3 Sep 2026**
 - Symptom of lane starvation: commands typed into an owner thread sit at
   "Working" for minutes while background agent jobs run. **verified**
 
@@ -103,7 +109,9 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   tools, no agent turn, usable from a cron command job. Envelope:
   `{"ok": true, "capability": "model.run", "provider": ..., "model": ...,
   "attempts": [], "outputs": [{"text": "...", "mediaUrl": null}]}`. Provider
-  failure is `ok: false` and a non-zero exit. **reported 3 Sep; to verify**
+  failure is `ok: false` and a non-zero exit. **verified 3 Sep 2026 on our
+  pod: the envelope matched and a JSON-only prompt came back as asked; the
+  command job's shell had both LiteLLM variables**
 - Not available on that command: system prompt, max tokens, temperature,
   JSON-only mode. Put the contract in the prompt, parse strictly, validate the
   shape, retry once quoting the rejection. Our `judge.py` does this.
@@ -262,8 +270,12 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
 
 ## 8. Open questions and next probes
 
-- Verify `openclaw infer model run` on our pod: flags, envelope, exit codes,
-  and that the watcher's command job sees the LiteLLM variables.
+- Session-key format for an SMS or Slack chat as a `kolo notify-owner`
+  target (`kolo list-chats` shows chats; confirm the key shape before an
+  owner picks SMS at setup).
+- Whether `openclaw infer image generate` writes under the Kolo media root
+  that `rendering_materialize.py` requires; if not, the tick's rendering path
+  falls back to a worker.
 - Does Auto-Approve Low Risk apply to skill briefs? Test with a throwaway
   low-risk brief once the setting is understood.
 - Dedicated worker agent (`openclaw agents add`, `agents.entries.<id>` with

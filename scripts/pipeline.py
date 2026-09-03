@@ -26,6 +26,8 @@ import gmail_text
 import inbox_monitor
 import judge
 import kolo_safe
+import owner_questions
+import rendering_materialize
 import spec_gate
 import workflow_safe
 
@@ -86,6 +88,97 @@ def _send_followup(
     return {"outcome": "followup_sent", "missing_required_fields": missing, "next": "done"}
 
 
+RENDERING_NOTE = (
+    "Attached are visual illustrations of the design direction we discussed. The "
+    "written specification and the final design you approve control the finished "
+    "piece.\n\nIf you would like an adjustment to the look, reply here and tell me "
+    "what you would like changed.\n"
+)
+RENDERING_VIEWS = (
+    "front three-quarter view on a plain white background",
+    "side profile view on a plain white background",
+)
+
+
+def rendering_prompts(specification: dict[str, Any]) -> list[str]:
+    """Two complementary views of the same approved design, from the spec alone."""
+    piece = owner_questions.summary_of_piece(specification) if specification else "a piece of custom jewelry"
+    details = ", ".join(
+        f"{key.replace('_', ' ')}: {value}"
+        for key, value in sorted(specification.items())
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool)
+    )[:900]
+    base = (
+        f"Photorealistic product rendering of {piece}, exactly as specified, no alternate designs, "
+        f"no text, no people. Specification: {details}. "
+    )
+    return [base + view for view in RENDERING_VIEWS]
+
+
+def _image_generate_argv(prompt: str, openclaw: str) -> list[str]:
+    return [openclaw, "infer", "image", "generate", "--prompt", prompt, "--json"]
+
+
+def render_and_send(
+    p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any],
+    paths: dict[str, str], openclaw: str, command_runner: Runner,
+) -> dict[str, Any]:
+    """Generate two views from the shell, materialize them, and send the note."""
+    images: list[Path] = []
+    for slot, prompt in enumerate(rendering_prompts(record.get("specification") or {}), start=1):
+        completed = command_runner(
+            _image_generate_argv(prompt, openclaw), check=True, capture_output=True, text=True, shell=False,
+        )
+        raw = completed.stdout or ""
+        try:
+            envelope = json.loads(raw[raw.find("{"):])
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("image generation returned no JSON") from exc
+        outputs = envelope.get("outputs") or []
+        source = outputs[0].get("path") if outputs and isinstance(outputs[0], dict) else None
+        if not isinstance(source, str) or not source:
+            raise ValueError("image generation returned no file path")
+        materialized = rendering_materialize.materialize(
+            p["monitor_root"], p["claim_root"], message_id, Path(source), slot
+        )
+        images.append(Path(str(materialized["path"])))
+    body_path = Path(paths["customer_reply"])
+    body_path.write_text(RENDERING_NOTE, encoding="utf-8")
+    workflow_safe.send_rendering(argparse.Namespace(
+        monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+        message_id=message_id, estimate_id=estimate_id, body=body_path, images=images,
+        gmail_payload=Path(paths["gmail_payload"]), provider_response=Path(paths["gmail_provider_response"]),
+        record_output=Path(paths["current_record"]),
+    ))
+    return {"outcome": "rendering_sent", "images": len(images), "next": "done"}
+
+
+def post_estimate_actions(
+    p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any], next_action: str,
+    paths: dict[str, str], openclaw: str, command_runner: Runner,
+) -> dict[str, Any]:
+    """Appointment approvals and renderings from the tick; a worker only on failure."""
+    wants_appointment = next_action in ("request_appointment_approval", "request_appointment_approval_then_send_rendering")
+    wants_rendering = next_action in ("send_rendering", "request_appointment_approval_then_send_rendering")
+    if wants_appointment:
+        intent_path = Path(paths["appointment_intent"])
+        workflow_safe.write_private(intent_path, {"requested_times": [], "calendar_availability": []})
+        workflow_safe.request_appointment_approval(argparse.Namespace(
+            monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+            message_id=message_id, estimate_id=estimate_id, appointment_intent=intent_path,
+            appointment_approval=Path(paths["appointment_approval"]), record_output=Path(paths["current_record"]),
+            defer_finalize_for_rendering=wants_rendering,
+        ))
+        if not wants_rendering:
+            return {"outcome": "appointment_approval_requested", "next": "done"}
+    try:
+        return render_and_send(p, message_id, estimate_id, record, paths, openclaw, command_runner)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        # The worker still has the agent's image tool; let it take this one.
+        return {"outcome": "needs_worker", "branch": "post_estimate", "next_action": next_action,
+                "error": str(exc)[:160]}
+
+
 def process_claim(
     workspace: Path,
     base_dir: Path,
@@ -134,7 +227,9 @@ def process_claim(
         nxt = reviewed.get("next")
         if nxt in ("finalize", "manual_review", "done"):
             return {"outcome": "post_estimate_finished", "next_action": nxt, "next": "done"}
-        return {"outcome": "needs_worker", "branch": "post_estimate", "next_action": nxt}
+        return post_estimate_actions(
+            p, message_id, estimate_id, record, nxt, paths, openclaw or judge.default_openclaw(), command_runner,
+        )
 
     triage = judge.triage(digest, model, judge_runner, openclaw)
     if triage["kind"] in NOT_AN_INQUIRY:

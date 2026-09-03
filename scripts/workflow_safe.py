@@ -535,6 +535,22 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
         "reason_code": decision.get("reason_code"),
         "thread_message_count": len(messages),
     })
+    if (
+        decision["decision"] == "manual_review"
+        and decision.get("reason_code") == "identity_has_active_estimate_on_another_thread"
+        and getattr(args, "force_new_inquiry", False)
+    ):
+        # The owner answered "new piece": treat this thread as a fresh inquiry.
+        decision = {"decision": "new_inquiry", "reason_code": "owner_said_new_piece"}
+        result["decision"] = "new_inquiry"
+        result["reason_code"] = "owner_said_new_piece"
+    if (
+        decision["decision"] == "manual_review"
+        and decision.get("reason_code") == "identity_has_active_estimate_on_another_thread"
+    ):
+        asked = ask_same_sender(args, token, route, decision.get("estimate_id"), message)
+        result.update(asked)
+        return result
     if decision["decision"] in {"manual_review", "owned_manual_review"}:
         kolo_safe.manual_review_claimed(
             args.monitor_root, args.claim_root, args.message_id, token, decision["reason_code"]
@@ -764,6 +780,97 @@ def price(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _customer_name(monitor_root: Path, claim_root: Path, message_id: str) -> str:
+    headers = kolo_safe.claimed_message_headers(monitor_root, claim_root, message_id)
+    sender = headers.get("From") or ""
+    return kolo_safe._sender_display(sender) if sender else "A customer"
+
+
+def ask_same_sender(
+    args: argparse.Namespace,
+    token: str,
+    route: dict[str, Any],
+    existing_estimate_id: str | None,
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    """Same customer, new thread: ask the owner, in words, same piece or new."""
+    existing = {}
+    if existing_estimate_id:
+        try:
+            existing = estimate_record.read_object(
+                estimate_record.record_path(args.record_root, existing_estimate_id)
+            )
+        except (OSError, ValueError):
+            existing = {}
+    who = _customer_name(args.monitor_root, args.claim_root, args.message_id)
+    old_subject = " ".join(((existing.get("route") or {}).get("original_subject") or "").split())[:80]
+    old_words = owner_questions.summary_of_piece(existing.get("specification")) if existing.get("specification") else "a piece"
+    new_subject = " ".join((route.get("original_subject") or "").split())[:80]
+    text = (
+        f"{who} wrote in a new email thread (\"{new_subject}\") but already has an open estimate "
+        f"with us for {old_words}"
+        + (f' ("{old_subject}", {existing.get("status", "open").replace("_", " ")})' if old_subject else "")
+        + ". Is this the same piece, or a new one? Reply \"same\" and I will leave that thread to you, "
+        "or \"new\" and I will quote it as a separate estimate."
+    )
+    root = owner_questions.questions_root(args.monitor_root)
+    _created, question = owner_questions.create_decision(
+        root, "same_sender", existing_estimate_id or "jed-0000000000000000", args.message_id, text,
+        {"existing_estimate_id": existing_estimate_id, "new_subject": new_subject},
+    )
+    question = owner_questions.deliver(
+        root, question, runner=getattr(args, "runner", subprocess.run),
+        extra_args=kolo_safe.owner_channel_args(args.monitor_root),
+    )
+    inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "same_sender_question")
+    return {
+        "outcome": "awaiting_owner",
+        "question_id": question["question_id"],
+        "reference": owner_questions.reference(question["question_id"]),
+        "delivery": question["delivery"]["status"],
+        "estimate_id": existing_estimate_id,
+        "next_action": "done",
+    }
+
+
+def ask_unclear_reply(args: argparse.Namespace, record: dict[str, Any], outcome: str) -> dict[str, Any]:
+    """A reply after an estimate the desk could not read: ask the owner what it meant."""
+    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    who = _customer_name(args.monitor_root, args.claim_root, args.message_id)
+    snippet = ""
+    try:
+        paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
+        message = read_object(Path(paths["gmail_message"]))
+        snippet = " ".join(gmail_text.body_text(message, limit=600).split())[:240]
+    except (OSError, ValueError, json.JSONDecodeError):
+        snippet = ""
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their estimate"
+    why = "it may change the design" if outcome == "design_change_detected" else "I could not tell what they mean"
+    text = (
+        f"{who} replied on the estimate for {piece}"
+        + (f': "{snippet}"' if snippet else "")
+        + f". I did not act because {why}. Is this a second piece to quote, a change to this one, "
+        "are they accepting the estimate, or will you handle it? Reply \"second piece\", \"change\", "
+        "\"accepts\", or \"I will handle it\"."
+    )
+    root = owner_questions.questions_root(args.monitor_root)
+    _created, question = owner_questions.create_decision(
+        root, "unclear_reply", args.estimate_id, args.message_id, text, {"outcome": outcome},
+    )
+    question = owner_questions.deliver(
+        root, question, runner=getattr(args, "runner", subprocess.run),
+        extra_args=kolo_safe.owner_channel_args(args.monitor_root),
+    )
+    inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "unclear_reply_question")
+    return {
+        "outcome": "awaiting_owner",
+        "question_id": question["question_id"],
+        "reference": owner_questions.reference(question["question_id"]),
+        "delivery": question["delivery"]["status"],
+        "next_action": "done",
+    }
+
+
 def ask_missing_rate(args: argparse.Namespace) -> dict[str, Any]:
     """Ask the owner for the one rate pricing lacks, and park this claim.
 
@@ -797,7 +904,8 @@ def ask_missing_rate(args: argparse.Namespace) -> dict[str, Any]:
         owner_questions.summary_of_piece(record.get("specification")),
     )
     question = owner_questions.deliver(
-        root, question, runner=getattr(args, "runner", subprocess.run)
+        root, question, runner=getattr(args, "runner", subprocess.run),
+        extra_args=kolo_safe.owner_channel_args(args.monitor_root),
     )
     inbox_monitor.park_item(
         args.monitor_root, args.message_id, args.claim_root, claim_token, "missing_rate"
@@ -858,8 +966,10 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
             "question_id": question["question_id"],
             "answer": question.get("answer"),
         }
+    if question["kind"] in owner_questions.DECISION_KINDS:
+        return answer_decision(args, workspace, p, root, question)
     if question["kind"] != "missing_rate":
-        raise ValueError("only missing-rate questions are answered this way")
+        raise ValueError("unsupported question kind")
     # Refuse before writing anything if the estimate is not in the state the
     # question left it in. A hand-edited or already-priced record must be
     # repaired or handled deliberately, not turned into a misleading review.
@@ -939,6 +1049,80 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def _close_parked_claim(p: dict[str, Path], message_id: str, reason: str) -> None:
+    """Finish a parked claim on the owner's word: terminal, reviewed, no card."""
+    import cron_config  # local import keeps module import order unchanged
+
+    inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
+    token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+    inbox_claim.finish(p["claim_root"], message_id, token, "manual_review", reason)
+    inbox_monitor.reconcile_terminal(p["monitor_root"], message_id, p["claim_root"])
+    inbox_monitor.cleanup_claim_work(p["monitor_root"], message_id)
+    item = inbox_monitor.load_queue_item(p["monitor_root"], message_id)
+    inbox_monitor.resolve_manual_review(p["monitor_root"], item["gmail_message_id_sha256"])
+
+
+def answer_decision(
+    args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path, question: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply a fixed-outcome answer: same piece or new; what an unclear reply meant."""
+    import cron_config  # local import keeps module import order unchanged
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    outcome = owner_questions.match_option(question, args.answer)
+    message_id = question["gmail_message_id"]
+    result: dict[str, Any] = {
+        "outcome": "answered", "question_id": question["question_id"], "kind": question["kind"], "decision": outcome,
+    }
+    if question["kind"] == "same_sender" and outcome == "new":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+        reopened = inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
+        if not Path(reopened["work_paths"]["gmail_message"]).exists():
+            import gmail_fetch  # local import; only needed when the work file was cleaned up
+
+            gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
+        intake_result = intake(argparse.Namespace(
+            monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+            message_id=message_id, shop_profile=p["shop_profile"], force_new_inquiry=True,
+        ))
+        result["intake"] = {k: intake_result.get(k) for k in ("decision", "estimate_id", "next_action", "outcome")}
+        if intake_result.get("next_action") != "review_thread":
+            return result
+        work_dir = Path(reopened["work_paths"]["work_dir"])
+        write_private(work_dir / "intake-result.json", intake_result)
+        # Intake advances the phase journal, which drops the reopen lease; lease
+        # the claim again before any worker or inline run touches it.
+        inbox_claim.delegate(
+            p["claim_root"], message_id,
+            inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
+            cron_config.WORKER_LEASE_SECONDS,
+        )
+        import pipeline  # local import: pipeline imports this module
+
+        switch = pipeline.settings(workspace / "estimate-desk")
+        if switch.get("inline"):
+            done = pipeline.process_claim(
+                workspace, args.base_dir.resolve(), message_id, intake_result,
+                model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
+                command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
+            )
+            result["pipeline"] = done.get("outcome")
+            if done.get("outcome") != "needs_worker":
+                return result
+        result["worker_job_id"] = inbox_watcher.spawn_worker(
+            workspace, args.base_dir.resolve(), "", args.openclaw or inbox_watcher.default_openclaw(),
+            message_id, intake_result["estimate_id"], str(work_dir), runner=getattr(args, "runner", subprocess.run),
+            branch=cron_config.worker_branch(intake_result.get("record_status")),
+        )
+        return result
+    # Every other outcome: the owner takes the conversation from here.
+    owner_questions.record_decision(root, question, args.answer, outcome)
+    reason = f"owner_decided_{outcome}"
+    _close_parked_claim(p, message_id, reason)
+    result["claim"] = reason
+    return result
+
+
 def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
     """Mirror and safely route one persisted post-estimate decision."""
     record, decision = estimate_record.post_estimate_decision(
@@ -947,6 +1131,10 @@ def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
     mirror_record(record, args.record_output)
     outcome = decision["outcome"]
     intents = decision["intents"]
+    if outcome in {"design_change_detected", "classification_uncertain"}:
+        asked = ask_unclear_reply(args, record, outcome)
+        return {**asked, "outcome": outcome, "question_outcome": asked.get("outcome"),
+                "should_finalize": True, "intents": intents, "next_action": "done"}
     if outcome != "post_estimate_continuation":
         reason_codes = {
             "design_change_detected": "design_change_detected",
