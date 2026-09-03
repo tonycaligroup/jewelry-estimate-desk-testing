@@ -218,6 +218,13 @@ def match_rate_key(
     return None, sorted(candidates)
 
 
+def center_stone_card(card: Any) -> dict[str, Any]:
+    """The stone card without melee entries: a center stone is never priced as melee."""
+    if not isinstance(card, dict):
+        return {}
+    return {key: value for key, value in card.items() if "melee" not in str(key).lower()}
+
+
 def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[dict[str, Any]]:
     """Rates the card lacks for this specification, in the order pricing needs them.
 
@@ -258,7 +265,7 @@ def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[
     if stone["stone_type"] is not None:
         preferred = set(stone["origin"] or ())
         key, candidates = match_rate_key(
-            pricing.get("stones_per_carat"), {stone["stone_type"]}, preferred
+            center_stone_card(pricing.get("stones_per_carat")), {stone["stone_type"]}, preferred
         )
         if key is None:
             origin = stone["origin"] or ()
@@ -400,7 +407,7 @@ def prepare(
         }
         preferred = set(stone["origin"] or ())
         key, candidates = match_rate_key(
-            pricing.get("stones_per_carat"), {stone["stone_type"]}, preferred
+            center_stone_card(pricing.get("stones_per_carat")), {stone["stone_type"]}, preferred
         )
         if key is None:
             unresolved.append({

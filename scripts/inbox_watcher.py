@@ -17,6 +17,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -33,6 +34,12 @@ import validate_profile
 import workflow_safe
 
 STALE_AFTER_SECONDS = 600
+# Inline judgment runs inside the tick's 300 s clock. Stop taking new claims
+# once this much of it is spent so the tick never times out mid-claim.
+INLINE_BUDGET_SECONDS = 170
+# One-shot worker jobs delete themselves after a clean run; one that errored
+# lingers disabled. Sweep those once they are this old.
+SWEEP_AFTER_SECONDS = 3600
 # The agent lane on this pod runs two jobs at once. Spawning more than that
 # per tick would queue workers behind each other with their timeouts running;
 # the rest of the queue simply waits for the next tick, unclaimed.
@@ -125,6 +132,46 @@ def spawn_worker(
     return job_id
 
 
+def sweep_worker_jobs(openclaw: str, runner: Runner = subprocess.run, now_ms: int | None = None) -> int:
+    """Remove disabled one-shot worker jobs that errored and never self-deleted."""
+    try:
+        listed = runner(
+            [openclaw, "cron", "list", "--json", "--all"],
+            check=True, capture_output=True, text=True, shell=False,
+        )
+        raw = listed.stdout or ""
+        data = json.loads(raw[raw.find("{" if raw.lstrip().startswith("{") else "["):])
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError):
+        return 0
+    jobs = data.get("jobs", data) if isinstance(data, dict) else data
+    if not isinstance(jobs, list):
+        return 0
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    removed = 0
+    for job in jobs:
+        if not isinstance(job, dict) or not str(job.get("name", "")).startswith(cron_config.WORKER_NAME_PREFIX):
+            continue
+        if job.get("enabled"):
+            continue
+        state = job.get("state") or {}
+        last = state.get("lastRunAtMs") or job.get("updatedAtMs") or job.get("createdAtMs") or 0
+        try:
+            age_ms = now - int(last)
+        except (TypeError, ValueError):
+            continue
+        if age_ms < SWEEP_AFTER_SECONDS * 1000:
+            continue
+        job_id = job.get("id")
+        if not isinstance(job_id, str) or not job_id:
+            continue
+        try:
+            runner([openclaw, "cron", "rm", job_id], check=True, capture_output=True, text=True, shell=False)
+            removed += 1
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    return removed
+
+
 def tick(
     workspace: Path,
     base_dir: Path,
@@ -146,8 +193,10 @@ def tick(
         "reminders": 0,
         "inline": [],
         "inline_failures": 0,
+        "swept_jobs": 0,
         "message": "NO_REPLY",
     }
+    started = time.monotonic()
     profile_result = validate_profile.validate_profile(
         validate_profile.load_profile(p["shop_profile"])
     )
@@ -171,8 +220,12 @@ def tick(
     )
     discovery = gmail_fetch.discover(p["monitor_root"], token)
     summary["discovered"] = discovery.get("discovered", 0)
+    summary["swept_jobs"] = sweep_worker_jobs(openclaw, runner=runner)
 
-    while len(summary["workers"]) < max_workers:
+    while len(summary["workers"]) + len(summary["inline"]) < max_workers:
+        if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
+            # Enough of the clock is gone; the rest of the queue waits a tick.
+            break
         claimed = inbox_monitor.claim_next(
             p["monitor_root"], p["claim_root"], STALE_AFTER_SECONDS
         )

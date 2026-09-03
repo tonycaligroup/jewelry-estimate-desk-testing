@@ -110,6 +110,44 @@ def approval_reasoning(details: dict[str, Any]) -> str:
     return reasoning
 
 
+def _piece_words(specification: Any) -> str:
+    try:
+        import owner_questions  # local import: owner_questions depends on cost_components only
+
+        return owner_questions.summary_of_piece(specification)
+    except Exception:  # noqa: BLE001 - a summary is a courtesy, never a failure
+        return "a piece"
+
+
+def approval_title(details: dict[str, Any], estimate_id: str) -> str:
+    """'Price approval: a pendant in 14K yellow gold with a natural ruby 1 ct, $3,802.76'."""
+    review = details.get("owner_review") if isinstance(details.get("owner_review"), dict) else {}
+    price = review.get("customer_price", details.get("proposed_price"))
+    piece = _piece_words(details.get("specification"))
+    money = _money(price) if isinstance(price, (int, float)) and not isinstance(price, bool) else "price pending"
+    return f"Price approval: {piece}, {money}"[:120]
+
+
+def approval_details(details: dict[str, Any], estimate_id: str) -> dict[str, str]:
+    """Flat text rows for the card; nested objects render as noise there."""
+    route = details.get("route") if isinstance(details.get("route"), dict) else {}
+    review = details.get("owner_review") if isinstance(details.get("owner_review"), dict) else {}
+    price = review.get("customer_price", details.get("proposed_price"))
+    rows = {
+        "Customer": str(route.get("recipient") or "unknown")[:120],
+        "Subject": str(route.get("original_subject") or "unknown")[:160],
+        "Piece": _piece_words(details.get("specification"))[:160],
+        "Proposed price": _money(price) if isinstance(price, (int, float)) and not isinstance(price, bool) else "unknown",
+        "Approve means": "Send this price to the customer in their email thread.",
+        "Reject means": "Nothing is sent; the desk steps back from this thread.",
+        "Estimate": estimate_id,
+    }
+    hard = review.get("hard_cost_total")
+    if isinstance(hard, (int, float)) and not isinstance(hard, bool):
+        rows["Hard cost (owner only)"] = _money(hard)
+    return rows
+
+
 def build_request_approval(
     estimate_id: str, details: Path, session_key: str, agent_id: str = "main"
 ) -> list[str]:
@@ -125,13 +163,16 @@ def build_request_approval(
         "--agent-id",
         agent_id,
         "--action",
-        f"Custom estimate — {estimate_id}",
+        approval_title(details_object, estimate_id),
         "--reasoning",
         approval_reasoning(details_object),
         "--risk-level",
         "medium",
         "--details",
-        payload,
+        json.dumps(
+            approval_details(details_object, estimate_id),
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ),
         "--execution-payload",
         payload,
         "--session-key",

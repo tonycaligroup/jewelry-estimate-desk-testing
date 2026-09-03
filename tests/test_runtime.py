@@ -1270,16 +1270,21 @@ class SafeCliTests(unittest.TestCase):
             )
             reasoning = argv[argv.index("--reasoning") + 1]
             details = json.loads(argv[argv.index("--details") + 1])
+            payload = json.loads(argv[argv.index("--execution-payload") + 1])
 
             self.assertIn("JEWELER-ONLY COST SHEET", reasoning)
             self.assertIn("Customer price: $4,200.00", reasoning)
             self.assertIn("10 g × $60.00/g = $600.00", reasoning)
             self.assertIn("5 hr × $100.00/hr = $500.00", reasoning)
+            # The card gets flat text rows; the full bound state rides in the payload.
+            self.assertTrue(all(isinstance(v, str) for v in details.values()))
+            self.assertEqual(details["Proposed price"], "$4,200.00")
+            self.assertEqual(details["Estimate"], state["estimate_id"])
+            self.assertIn("Send this price", details["Approve means"])
+            self.assertTrue(argv[argv.index("--action") + 1].startswith("Price approval: "))
+            self.assertEqual(payload["owner_review"]["estimated_gross_profit"], 1_100)
             self.assertEqual(
-                details["owner_review"]["estimated_gross_profit"], 1_100
-            )
-            self.assertEqual(
-                details["owner_review"]["visibility"],
+                payload["owner_review"]["visibility"],
                 "jeweler_only_never_customer_facing",
             )
 
@@ -1307,8 +1312,8 @@ class SafeCliTests(unittest.TestCase):
             argv = kolo_safe.build_request_approval(
                 "jed-0123456789abcdef", path, "agent:main:kolo:test-session"
             )
-            details_value = argv[argv.index("--details") + 1]
-            self.assertEqual(json.loads(details_value)["customer_text"], attack)
+            payload_value = argv[argv.index("--execution-payload") + 1]
+            self.assertEqual(json.loads(payload_value)["customer_text"], attack)
             self.assertNotIn("sh", argv[:1])
 
     def test_claimed_approval_is_sent_once(self) -> None:
@@ -5858,13 +5863,21 @@ class CostComponentsTests(unittest.TestCase):
             specification = self.nested_specification()
             specification["center_stone"]["stone_type"] = "diamond"
             record = self.reviewed_record(Path(directory) / "records", specification)
-            skeleton = pricing_helper.prepare(record, self.spot_profile(), self.evidence())
+            profile = self.spot_profile()
+            # Two non-melee diamond rates with nothing to prefer between them.
+            profile["pricing"]["stones_per_carat"] = {
+                key: value for key, value in profile["pricing"]["stones_per_carat"].items() if "melee" not in key
+            }
+            profile["pricing"]["stones_per_carat"]["lab_grown_diamond_round"] = 700.0
+            profile["pricing"]["stones_per_carat"]["lab_grown_diamond_oval"] = 720.0
+            profile["pricing"]["stones_per_carat"].pop("lab_grown_diamond", None)
+            skeleton = pricing_helper.prepare(record, profile, self.evidence())
             stone = skeleton["cost_components"]["stone_lines"][0]
             self.assertIsNone(stone["rate_key"])
             self.assertIsNone(stone["unit_cost"])
             self.assertEqual(
                 skeleton["unresolved"][0]["candidates"],
-                ["lab_grown_diamond", "lab_grown_diamond_melee"],
+                ["lab_grown_diamond_oval", "lab_grown_diamond_round"],
             )
             filled = json.loads(json.dumps(skeleton))
             filled["cost_components"]["metal_lines"][0]["quantity_grams"] = 7
@@ -6789,8 +6802,9 @@ class WatcherTickTests(unittest.TestCase):
             self.assertEqual(summary["workers"], [{"message_id": "inquiry-1", "job_id": "job-1"}])
             self.assertEqual(summary["spawn_failures"], 0)
             self.assertEqual(summary["message"], "NO_REPLY")
-            runner.assert_called_once()
-            argv = runner.call_args.args[0]
+            creates = [c.args[0] for c in runner.call_args_list if c.args[0][1:3] == ["cron", "create"]]
+            self.assertEqual(len(creates), 1)
+            argv = creates[0]
             self.assertEqual(argv[:3], ["openclaw", "cron", "create"])
             self.assertIn("--delete-after-run", argv)
             self.assertEqual(argv[argv.index("--name") + 1], "jed-worker-inquiry-1")
@@ -6825,7 +6839,7 @@ class WatcherTickTests(unittest.TestCase):
             ])
             summary, runner = self.run_tick(ws, max_workers=2)
             self.assertEqual(len(summary["workers"]), 2)
-            self.assertEqual(runner.call_count, 2)
+            self.assertEqual(sum(1 for c in runner.call_args_list if c.args[0][1:3] == ["cron", "create"]), 2)
             desk = ws / "estimate-desk"
             self.assertEqual(inbox_monitor.load_queue_item(desk / "inbox-monitor", "inquiry-3")["processing_status"], "unclaimed")
             report = inbox_monitor.run_report(desk / "inbox-monitor", desk / "inbox-claims", in_flight_ok=True)
@@ -6935,6 +6949,25 @@ class WatcherTickTests(unittest.TestCase):
             self.assertEqual(state["status"], "processed")
             item = inbox_monitor.load_queue_item(desk / "inbox-monitor", "inquiry-1")
             self.assertEqual(item["processing_status"], "processed")
+
+    def test_sweep_removes_only_old_disabled_worker_jobs(self) -> None:
+        now = 10_000_000_000
+        jobs = {"jobs": [
+            {"id": "old-err", "name": "jed-worker-abc", "enabled": False, "state": {"lastRunAtMs": now - 7_200_000, "lastStatus": "error"}},
+            {"id": "fresh", "name": "jed-worker-def", "enabled": False, "state": {"lastRunAtMs": now - 60_000, "lastStatus": "error"}},
+            {"id": "live", "name": "jed-worker-ghi", "enabled": True, "state": {"lastRunAtMs": now - 7_200_000}},
+            {"id": "monitor", "name": "jed-inbox-monitor", "enabled": True, "state": {"lastRunAtMs": now - 7_200_000}},
+        ]}
+        def run(argv, **_kwargs):
+            if argv[1:3] == ["cron", "list"]:
+                return subprocess.CompletedProcess(argv, 0, json.dumps(jobs), "")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        runner = Mock(side_effect=run)
+        self.assertEqual(inbox_watcher.sweep_worker_jobs("openclaw", runner=runner, now_ms=now), 1)
+        removed = [c.args[0] for c in runner.call_args_list if c.args[0][1:3] == ["cron", "rm"]]
+        self.assertEqual(removed, [["openclaw", "cron", "rm", "old-err"]])
+        broken = Mock(return_value=subprocess.CompletedProcess([], 0, "not json", ""))
+        self.assertEqual(inbox_watcher.sweep_worker_jobs("openclaw", runner=broken, now_ms=now), 0)
 
     def test_delegate_requires_the_authoritative_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
