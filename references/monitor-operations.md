@@ -106,6 +106,14 @@ every pre-activation inquiry manually.
    watermark. Missing, corrupt, or unsupported-version active state fails closed
    and must never be silently recreated.
 
+## Owner channel
+
+Questions and finalized notices go to the main Kolo chat unless the shop
+profile carries `owner_channel` (`{"kind": "sms" | "slack" | "kolo",
+"session_key": "<session key from kolo list-chats>"}`); then every
+`kolo notify-owner` call adds `--session-key`. Approval briefs always go to
+the approval queue. Change it by editing the profile; no rebind.
+
 ## Inline judgment (no worker jobs)
 
 Create `<workspace>/estimate-desk/pipeline.json` containing

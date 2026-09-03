@@ -381,6 +381,21 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Batch 1 (built 3 September 2026).** Same-sender and unclear-reply reviews
+are owner questions with fixed outcomes (`owner_questions.create_decision`,
+`match_option`; `answer-question` applies them: a new piece is quoted through
+intake and the pipeline, everything else closes the parked claim on the
+owner's word with no card). Desk failures are one plain notice in the owner's
+channel, never a brief. `owner_channel.session_key` in the shop profile
+targets every owner message. The center-stone matcher ignores melee keys. The
+price brief shows flat rows (customer, subject, piece, price, what approve
+and reject mean) with the bound state in the payload. The tick keeps an
+inline budget, sweeps errored one-shot jobs, and now sends renderings and
+files appointment approvals itself, spawning a worker only when image
+generation fails. Still open: validating an Edit Intent revision, the
+reopen-the-gate path for a "change" answer, calendar slots in tick-side
+appointment approvals.
+
 **Stage C — deterministic approvals for bookings and renderings.**
 Calendar-write helper with receipts; rendering generation by script with
 PNGs attached to the owner notification; booking and rendering approval at
