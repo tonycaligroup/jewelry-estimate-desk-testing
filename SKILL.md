@@ -151,13 +151,15 @@ location and collect:
 6. Whether spot metal pricing is enabled; provider (`stackerscan` or
    `gold-api`), refresh frequency (`per_estimate`, `daily`, or `weekly`), and
    unit. StackerScan is the default and supports grams; gold-api uses troy oz.
-7. The owner's channel for questions and finalized notices: the main Kolo
-   chat (default), or an SMS or Slack chat the owner already has with Kolo.
-   Run `kolo list-chats`, let the owner pick the chat, and store its session
-   key as `owner_channel.session_key` (kind under `owner_channel.kind`) in the
-   shop profile; every owner message then goes there. Leave `owner_channel`
-   absent for the main chat. Approval briefs always go to the approval queue.
-   This never changes the customer's original-channel routing.
+7. The owner's channel for questions, notices, and rendering previews. The
+   default is this setup thread, where the approval cards also appear, so
+   the owner has one place to look; nothing needs to be stored for that.
+   If the owner would rather use another Kolo chat, or an SMS or Slack chat
+   they already have with Kolo, run `kolo list-chats`, let them pick, and
+   store its session key as
+   `owner_channel.session_key` (kind under `owner_channel.kind`) in the shop
+   profile. Approval cards always go to the approval queue. This never
+   changes the customer's original-channel routing.
 8. Trust stage. Default to Stage 1.
 9. Booking mode, IANA timezone, and near-term meeting-offer window. Default the
    window to 7 days so the first meeting is offered ASAP, never near delivery.
