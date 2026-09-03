@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import os
 import base64
@@ -6688,6 +6689,24 @@ class WatcherBindingTests(unittest.TestCase):
         self.assertIn("reply with exactly `NO_REPLY`", message)
         self.assertNotIn("claim-next --claim-root", message)
         self.assertNotIn("assert-settled`. Then", message)
+        # Stage B: the prompt is the preamble plus one branch, never SKILL.md.
+        self.assertIn("do not read SKILL.md", message)
+        self.assertIn("Branch: `record_status` is `awaiting_specs`", message)
+        self.assertNotIn("post_estimate_artifact", message)
+        post = cron_config.render_worker_message(
+            Path("/workspace"), ROOT, "1a06400e05547c1c", "jed-0123456789abcdef", "/workspace/estimate-desk/work/abc",
+            branch="post_estimate",
+        )
+        self.assertIn("post_estimate_artifact", post)
+        self.assertNotIn("cost_components.py prepare", post)
+        self.assertLess(len(message.encode("utf-8")), 20_000)
+        self.assertLess(len(post.encode("utf-8")), 20_000)
+        self.assertEqual(cron_config.worker_branch("awaiting_specs"), "intake")
+        self.assertEqual(cron_config.worker_branch("estimate_sent"), "post_estimate")
+        with self.assertRaises(ValueError):
+            cron_config.worker_branch("dormant")
+        with self.assertRaises(ValueError):
+            cron_config.render_worker_message(Path("/workspace"), ROOT, "1a06400e05547c1c", "jed-x", "/w", branch="nope")
         with self.assertRaises(ValueError):
             cron_config.render_worker_message(Path("/workspace"), ROOT, "bad id", "jed-x", "/w")
         with self.assertRaises(ValueError):
@@ -6924,15 +6943,34 @@ class WatcherTickTests(unittest.TestCase):
 
 
 class WorkerTemplateTests(unittest.TestCase):
-    def test_worker_template_is_single_claim_and_silent(self) -> None:
-        text = cron_config.worker_template_path().read_text(encoding="utf-8")
-        self.assertIn("worker-start", text)
-        self.assertIn("Never run `claim-next`", text)
-        self.assertIn("Never run `assert-settled` or `run-report`", text)
-        self.assertIn("not-an-inquiry", text)
-        self.assertIn("cost_components.py prepare", text)
-        self.assertIn("Never read the bundled scripts' source code", text)
-        self.assertNotIn("gmail_fetch.py discover", text)
+    def test_worker_prompts_are_single_claim_silent_and_branch_specific(self) -> None:
+        common = cron_config.worker_template_path("common").read_text(encoding="utf-8")
+        intake = cron_config.worker_template_path("intake").read_text(encoding="utf-8")
+        post = cron_config.worker_template_path("post_estimate").read_text(encoding="utf-8")
+        self.assertIn("worker-start", common)
+        self.assertIn("Never run `claim-next`", common)
+        self.assertIn("`assert-settled`", common)
+        self.assertIn("Never read the bundled scripts' source code", common)
+        self.assertIn("do not read SKILL.md", common)
+        self.assertIn("manual-review-claimed", common)
+        self.assertIn("not-an-inquiry", intake)
+        self.assertIn("cost_components.py prepare", intake)
+        self.assertIn("ask-missing-rate", intake)
+        self.assertIn("send-spec-followup", intake)
+        self.assertIn("request-approval", intake)
+        self.assertNotIn("invalid_cost_components` and let the owner", intake)
+        self.assertIn("finalize-post-estimate", post)
+        self.assertIn("send-rendering", post)
+        self.assertIn("request-appointment-approval", post)
+        self.assertIn("rendering_wait.py wait", post)
+        for text in (common, intake, post):
+            self.assertNotIn("gmail_fetch.py discover", text)
+            self.assertNotIn("SKILL.md completely", text)
+        # Every bundled command a branch names exists as a script or subcommand.
+        scripts = {p.name for p in (ROOT / "scripts").glob("*.py")}
+        for text in (intake, post):
+            for name in re.findall(r"scripts/([a-z_]+\.py)", text):
+                self.assertIn(name, scripts)
 
 
 class ReviewBriefTests(unittest.TestCase):

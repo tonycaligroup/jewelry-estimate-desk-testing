@@ -84,8 +84,9 @@ model with thinking off. If Kolo cannot verify the model, stop.
 - `scripts/cron_config.py`: render the watcher command and the per-claim
   worker prompt, and bind durable monitor state to the complete
   behavior-bearing live Kolo cron configuration.
-- `templates/inbox-worker-cron.txt`: the prompt of one worker job; it begins
-  with `workflow_safe.py worker-start` and ends with `NO_REPLY`.
+- `templates/worker-common.txt`, `worker-intake.txt`, `worker-post-estimate.txt`:
+  a worker's whole instruction set, preamble plus one branch by record
+  status; workers never read SKILL.md.
 - `scripts/gmail_classify.py`: from deterministic Gmail headers alone, set
   aside mail no customer wrote (bounces, automatic replies, calendar
   invitations and RSVPs, automated notifications, mailing-list mail, and
@@ -219,16 +220,17 @@ automatically the approver.
 The scheduled Kolo job is a command, not a model turn. Every tick it runs
 `inbox_watcher.py`, which performs the discovery phase and the deterministic
 front of the queue phase below, closes mail no customer wrote, and leases
-each remaining claim to a one-shot worker job created from
-`templates/inbox-worker-cron.txt` with its own 900-second clock, the pinned
+each remaining claim to a one-shot worker job whose prompt is
+`templates/worker-common.txt` plus one branch prompt (intake or
+post-estimate, by record status), with a 900-second clock, the pinned
 model, thinking off, and the safe tool allowlist. The worker begins with
 `workflow_safe.py worker-start`, which proves the lease and returns the intake
 result and `work_paths`; it never discovers, claims, or reports. If a worker
 dies, its lease lapses, the stale reconciler resumes the claim once, and the
-next tick starts a new worker; `worker-start` then says where to resume: a
-`resume` object means the thread was reviewed but the customer never asked
-(send that follow-up, review nothing again); `next_action: done` means the
-send already happened. The watcher's stdout is the run report or `NO_REPLY`.
+next tick starts a new worker; `worker-start` says where to resume (a
+`resume` object: send the recorded follow-up, review nothing again;
+`next_action: done`: the send already happened). Watcher stdout is the run
+report or `NO_REPLY`.
 
 ### Cron discovery phase
 

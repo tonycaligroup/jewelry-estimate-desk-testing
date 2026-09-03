@@ -194,6 +194,15 @@ REVIEW_REASON_TEXT = {
         "does not retry on its own."
     ),
     "uncorrelated_dsn": "A delivery failure bounced back that does not match a known estimate.",
+    "not_an_estimate_request": (
+        "The customer asked for something the desk does not do: an appraisal, "
+        "an inventory price, or a job status. Answer it yourself."
+    ),
+    "specification_incomplete_after_followup": (
+        "Two rounds of questions did not complete the specification. Decide "
+        "whether to ask again yourself or close it."
+    ),
+    "spot_price_unavailable": "The live metal price could not be fetched, so pricing stopped.",
     "missing_thread_ownership": "The desk could not prove which estimate this thread belongs to.",
     "intake_failed": "A system error stopped intake before any customer contact.",
     "system_actionable": "A mailbox, authentication, or system failure needs attention.",

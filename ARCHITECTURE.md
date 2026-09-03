@@ -320,8 +320,11 @@ throwaway job has survived at least one day; everything else the design
 depends on is now proven.
 
 **Stage A — built 2 September 2026 (PR pending deploy).** `scripts/inbox_watcher.py`
-is the command-kind tick; `templates/inbox-worker-cron.txt` is the per-claim
-worker prompt (today's full runbook minus discovery and reporting);
+is the command-kind tick; the per-claim worker prompt was at first the full
+runbook minus discovery and reporting (Stage B, 3 September 2026, replaced it
+with `templates/worker-common.txt` plus one branch prompt, `worker-intake.txt`
+or `worker-post-estimate.txt`, chosen from the record status, and workers no
+longer read SKILL.md at all);
 `workflow_safe.py worker-start` hands a leased claim to its worker; the
 claim's recovery lease doubles as the worker lease; `cron_config` binds the
 watcher command line and produces it as the target for any live job.
@@ -331,11 +334,14 @@ Watcher as a command cron; workers created per claim using today's full
 runbook as the worker prompt. Wins: silent zero-cost empty ticks, one clock
 per inquiry, no tick stacking.
 
-**Stage B — small prompts and readable briefs.**
-The three branch templates; the customer email drafted before the brief and
-included in it; flat brief fields; explicit model and thinking per worker;
-the executor reports briefs as executed. Wins: inquiries drop from about six
-minutes to one or two; the owner reads real text.
+**Stage B — small prompts and readable briefs (prompts built 3 September 2026).**
+Built: `templates/worker-common.txt` plus `worker-intake.txt` or
+`worker-post-estimate.txt` chosen by record status, workers never read
+SKILL.md, explicit model (Qwen 3.7 Plus) and thinking off per worker, flat
+brief fields, the executor reports briefs as executed. Still open: the
+customer email drafted before the price brief and included in it. Measured
+before the prompt cut: about three minutes per claim on Qwen with the full
+runbook; to be re-measured with the branch prompts.
 
 **Stage C — deterministic approvals for bookings and renderings.**
 Calendar-write helper with receipts; rendering generation by script with

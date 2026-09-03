@@ -99,9 +99,10 @@ def spawn_worker(
     estimate_id: str,
     work_dir: str,
     runner: Runner = subprocess.run,
+    branch: str = "intake",
 ) -> str:
     message = cron_config.render_worker_message(
-        workspace, base_dir, message_id, estimate_id, work_dir
+        workspace, base_dir, message_id, estimate_id, work_dir, branch
     )
     completed = runner(
         worker_create_argv(openclaw, message_id, message, owner_target),
@@ -208,6 +209,7 @@ def tick(
                 result["estimate_id"],
                 work_dir,
                 runner=runner,
+                branch=cron_config.worker_branch(result.get("record_status")),
             )
         except (OSError, ValueError, subprocess.CalledProcessError):
             # Leave the claim processing with its lease. Once the lease ends
