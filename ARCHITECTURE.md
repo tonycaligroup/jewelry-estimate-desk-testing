@@ -343,6 +343,19 @@ customer email drafted before the price brief and included in it. Measured
 before the prompt cut: about three minutes per claim on Qwen with the full
 runbook; to be re-measured with the branch prompts.
 
+**Speed fix 1 — bundled worker steps (built 3 September 2026).** A claim
+used to cost 10-12 model round trips. Now `worker-start` returns the thread
+as plain text (`gmail_text.thread_digest`), so the worker never opens Gmail
+JSON; `review-thread` takes only the worker's judgment (specification plus
+missing fields, or the post-estimate artifact), adds the thread ids,
+records the review, and runs everything deterministic after it: the spot
+price, the cost skeleton, the missing-rate question, or the post-estimate
+finalize; and `price` takes the worker's quantities (grams, hours, an
+optional carat, fee and accent catalog keys) and does skeleton fill,
+finalize, binding, brief, record, mirror, and claim finish in one command.
+An intake claim is now about five round trips: start, write review,
+review-thread, then either write body plus send-spec-followup or price.
+
 **Stage C — deterministic approvals for bookings and renderings.**
 Calendar-write helper with receipts; rendering generation by script with
 PNGs attached to the owner notification; booking and rendering approval at

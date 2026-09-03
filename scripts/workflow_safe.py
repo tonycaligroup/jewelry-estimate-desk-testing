@@ -19,6 +19,8 @@ import customer_content_guard
 import estimate_record
 import gmail_reply
 import gmail_safe
+import gmail_text
+import spot_price
 import inbox_claim
 import gateway_token
 import gmail_classify
@@ -433,6 +435,14 @@ def worker_start(args: argparse.Namespace) -> dict[str, Any]:
     result = read_object(Path(paths["work_dir"]) / "intake-result.json")
     if result.get("message_id") != args.message_id or result.get("next_action") != "review_thread":
         raise ValueError("intake result does not describe a delegated review for this message")
+    # The thread as plain text, so the worker never opens the Gmail JSON.
+    try:
+        thread = read_object(Path(paths["gmail_thread"]))
+        profile = read_object(args.monitor_root.resolve().parent / "shop-profile.json")
+        mailbox = (profile.get("shop") or {}).get("outbound_mailbox")
+        result["thread"] = gmail_text.thread_digest(thread, args.message_id, mailbox)
+    except (OSError, ValueError, json.JSONDecodeError):
+        result["thread"] = None
     # Dead-spot guard. A previous worker may have reviewed the thread and then
     # died before, or just after, sending the specification follow-up. Tell
     # this worker exactly where to resume, or finish the claim when the send
@@ -566,6 +576,192 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
         "next_action": "review_thread",
     })
     return result
+
+
+SENT_STATUSES = {"estimate_sent", "appointment_booked", "approved"}
+
+
+def _work_paths(args: argparse.Namespace) -> dict[str, str]:
+    return inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
+
+
+def review_thread(args: argparse.Namespace) -> dict[str, Any]:
+    """Record the worker's review and run every deterministic step after it.
+
+    The worker supplies only its judgment: before an estimate, the merged
+    specification and the missing required fields; after one, the
+    post-estimate artifact. Everything else that used to cost a model round
+    trip happens here: the thread ids come from the fetched thread, the
+    review is persisted, and then either the follow-up is prepared, the
+    post-estimate decision is finalized, the missing rate is asked, or the
+    cost skeleton is built (including the spot price) ready for `price`.
+    """
+    review = read_object(args.review)
+    paths = _work_paths(args)
+    thread = read_object(Path(paths["gmail_thread"]))
+    digest = gmail_text.thread_digest(thread, args.message_id)
+    profile = read_object(args.shop_profile)
+    record = estimate_record.read_object(
+        estimate_record.record_path(args.record_root, args.estimate_id)
+    )
+    post_estimate = record.get("status") in SENT_STATUSES
+    snapshot: dict[str, Any] = {
+        "thread_id": digest["thread_id"],
+        "source_message_id": args.message_id,
+        "message_ids": digest["message_ids"],
+        "missing_required_fields": [],
+    }
+    if post_estimate:
+        if "post_estimate_artifact" not in review:
+            raise ValueError("a post-estimate review needs post_estimate_artifact")
+        snapshot["post_estimate_artifact"] = review["post_estimate_artifact"]
+    else:
+        if "specification" not in review or "missing_required_fields" not in review:
+            raise ValueError("a pre-estimate review needs specification and missing_required_fields")
+        snapshot["specification"] = review["specification"]
+        snapshot["missing_required_fields"] = review["missing_required_fields"]
+    record = estimate_record.record_thread_review(
+        args.record_root, args.estimate_id, snapshot, profile
+    )
+    write_private(Path(paths["current_record"]), record)
+    if post_estimate:
+        decision = finalize_post_estimate(
+            argparse.Namespace(
+                monitor_root=args.monitor_root,
+                claim_root=args.claim_root,
+                record_root=args.record_root,
+                message_id=args.message_id,
+                estimate_id=args.estimate_id,
+                record_output=Path(paths["current_record"]),
+            )
+        )
+        return {"outcome": "post_estimate_reviewed", **decision, "next": decision["next_action"]}
+
+    pending = estimate_record.pending_followup(record, args.message_id)
+    if pending is not None:
+        return {
+            "outcome": "specification_incomplete",
+            "next": "send_spec_followup",
+            "missing_required_fields": pending["missing_required_fields"],
+            "initiating": pending["initiating"],
+            "customer_reply": paths["customer_reply"],
+            "route": paths["route"],
+        }
+
+    pricing = profile.get("pricing") or {}
+    spot_evidence = None
+    spot = pricing.get("spot_metal") or {}
+    if isinstance(spot, dict) and spot.get("enabled"):
+        metal = cost_components.extract_metal(record.get("specification")).get("metal")
+        if metal:
+            try:
+                spot_evidence = spot_price.get_prices(
+                    args.monitor_root.resolve().parent / "spot-cache.json",
+                    spot.get("provider"),
+                    spot.get("refresh_frequency"),
+                    [metal],
+                    spot.get("currency", "USD"),
+                    spot.get("unit", "gram"),
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                kolo_safe.manual_review_claimed(
+                    args.monitor_root, args.claim_root, args.message_id, None,
+                    "spot_price_unavailable", runner=getattr(args, "runner", subprocess.run),
+                )
+                return {"outcome": "manual_review", "reason_code": "spot_price_unavailable",
+                        "error": str(exc)[:200], "next": "done"}
+            write_private(Path(paths["work_dir"]) / "spot-evidence.json", spot_evidence)
+    skeleton = cost_components.prepare(record, profile, spot_evidence)
+    if skeleton.get("unresolved"):
+        try:
+            asked = ask_missing_rate(args)
+        except ValueError as exc:
+            kolo_safe.manual_review_claimed(
+                args.monitor_root, args.claim_root, args.message_id, None,
+                "invalid_cost_components", runner=getattr(args, "runner", subprocess.run),
+            )
+            return {"outcome": "manual_review", "reason_code": "invalid_cost_components",
+                    "error": str(exc)[:200], "next": "done"}
+        return {**asked, "next": "done"}
+    write_private(Path(paths["work_dir"]) / "cost-skeleton.json", skeleton)
+    return {
+        "outcome": "specification_complete",
+        "next": "price",
+        "fill": skeleton["fill"],
+        "fee_catalog": [item["rate_key"] for item in skeleton.get("fee_catalog", [])],
+        "stone_catalog": [item["rate_key"] for item in skeleton.get("stone_catalog", [])],
+        "typical_finished_weights": pricing.get("typical_finished_weights") or {},
+    }
+
+
+def price(args: argparse.Namespace) -> dict[str, Any]:
+    """Fill the skeleton with the worker's quantities, finalize, request approval.
+
+    The worker's whole contribution is a few numbers: finished grams, bench
+    hours, a missing center carat, and which fee and accent-stone catalog
+    entries apply. Rates, unit costs, the price, the binding, the brief, the
+    record, the mirror, and the claim finish are all deterministic.
+    """
+    paths = _work_paths(args)
+    skeleton_path = Path(paths["work_dir"]) / "cost-skeleton.json"
+    skeleton = read_object(skeleton_path)
+    profile = read_object(args.shop_profile)
+    lines = skeleton["cost_components"]
+    for value, label in ((args.finished_grams, "finished grams"), (args.bench_hours, "bench hours")):
+        if value is None or value <= 0:
+            raise ValueError(f"{label} must be a positive number")
+    lines["metal_lines"][0]["quantity_grams"] = float(args.finished_grams)
+    lines["labor_lines"][0]["hours"] = float(args.bench_hours)
+    if lines["stone_lines"]:
+        if lines["stone_lines"][0].get("quantity") is None:
+            if args.center_carat is None or args.center_carat <= 0:
+                raise ValueError("center carat is required for this piece")
+            lines["stone_lines"][0]["quantity"] = float(args.center_carat)
+    fee_catalog = {item["rate_key"]: item for item in skeleton.get("fee_catalog", [])}
+    for key in args.fees or []:
+        if key not in fee_catalog:
+            raise ValueError(f"unknown fee '{key}'; choose from the fee catalog")
+        lines["other_hard_cost_lines"].append(dict(fee_catalog[key]))
+    stone_catalog = {item["rate_key"]: item for item in skeleton.get("stone_catalog", [])}
+    for spec in args.accents or []:
+        key, _, quantity = spec.partition(":")
+        if key not in stone_catalog:
+            raise ValueError(f"unknown accent stone '{key}'; choose from the stone catalog")
+        try:
+            carats = float(quantity)
+        except ValueError as exc:
+            raise ValueError("accent stones are written as rate_key:total_carats") from exc
+        if carats <= 0:
+            raise ValueError("accent stone carats must be positive")
+        lines["stone_lines"].append({
+            "stone": key.replace("_", " "),
+            "rate_key": key,
+            "quantity": carats,
+            "unit_cost": float(stone_catalog[key]["rate"]),
+        })
+    write_private(skeleton_path, skeleton)
+    state = cost_components.finalize(skeleton, profile)
+    write_private(Path(paths["current_state"]), state)
+    record = request_approval(
+        argparse.Namespace(
+            monitor_root=args.monitor_root,
+            claim_root=args.claim_root,
+            record_root=args.record_root,
+            message_id=args.message_id,
+            estimate_id=args.estimate_id,
+            current_state=Path(paths["current_state"]),
+            approval_request=Path(paths["approval_request"]),
+            shop_profile=args.shop_profile,
+            record_output=Path(paths["current_record"]),
+        )
+    )
+    return {
+        "outcome": "approval_requested",
+        "proposed_price": state.get("proposed_price"),
+        "cost_components": state.get("cost_components"),
+        "record_status": record.get("status"),
+        "next": "done",
+    }
 
 
 def ask_missing_rate(args: argparse.Namespace) -> dict[str, Any]:
@@ -885,6 +1081,21 @@ def main(argv: list[str] | None = None) -> int:
     not_inquiry.add_argument("--estimate-id", required=True)
     not_inquiry.add_argument("--reason", required=True)
     not_inquiry.add_argument("--record-output", type=Path, required=True)
+    review = sub.add_parser("review-thread")
+    for name in ("--monitor-root", "--claim-root", "--record-root", "--shop-profile", "--review"):
+        review.add_argument(name, type=Path, required=True)
+    review.add_argument("--message-id", required=True)
+    review.add_argument("--estimate-id", required=True)
+    pricing = sub.add_parser("price")
+    for name in ("--monitor-root", "--claim-root", "--record-root", "--shop-profile"):
+        pricing.add_argument(name, type=Path, required=True)
+    pricing.add_argument("--message-id", required=True)
+    pricing.add_argument("--estimate-id", required=True)
+    pricing.add_argument("--finished-grams", type=float, required=True)
+    pricing.add_argument("--bench-hours", type=float, required=True)
+    pricing.add_argument("--center-carat", type=float, default=None)
+    pricing.add_argument("--fee", dest="fees", action="append", default=[])
+    pricing.add_argument("--accent", dest="accents", action="append", default=[])
     ask_rate = sub.add_parser("ask-missing-rate")
     ask_rate.add_argument("--monitor-root", type=Path, required=True)
     ask_rate.add_argument("--claim-root", type=Path, required=True)
@@ -926,6 +1137,10 @@ def main(argv: list[str] | None = None) -> int:
             record = worker_start(args)
         elif args.command == "resolve-review-approval":
             record = resolve_review_approval(args)
+        elif args.command == "review-thread":
+            record = review_thread(args)
+        elif args.command == "price":
+            record = price(args)
         elif args.command == "ask-missing-rate":
             record = ask_missing_rate(args)
         elif args.command == "open-questions":
