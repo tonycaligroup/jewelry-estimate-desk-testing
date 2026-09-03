@@ -202,13 +202,79 @@ def match_rate_key(
         key for key in card
         if isinstance(key, str) and required <= _tokens(key)
     ]
-    if preferred:
-        narrowed = [key for key in candidates if preferred <= _tokens(key)]
-        if narrowed:
-            candidates = narrowed
+    if preferred and len(candidates) > 1:
+        # The key that shares the most descriptive tokens with the
+        # specification wins (14k_white_gold over 14k_yellow_gold for a white
+        # gold piece; lab_grown_sapphire over sapphire for a lab-grown stone).
+        # A tie stays ambiguous.
+        scored = sorted(
+            candidates, key=lambda key: len(preferred & _tokens(key)), reverse=True
+        )
+        best = len(preferred & _tokens(scored[0]))
+        if best > 0 and len(preferred & _tokens(scored[1])) < best:
+            candidates = [scored[0]]
     if len(candidates) == 1:
         return candidates[0], candidates
     return None, sorted(candidates)
+
+
+def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """Rates the card lacks for this specification, in the order pricing needs them.
+
+    Each entry names the card section, a key built from the specification's
+    own words (so that once the owner's answer is saved under it the next
+    match resolves), and the words to use when asking the owner.
+    """
+    specification = record.get("specification")
+    if not isinstance(specification, dict) or not specification:
+        raise ValueError("the record has no specification; record the thread review first")
+    pricing = shop_profile.get("pricing")
+    if not isinstance(pricing, dict):
+        raise ValueError("shop profile is missing its pricing block")
+    missing: list[dict[str, Any]] = []
+    metal = extract_metal(specification)
+    if metal["metal"] is not None and not _spot_enabled(pricing):
+        required = {metal["metal"]}
+        preferred: set[str] = set()
+        if metal["karat"]:
+            preferred |= {f"{metal['karat']}k", str(metal["karat"])}
+        if metal["color"]:
+            preferred.add(metal["color"])
+        key, candidates = match_rate_key(pricing.get("metal_per_gram"), required, preferred)
+        if key is None:
+            parts = [
+                f"{metal['karat']}k" if metal["karat"] else None,
+                metal["color"],
+                metal["metal"],
+            ]
+            missing.append({
+                "rate_kind": "metal_per_gram",
+                "line": "metal_lines[0]",
+                "suggested_key": "_".join(part for part in parts if part),
+                "description": metal["description"] or metal["metal"],
+                "candidates": candidates,
+            })
+    stone = extract_center_stone(specification)
+    if stone["stone_type"] is not None:
+        preferred = set(stone["origin"] or ())
+        key, candidates = match_rate_key(
+            pricing.get("stones_per_carat"), {stone["stone_type"]}, preferred
+        )
+        if key is None:
+            origin = stone["origin"] or ()
+            words = (
+                "lab-grown" if origin == ("lab", "grown")
+                else "natural" if origin == ("natural",)
+                else None
+            )
+            missing.append({
+                "rate_kind": "stones_per_carat",
+                "line": "stone_lines[0]",
+                "suggested_key": "_".join([*origin, stone["stone_type"]]),
+                "description": " ".join(w for w in (words, stone["stone_type"]) if w),
+                "candidates": candidates,
+            })
+    return missing
 
 
 def _catalog(card: Any) -> list[dict[str, Any]]:

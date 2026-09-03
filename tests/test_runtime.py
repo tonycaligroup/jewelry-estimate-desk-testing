@@ -30,6 +30,8 @@ import cron_config
 import customer_state_reset
 import inbox_claim
 import inbox_watcher
+import owner_questions
+import cost_components as cost_components_module
 import inbox_monitor
 import estimate_record
 import gateway_token
@@ -7014,3 +7016,264 @@ class ReviewBriefTests(unittest.TestCase):
             self.assertEqual(quiet["message"], "NO_REPLY")
             loud = inbox_monitor.run_report(args.monitor_root, args.claim_root)
             self.assertIn("awaiting manual review", loud["message"])
+
+
+class OwnerQuestionTests(unittest.TestCase):
+    """WORKFLOW.md 6.10: a missing rate is a plain question, answered in chat."""
+
+    def spec(self) -> dict:
+        return {
+            "piece_type": "pendant",
+            "metal": "14k white gold",
+            "center_stone": {"type": "lab-grown sapphire", "carat": 0.75},
+            "setting_style": "bezel",
+        }
+
+    def profile(self, **stones) -> dict:
+        return {
+            "shop": {"outbound_mailbox": "shop@example.com"},
+            "pricing": {
+                "model": "cost_plus_multiplier",
+                "markup_multiplier": 2.0,
+                "spot_metal": {"enabled": False},
+                "metal_per_gram": {"14k_white_gold": 60.0},
+                "stones_per_carat": dict(stones),
+                "fees": {},
+                "bench_labor_per_hour": 90,
+            },
+        }
+
+    def test_missing_rates_names_the_stone_and_suggests_a_key_that_will_match(self) -> None:
+        record = {"specification": self.spec(), "route": {}}
+        missing = cost_components_module.missing_rates(record, self.profile())
+        self.assertEqual(len(missing), 1)
+        self.assertEqual(missing[0]["rate_kind"], "stones_per_carat")
+        self.assertEqual(missing[0]["suggested_key"], "lab_grown_sapphire")
+        self.assertEqual(missing[0]["description"], "lab-grown sapphire")
+        # Once the answer is saved under the suggested key, the next match resolves.
+        profile = self.profile(lab_grown_sapphire=450, sapphire=900)
+        self.assertEqual(cost_components_module.missing_rates(record, profile), [])
+        key, _ = cost_components_module.match_rate_key(
+            profile["pricing"]["stones_per_carat"], {"sapphire"}, {"lab", "grown"}
+        )
+        self.assertEqual(key, "lab_grown_sapphire")
+        # A preferred-token tie stays ambiguous rather than guessing.
+        key, candidates = cost_components_module.match_rate_key(
+            {"sapphire_a": 1, "sapphire_b": 2}, {"sapphire"}, {"lab", "grown"}
+        )
+        self.assertIsNone(key)
+        self.assertEqual(candidates, ["sapphire_a", "sapphire_b"])
+        # The better-described metal key wins for a white gold piece.
+        key, _ = cost_components_module.match_rate_key(
+            {"14k_white_gold": 1, "14k_yellow_gold": 2}, {"gold"}, {"14k", "14", "white"}
+        )
+        self.assertEqual(key, "14k_white_gold")
+
+    def test_question_text_reads_like_a_person_and_carries_a_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "questions"
+            rate = {"rate_kind": "stones_per_carat", "suggested_key": "lab_grown_sapphire",
+                    "description": "lab-grown sapphire", "candidates": []}
+            created, q = owner_questions.create_missing_rate(
+                root, "jed-0123456789abcdef", "msg-1", rate, "Tony Lomelino",
+                owner_questions.summary_of_piece(self.spec()),
+            )
+            self.assertTrue(created)
+            self.assertEqual(
+                q["text"],
+                "Tony Lomelino asked for a quote on a pendant in 14K white gold with a "
+                "lab-grown sapphire 0.75 ct. I do not have a per carat price for lab-grown "
+                "sapphire on your rate card. What price per carat should I use? Reply with "
+                'just the number, for example "use 450". '
+                f"(Question {owner_questions.reference(q['question_id'])}, estimate JED-0123456789ABCDEF)",
+            )
+            again, same = owner_questions.create_missing_rate(
+                root, "jed-0123456789abcdef", "msg-1", rate, "Someone Else", "x"
+            )
+            self.assertFalse(again)
+            self.assertEqual(same["question_id"], q["question_id"])
+            self.assertEqual(owner_questions.find(root, owner_questions.reference(q["question_id"]).lower())["question_id"], q["question_id"])
+            self.assertEqual(owner_questions.only_open(root)["question_id"], q["question_id"])
+
+    def test_delivery_is_journaled_and_sent_once_with_one_reminder_after_a_day(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "questions"
+            rate = {"rate_kind": "metal_per_gram", "suggested_key": "18k_rose_gold",
+                    "description": "18K rose gold", "candidates": ["14k_white_gold"]}
+            _created, q = owner_questions.create_missing_rate(root, "jed-0123456789abcdef", "m", rate, None, "a ring")
+            self.assertIn("Your card has these related rates", q["text"])
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            asked = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+            q["asked_at"] = asked.isoformat(); owner_questions.save(root, q)
+            q = owner_questions.deliver(root, q, runner=runner, now=asked)
+            self.assertEqual(q["delivery"]["status"], "sent")
+            self.assertEqual(runner.call_args.args[0][:3], ["kolo", "notify-owner", "-m"])
+            owner_questions.deliver(root, q, runner=runner, now=asked)
+            self.assertEqual(runner.call_count, 1)
+            # Not yet due, then due exactly once.
+            soon = asked + timedelta(hours=23)
+            self.assertEqual(owner_questions.send_due_reminders(root, runner=runner, now=soon), 0)
+            later = asked + timedelta(hours=25)
+            self.assertEqual(owner_questions.send_due_reminders(root, runner=runner, now=later), 1)
+            self.assertTrue(runner.call_args.args[0][3].startswith("Reminder, still waiting on this:"))
+            self.assertEqual(owner_questions.send_due_reminders(root, runner=runner, now=later + timedelta(days=3)), 0)
+            # A failed send is uncertain, never retried on its own.
+            _c, other = owner_questions.create_missing_rate(root, "jed-0123456789abcdef", "m", {**rate, "suggested_key": "platinum"}, None, "a ring")
+            failing = Mock(side_effect=subprocess.CalledProcessError(1, ["kolo"]))
+            other = owner_questions.deliver(root, other, runner=failing)
+            self.assertEqual(other["delivery"]["status"], "uncertain")
+            self.assertEqual(owner_questions.deliver(root, other, runner=failing)["delivery"]["status"], "uncertain")
+            self.assertEqual(failing.call_count, 1)
+
+    def test_parse_amount_reads_one_number_and_refuses_ambiguity(self) -> None:
+        self.assertEqual(owner_questions.parse_amount("use 450"), 450.0)
+        self.assertEqual(owner_questions.parse_amount("$1,250.50 per carat"), 1250.5)
+        self.assertEqual(owner_questions.parse_amount("Question 3F9A2C: 300"), 300.0)
+        for bad in ("", "no idea", "400 or 450", "0", "use 3F9A2C"):
+            with self.assertRaises(ValueError):
+                owner_questions.parse_amount(bad)
+
+    def test_ask_missing_rate_asks_once_and_parks_the_claim(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            args, paths = helper.claimed(directory, sender="tony@example.net")
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                result = workflow_safe.intake(args)
+            estimate_id = result["estimate_id"]
+            estimate_record.record_thread_review(
+                args.record_root, estimate_id,
+                {"thread_id": "thread-1", "source_message_id": "inquiry-1",
+                 "message_ids": ["inquiry-1"], "specification": self.spec(),
+                 "missing_required_fields": []},
+            )
+            args.shop_profile.write_text(json.dumps(self.profile()), encoding="utf-8")
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            ask = argparse.Namespace(
+                monitor_root=args.monitor_root, claim_root=args.claim_root,
+                record_root=args.record_root, shop_profile=args.shop_profile,
+                message_id="inquiry-1", estimate_id=estimate_id, runner=runner,
+            )
+            out = workflow_safe.ask_missing_rate(ask)
+            self.assertEqual(out["outcome"], "awaiting_owner")
+            self.assertEqual(out["rate_key"], "lab_grown_sapphire")
+            self.assertEqual(out["delivery"], "sent")
+            text = runner.call_args.args[0][3]
+            self.assertTrue(text.startswith("Pat Customer asked for a quote on a pendant"))
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "awaiting_owner")
+            self.assertEqual(state["reason_code"], "missing_rate")
+            item = inbox_monitor.load_queue_item(args.monitor_root, "inquiry-1")
+            self.assertEqual(item["processing_status"], "awaiting_owner")
+            self.assertEqual(inbox_monitor.list_manual_reviews(args.monitor_root), [])
+            # The work directory survives for the resume.
+            self.assertTrue(Path(paths["gmail_message"]).exists())
+            # Re-running neither re-asks nor re-sends, and a settled claim is fine.
+            with self.assertRaises(ValueError):
+                workflow_safe.ask_missing_rate(ask)  # claim is no longer processing
+            self.assertEqual(runner.call_count, 1)
+            report = inbox_monitor.run_report(args.monitor_root, args.claim_root)
+            self.assertEqual(report["counts"]["awaiting_owner"], 1)
+            self.assertEqual(report["message"], "NO_REPLY")
+
+    def test_answer_question_saves_the_rate_reopens_the_claim_and_starts_a_worker(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            desk = ws / "estimate-desk"
+            desk.mkdir(parents=True)
+            # Build the parked state inside a real workspace layout.
+            args, paths = helper.claimed(str(desk), sender="tony@example.net")
+            # helper.claimed used desk/monitor and desk/claims; move to the watcher layout.
+            (desk / "monitor").rename(desk / "inbox-monitor")
+            (desk / "claims").rename(desk / "inbox-claims")
+            args.monitor_root = desk / "inbox-monitor"
+            args.claim_root = desk / "inbox-claims"
+            args.record_root = desk / "records"
+            args.shop_profile = desk / "shop-profile.json"
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+            ):
+                result = workflow_safe.intake(args)
+            estimate_id = result["estimate_id"]
+            estimate_record.record_thread_review(
+                args.record_root, estimate_id,
+                {"thread_id": "thread-1", "source_message_id": "inquiry-1",
+                 "message_ids": ["inquiry-1"], "specification": self.spec(),
+                 "missing_required_fields": []},
+            )
+            args.shop_profile.write_text(json.dumps(self.profile()), encoding="utf-8")
+            notify = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            out = workflow_safe.ask_missing_rate(argparse.Namespace(
+                monitor_root=args.monitor_root, claim_root=args.claim_root,
+                record_root=args.record_root, shop_profile=args.shop_profile,
+                message_id="inquiry-1", estimate_id=estimate_id, runner=notify,
+            ))
+            listed = workflow_safe.open_questions(argparse.Namespace(workspace=ws))
+            self.assertEqual([q["question_id"] for q in listed], [out["question_id"]])
+            spawner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-9"}', ""))
+            answered = workflow_safe.answer_question(argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=None, answer="use 450",
+                openclaw="openclaw", runner=spawner,
+            ))
+            self.assertEqual(answered["outcome"], "answered")
+            self.assertEqual(answered["value"], 450.0)
+            self.assertEqual(answered["worker_job_id"], "job-9")
+            profile = json.loads(args.shop_profile.read_text(encoding="utf-8"))
+            self.assertEqual(profile["pricing"]["stones_per_carat"]["lab_grown_sapphire"], 450.0)
+            provenance = profile["pricing"]["rate_provenance"]["stones_per_carat.lab_grown_sapphire"]
+            self.assertEqual(provenance["source"], "owner_answer")
+            self.assertEqual(provenance["answer_text"], "use 450")
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "processing")
+            self.assertEqual(state["resume_count"], 1)
+            self.assertTrue(inbox_claim.recovery_lease_active(state))
+            item = inbox_monitor.load_queue_item(args.monitor_root, "inquiry-1")
+            self.assertEqual(item["processing_status"], "processing")
+            argv = spawner.call_args.args[0]
+            self.assertEqual(argv[1:3], ["cron", "create"])
+            self.assertIn("--no-deliver", argv)
+            self.assertIn(estimate_id, argv[argv.index("--message") + 1])
+            # The worker's first command now succeeds against the reopened claim.
+            started = workflow_safe.worker_start(argparse.Namespace(
+                monitor_root=args.monitor_root, claim_root=args.claim_root, message_id="inquiry-1"
+            ))
+            self.assertEqual(started["outcome"], "owner_answered")
+            self.assertEqual(started["next_action"], "review_thread")
+            # The card now resolves; nothing is missing any more.
+            record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
+            self.assertEqual(cost_components_module.missing_rates(record, profile), [])
+            # Answering again is a no-op, and open-questions is empty.
+            again = workflow_safe.answer_question(argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=out["reference"], answer="450",
+                openclaw="openclaw", runner=spawner,
+            ))
+            self.assertEqual(again["outcome"], "already_answered")
+            self.assertEqual(spawner.call_count, 1)
+            self.assertEqual(workflow_safe.open_questions(argparse.Namespace(workspace=ws)), [])
+            with self.assertRaises(ValueError):
+                workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=None, answer="450", openclaw="openclaw", runner=spawner,
+                ))
+
+    def test_watcher_tick_sends_due_reminders(self) -> None:
+        watcher = WatcherTickTests("test_tick_closes_machine_mail_and_spawns_one_worker_per_inquiry")
+        watcher.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = watcher.workspace(directory, [])
+            root = owner_questions.questions_root(ws / "estimate-desk" / "inbox-monitor")
+            rate = {"rate_kind": "stones_per_carat", "suggested_key": "ruby", "description": "ruby", "candidates": []}
+            _c, q = owner_questions.create_missing_rate(root, "jed-0123456789abcdef", "m", rate, None, "a ring")
+            q["asked_at"] = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+            q["delivery"] = {"status": "sent"}
+            owner_questions.save(root, q)
+            summary, runner = watcher.run_tick(ws)
+            self.assertEqual(summary["reminders"], 1)
+            self.assertEqual(summary["message"], "NO_REPLY")
+            sent = [c.args[0] for c in runner.call_args_list if c.args[0][:2] == ["kolo", "notify-owner"]]
+            self.assertEqual(len(sent), 1)
+            self.assertTrue(sent[0][3].startswith("Reminder"))
+

@@ -25,7 +25,10 @@ from typing import Any, Iterator
 
 
 SCHEMA_VERSION = 1
-TERMINAL_STATUSES = {"processed", "manual_review"}
+# awaiting_owner: the desk asked the owner a question (WORKFLOW.md 6.10) and
+# parked this claim; reopen() returns it to processing once the answer lands.
+TERMINAL_STATUSES = {"processed", "manual_review", "awaiting_owner"}
+REASONED_STATUSES = {"manual_review", "awaiting_owner"}
 NOTIFICATION_STATUSES = {"pending", "sent", "failed_pre_delivery", "uncertain"}
 NOTIFICATION_FIELDS = ("owner_notification", "manual_review_notification")
 PROCESSING_PHASES = {
@@ -449,6 +452,42 @@ def delegate(
         return state
 
 
+def reopen(
+    root: Path,
+    message_id: str,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return a parked (awaiting_owner) claim to processing under a new token.
+
+    The owner has answered, so the inquiry resumes from where it stopped: the
+    phase journal is kept, the claim gets a fresh token and a worker lease, and
+    the count of resumes goes up so a repeat is visible in the record.
+    """
+    if type(lease_seconds) is not int or lease_seconds < 1:
+        raise ValueError("lease_seconds must be a positive integer")
+    current = datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("status") != "awaiting_owner":
+            raise ValueError(f"claim is {state.get('status')}, not awaiting_owner; nothing to reopen")
+        state["status"] = "processing"
+        state["claim_token"] = secrets.token_hex(16)
+        state.pop("finished_at", None)
+        state.pop("reason_code", None)
+        state["resume_count"] = state.get("resume_count", 0) + 1
+        state["retry_count_at_phase"] = 0
+        state["last_progress_at"] = current.isoformat()
+        state["recovery_lease_expires_at"] = (
+            current + timedelta(seconds=lease_seconds)
+        ).isoformat()
+        write_state(path, state)
+        return state
+
+
 def authorize_legacy_resume(
     root: Path,
     message_id: str,
@@ -629,8 +668,8 @@ def finish(
     if status not in TERMINAL_STATUSES:
         raise ValueError("invalid terminal claim status")
     if status == "processed" and reason_code is not None:
-        raise ValueError("reason_code is allowed only for manual_review")
-    if status == "manual_review" and (
+        raise ValueError("reason_code is allowed only for manual_review or awaiting_owner")
+    if status in REASONED_STATUSES and (
         not reason_code
         or len(reason_code) > 80
         or not all(

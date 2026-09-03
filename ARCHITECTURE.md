@@ -189,7 +189,33 @@ receives only finalized messages. Ticks announce nothing unless the desk
 itself fails; workers never announce; the redundant "unresolved review" chat
 alert is gone because the brief is the notification.
 
-### 2.7 Records, evidence, and audit (exists today)
+### 2.7 Owner questions (built 3 September 2026; missing rate only so far)
+
+WORKFLOW.md 6.10 splits what the desk sends the owner into permissions
+(approval briefs) and facts (plain-English questions in the channel). The
+first question kind is a missing rate. `cost_components.missing_rates()`
+names the card section, a key built from the specification's own words, and
+the words to ask with. The worker runs `workflow_safe.py ask-missing-rate`,
+which files one question in `estimate-desk/questions/` (idempotent by
+estimate, kind, and key), sends it through `kolo notify-owner` with
+write-ahead journaling, and parks the claim as `awaiting_owner`, a third
+terminal claim status that keeps the work directory and is invisible to the
+review list and the stale reconciler. The watcher sends one reminder after
+24 hours.
+
+The answer arrives in the main Kolo session, which runs
+`workflow_safe.py answer-question` with the owner's words verbatim. That
+command reads exactly one number, saves it to the rate card with provenance
+(`pricing.rate_provenance`), reopens the claim under a fresh token and a
+worker lease (`inbox_claim.reopen`), writes an intake result the worker's
+`worker-start` accepts, and spawns the one-shot worker. The price still goes
+through the price brief, so a misread number is caught there. The rate-key
+matcher now prefers the key sharing the most descriptive tokens with the
+specification, so the saved key resolves on the next pass instead of
+re-raising the question. The same shape is intended for the unclear-reply
+and same-sender cases, which still fall to manual review today.
+
+### 2.8 Records, evidence, and audit (exists today)
 
 Unchanged: one private record per inquiry as the routing index, mirrored to
 Kolo; write-ahead journaling of every external action on the claim; audit
@@ -197,7 +223,7 @@ events with idempotent keys. The record gains an explicit `next_action_at`
 and an `approval_valid_until` so follow-ups and stale approvals are data, not
 inference.
 
-### 2.8 Configuration binding (exists today, simplified)
+### 2.9 Configuration binding (exists today, simplified)
 
 The durable monitor state binds a hash of the watcher job definition and of
 the three worker templates. Workers are created from those templates by the

@@ -80,6 +80,8 @@ route to the pinned agent.
 - `scripts/inbox_watcher.py`: the model-free scheduled tick: validate,
   reconcile, discover, claim, fetch, intake, close mail no customer wrote,
   and start one worker job per claim that needs judgment.
+- `scripts/owner_questions.py`: plain-English questions to the owner (a
+  missing rate today), one reminder, and the answer saved to the rate card.
 - `scripts/cron_config.py`: render the watcher command and the per-claim
   worker prompt, and bind durable monitor state to the complete
   behavior-bearing live Kolo cron configuration.
@@ -565,7 +567,8 @@ For each returned message:
 Kolo records do not provide compare-and-swap. These helpers protect one shared
 workspace but cannot guarantee exclusion across independent hosts. Keep claim
 and queue state indefinitely; do not delete claims or create a retention cron.
-The monitor uses only the existing statuses `processed` and `manual_review` plus
+The monitor uses only the statuses `processed`, `manual_review`, and
+`awaiting_owner` (a claim parked while the owner answers a question) plus
 fixed reason codes. Its cron message contains only fixed instructions and
 opaque/provider IDs. Stay silent when no queued work or alert exists.
 
@@ -790,8 +793,22 @@ accent-stone lines by copying `stone_catalog` entries with a quantity. Never
 edit a `rate_key`, `unit_cost`, `spot_price_per_gram`, `purity`, or `rate`
 that the helper filled, and never read the scripts' source to work out a
 format. If `unresolved` is not empty, the shop has no single rate for that
-line: fail closed to manual review with reason `invalid_cost_components` and
-let the owner add the rate. Then finalize:
+line. That is a question for the owner, not a review (WORKFLOW.md 6.10):
+
+```bash
+python3 {baseDir}/scripts/workflow_safe.py ask-missing-rate \
+  --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
+  --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
+  --record-root '<absolute-workspace>/estimate-desk/records' \
+  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
+  --message-id '<gmail-id>' \
+  --estimate-id '<estimate-id>'
+```
+
+It asks the owner which rate to use, parks this claim as `awaiting_owner`,
+and finalizes; you are done (reply `NO_REPLY` in a worker). Never ask the
+owner yourself, guess a rate, or file a review for a missing rate. Otherwise
+finalize:
 
 ```bash
 python3 {baseDir}/scripts/cost_components.py finalize \
@@ -825,8 +842,9 @@ For reference, `current-state.json` contains:
   `spot_price_per_gram` and `purity`, and its `unit_cost` must equal
   `spot_price_per_gram` times `purity`, with the spot figure matching the
   recorded spot price evidence. If a required rate is not configured, never
-  substitute, estimate, or infer one: fail closed to manual review with reason
-  `invalid_cost_components` and let the owner add the rate. Do not add line totals,
+  substitute, estimate, or infer one: run `workflow_safe.py ask-missing-rate`
+  (Phase 2). `invalid_cost_components` is only for a malformed line the
+  helper refuses. Do not add line totals,
   `hard_cost_total`, or `customer_price`; the approval helper calculates and
   inserts them deterministically into the owner-only `internal_cost_sheet`.
 - internal pricing, jeweler cost assumptions, feasibility, appointment options,
@@ -984,6 +1002,28 @@ It closes the review (a repeat is a no-op) and reports the brief as executed.
 A rejected brief needs no action; the review stays open. Never read the
 customer's mail into the chat to "help" with the decision, and never resolve
 a review the owner did not approve.
+
+### Handling the owner's answer to a desk question in the main Kolo session
+
+When pricing lacks a rate, the desk asks the owner here in plain words (who
+asked, what for, "What price per carat should I use?", and a six-character
+question code) and parks the claim as `awaiting_owner`. When the owner
+replies with a number, run exactly one command, with their words verbatim:
+
+```bash
+python3 {baseDir}/scripts/workflow_safe.py answer-question \
+  --workspace '<absolute-workspace>' --base-dir '{baseDir}' \
+  --question '<question code, when the owner quoted one>' \
+  --answer '<the owner's reply, verbatim>'
+```
+
+Omit `--question` when exactly one question is open. It saves the rate to
+the card with provenance, reopens the claim, and starts the worker; the
+price still arrives as an approval brief. If it refuses (no number, two
+numbers, several open questions), tell the owner what it needs in one
+sentence and wait. Never edit the rate card by hand, pick a number, or re-run
+with a different answer. `workflow_safe.py open-questions --workspace
+'<absolute-workspace>'` lists what is still waiting.
 
 ### Handling approved appointment requests in the main Kolo session
 

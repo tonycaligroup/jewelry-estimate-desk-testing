@@ -109,7 +109,6 @@ No matter what stage I'm on, I hand these straight to you and send nothing:
 - Someone saying a piece is lost, damaged, or not what they ordered
 - Any request to send an unapproved price
 - Families arguing over an heirloom
-- A request I don't fully understand
 - Press or media
 - Anything that smells like fraud or stolen goods
 
@@ -142,11 +141,16 @@ Everything I do is written down, including my mistakes.
 - **I time myself** — how many minutes from their email to a decision in your
   hands. If I'm slow somewhere, you'll see where.
 
-Anything that needs a human decision shows up in your Approval Required list
-as a brief that says, in plain words, why it needs you, who wrote, and when.
-Approve it once you have handled it; reject it to leave it open. You can also
-ask Kolo: **“Show my unresolved Jewelry Estimate Desk reviews.”** You should
-never have to hunt for it, and you will never get a stream of progress
+Anything that needs your permission shows up in your Approval Required list
+as a brief: a price, a rendering, a meeting. Anything I need to *know* I ask
+you in plain words, right here in this chat. If a customer wants a stone
+that is not on your rate card, you get one message: who asked, what for, and
+what I need, for example "What price per carat should I use? Reply with just
+the number." Answer in your own words with the number in it. I save it to
+your rate card so you are never asked twice, and the estimate comes back to
+you as a normal price approval. If you have not answered in a day I remind
+you once, then wait. You should never have to hunt for anything, and you
+will never get a stream of progress
 messages: the desk only speaks when something is finished or something is
 wrong.
 
