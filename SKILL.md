@@ -1019,7 +1019,9 @@ Omit `--question` when exactly one question is open. It applies the answer
 (saves the rate and prices; quotes a new piece; or closes the thread to the
 owner) and reports what it did. If it refuses (no number, an unclear answer,
 several open questions, an invalid record), tell the owner what it said and
-wait; never pick an answer or re-run with a different one.
+wait; never pick an answer or re-run with a different one. If it fails part
+way (a traceback), run the same command again: it carries on from where it
+stopped and replays a recorded answer whose inquiry never moved.
 
 ### Handling approved appointment requests in the main Kolo session
 
