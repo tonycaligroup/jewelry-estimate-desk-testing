@@ -266,8 +266,16 @@ def tick(
         review_lines=False,
     )
     summary["message"] = report["message"]
+    notes = []
     if summary["spawn_failures"]:
-        note = f"{summary['spawn_failures']} worker job(s) could not be started; will retry."
+        notes.append(f"{summary['spawn_failures']} worker job(s) could not be started; will retry.")
+    deferred = [item for item in summary["inline"] if item.get("outcome") == "deferred"]
+    if deferred:
+        notes.append(
+            f"{len(deferred)} claim(s) could not be judged this tick ({deferred[0].get('error', '')[:120]}); will retry."
+        )
+    if notes:
+        note = "\n".join(notes)
         summary["message"] = note if report["message"] == "NO_REPLY" else report["message"] + "\n" + note
     return summary
 
