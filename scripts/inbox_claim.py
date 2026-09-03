@@ -414,6 +414,41 @@ def resume_stale(
         return True, state
 
 
+def delegate(
+    root: Path,
+    message_id: str,
+    claim_token: str,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Lease a processing claim to a worker job for a bounded time.
+
+    The watcher hands judgment work to a separate job. While that job runs,
+    the claim must look busy to every other tick, or the stale reconciler
+    would resume or fail it under the worker. The existing recovery lease
+    already means "someone owns this until then", so the same field carries
+    the worker's deadline, and nothing else about the claim changes.
+    """
+    if type(lease_seconds) is not int or lease_seconds < 1:
+        raise ValueError("lease_seconds must be a positive integer")
+    current = datetime.now(timezone.utc) if now is None else now
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("status") != "processing":
+            raise ValueError("only a processing claim can be delegated")
+        if state.get("claim_token") != claim_token:
+            raise ValueError("claim token does not match the authoritative claim")
+        state["recovery_lease_expires_at"] = (
+            current + timedelta(seconds=lease_seconds)
+        ).isoformat()
+        state["last_progress_at"] = current.isoformat()
+        write_state(path, state)
+        return state
+
+
 def authorize_legacy_resume(
     root: Path,
     message_id: str,

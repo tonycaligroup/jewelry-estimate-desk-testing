@@ -77,8 +77,14 @@ route to the pinned agent.
   state, and a durable provider-ID-only discovery queue.
 - `scripts/estimate_record.py`: create, update, and find the private local
   estimate records used as the authoritative inbox-routing index.
-- `scripts/cron_config.py`: render the fixed cron message and bind durable
-  monitor state to the complete behavior-bearing live Kolo cron configuration.
+- `scripts/inbox_watcher.py`: the model-free scheduled tick: validate,
+  reconcile, discover, claim, fetch, intake, close mail no customer wrote,
+  and start one worker job per claim that needs judgment.
+- `scripts/cron_config.py`: render the watcher command and the per-claim
+  worker prompt, and bind durable monitor state to the complete
+  behavior-bearing live Kolo cron configuration.
+- `templates/inbox-worker-cron.txt`: the prompt of one worker job; it begins
+  with `workflow_safe.py worker-start` and ends with `NO_REPLY`.
 - `scripts/gmail_classify.py`: from deterministic Gmail headers alone, set
   aside mail no customer wrote (bounces, automatic replies, calendar
   invitations and RSVPs, automated notifications, mailing-list mail, and
@@ -207,8 +213,24 @@ must keep: never replace the cron or reset its activation timestamp or
 discovery watermark, and the Kolo user who installs and activates the skill is
 automatically the approver.
 
+### Watcher and workers
+
+The scheduled Kolo job is a command, not a model turn. Every tick it runs
+`inbox_watcher.py`, which performs the discovery phase and the deterministic
+front of the queue phase below, closes mail no customer wrote, and leases
+each remaining claim to a one-shot worker job created from
+`templates/inbox-worker-cron.txt` with its own 900-second clock, the pinned
+model, thinking off, and the safe tool allowlist. The worker begins with
+`workflow_safe.py worker-start`, which proves the lease and returns the intake
+result and `work_paths`; it never discovers, claims, or reports. The lease
+keeps the next tick from resuming or failing a claim a worker still holds;
+when a worker dies, the lease lapses, the stale reconciler resumes the claim
+once, and the next tick starts a new worker. The watcher's stdout is the
+run report, or `NO_REPLY`.
+
 ### Cron discovery phase
 
+Performed by the watcher on every tick; a worker never runs these steps.
 Discovery and processing are separate. A processing failure must not prevent a
 later discovery window from being durably recorded.
 
@@ -238,6 +260,8 @@ later discovery window from being durably recorded.
 
 ### Queue processing phase
 
+Steps 1 and 2 below (claim, fetch, intake) are performed by the watcher; the
+worker starts at step 3 with the intake result `worker-start` returns.
 Repeatedly call `inbox_monitor.py claim-next`. It returns the oldest eligible
 message already claimed and synchronized, or `null`. The helper permits only
 the oldest unfinished item in each Gmail thread; a stuck thread does not block

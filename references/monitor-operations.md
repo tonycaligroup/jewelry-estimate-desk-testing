@@ -36,26 +36,38 @@ every pre-activation inquiry manually.
 
    If any capability is unavailable, report an unsupported environment and
    leave monitoring inactive. Never weaken the activation boundary.
-3. Render the fixed cron message from the bundled template:
+3. Render the watcher command line. The scheduled job is model-free: it runs
+   `scripts/inbox_watcher.py`, which polls Gmail, claims, classifies, routes,
+   records, and starts one short-lived worker job per message that needs
+   judgment. The owner target is the Kolo chat that receives announcements:
 
    ```bash
-   python3 {baseDir}/scripts/cron_config.py render-message \
+   python3 {baseDir}/scripts/cron_config.py render-watcher-command \
      --workspace '<absolute-workspace>' --base-dir '{baseDir}' \
-     --output "$WORK/cron-message.txt"
+     --owner-target 'kolo:<owner-chat-id>'
    ```
 
-4. Create exactly one disabled `jed-inbox-monitor` using that message. Default
-   to every five minutes during the configured business hours in the owner's
-   IANA timezone. If the owner requests another interval, use and preserve that
-   interval instead; never silently reset an existing owner-selected schedule.
-   Use model
-   `litellm-fireworks/glm-5-3`, no fallbacks, a 900-second timeout,
-   `lightContext: true`,
-   `toolsAllow: ["exec", "read", "write", "image_generate"]`, an isolated
-   session, and Kolo owner announcement delivery. Never enable or manually run
-   it yet. If a job with that name
-   already exists, stop and use the reconfiguration procedure below; never
-   create a second job.
+4. Create exactly one disabled `jed-inbox-monitor` command job from the
+   OpenClaw command line (never by retyping through a chat model). Default to
+   every two minutes during the configured business hours in the owner's IANA
+   timezone; a model-free tick costs nothing when the inbox is empty. If the
+   owner requests another interval, use and preserve it. Use a 300-second
+   timeout, the workspace as the working directory, and Kolo owner
+   announcement delivery:
+
+   ```bash
+   openclaw cron create --cron '*/2 7-23 * * 1-6' --tz '<owner-timezone>' \
+     --name jed-inbox-monitor --command "$(cat "$WORK/watcher-command.txt")" \
+     --command-cwd '<absolute-workspace>' --timeout-seconds 300 \
+     --announce --channel kolo --to 'kolo:<owner-chat-id>' --disabled --json
+   ```
+
+   Worker jobs are created by the watcher itself with
+   `--delete-after-run`, the pinned model, thinking off, the safe tool
+   allowlist, and a 900-second timeout; never create them by hand. Never
+   enable or manually run the monitor yet. If a job with that name already
+   exists, stop and use the reconfiguration procedure below; never create a
+   second job.
 5. Re-read the disabled job from Kolo into private JSON and derive its stable
    binding:
 
@@ -146,9 +158,15 @@ watermark, queue, claims, and records are preserved.
 
    This atomically changes monitor state to `reconfiguring`; every cron run must
    then exit successfully with `NO_REPLY` before Gmail access or side effects.
-3. Disable and edit the existing Kolo job in place with the rendered prompt and
-   every target runtime field. Re-read it and run `bind-live`; the resulting
-   binding must exactly equal `target-cron-binding.json`.
+3. Disable and edit the existing Kolo job in place from the OpenClaw command
+   line with the rendered watcher command and every target runtime field
+   (`openclaw cron edit <id> --command "$(cat "$WORK/watcher-command.txt")"
+   --command-cwd '<absolute-workspace>' --timeout-seconds 300 --disable`).
+   Re-read it with `openclaw cron get <id>` into private JSON and run
+   `bind-live`; the resulting binding must exactly equal
+   `target-cron-binding.json`. A job that still carries the old model-driven
+   `agentTurn` payload binds and reconfigures the same way; `target-binding`
+   always produces the watcher command.
 4. Commit the target binding and enable the same job ID:
 
    ```bash

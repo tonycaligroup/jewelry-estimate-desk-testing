@@ -389,6 +389,26 @@ def not_an_inquiry(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def worker_start(args: argparse.Namespace) -> dict[str, Any]:
+    """Hand a worker job the intake result for the one claim leased to it.
+
+    A worker is told which message it owns and nothing else. This is the only
+    thing it may run first: it proves the claim is still processing and still
+    leased, then returns the intake result the watcher wrote, with the exact
+    work paths, so the worker never chooses paths or repeats intake.
+    """
+    state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, args.message_id))
+    if state.get("status") != "processing":
+        raise ValueError(f"claim is {state.get('status')}, not processing; nothing to do")
+    if not inbox_claim.recovery_lease_active(state):
+        raise ValueError("claim lease has expired; the watcher will recover it")
+    paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
+    result = read_object(Path(paths["work_dir"]) / "intake-result.json")
+    if result.get("message_id") != args.message_id or result.get("next_action") != "review_thread":
+        raise ValueError("intake result does not describe a delegated review for this message")
+    return result
+
+
 def intake(args: argparse.Namespace) -> dict[str, Any]:
     """Classify, route, decide ownership, and record one claimed message.
 
@@ -617,6 +637,10 @@ def main(argv: list[str] | None = None) -> int:
     take.add_argument("--record-root", type=Path, required=True)
     take.add_argument("--message-id", required=True)
     take.add_argument("--shop-profile", type=Path, required=True)
+    start = sub.add_parser("worker-start")
+    start.add_argument("--monitor-root", type=Path, required=True)
+    start.add_argument("--claim-root", type=Path, required=True)
+    start.add_argument("--message-id", required=True)
     not_inquiry = sub.add_parser("not-an-inquiry")
     not_inquiry.add_argument("--monitor-root", type=Path, required=True)
     not_inquiry.add_argument("--claim-root", type=Path, required=True)
@@ -647,6 +671,8 @@ def main(argv: list[str] | None = None) -> int:
             record = intake(args)
         elif args.command == "not-an-inquiry":
             record = not_an_inquiry(args)
+        elif args.command == "worker-start":
+            record = worker_start(args)
         elif args.command == "finalize-post-estimate":
             record = finalize_post_estimate(args)
         elif args.command == "record-appointment-booked":

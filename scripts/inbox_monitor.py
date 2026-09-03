@@ -884,7 +884,10 @@ def list_manual_reviews(root: Path) -> list[dict[str, Any]]:
 
 
 def run_report(
-    root: Path, claim_root: Path | None = None, announce: bool = False
+    root: Path,
+    claim_root: Path | None = None,
+    announce: bool = False,
+    in_flight_ok: bool = False,
 ) -> dict[str, Any]:
     """Derive the owner-facing run summary from durable state alone.
 
@@ -901,6 +904,7 @@ def run_report(
     reviews = list_manual_reviews(root)
     uncertain_notifications = 0
     uncertain_actions = 0
+    delegated = 0
     if claim_root is not None:
         for item in items:
             try:
@@ -909,6 +913,12 @@ def run_report(
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
+            if (
+                item["processing_status"] == "processing"
+                and state.get("status") == "processing"
+                and inbox_claim.recovery_lease_active(state)
+            ):
+                delegated += 1
             for field in inbox_claim.NOTIFICATION_FIELDS:
                 notification = state.get(field)
                 if (
@@ -926,10 +936,14 @@ def run_report(
 
     settled = counts["processing"] == 0
     lines: list[str] = []
-    if not settled:
+    # With worker jobs, claims legitimately stay processing between ticks
+    # while a leased worker holds them. Those are in flight, not stuck; only
+    # an unleased processing claim is worth a line, and the stale reconciler
+    # will act on it once it ages.
+    if not settled and not (in_flight_ok and delegated == counts["processing"]):
         lines.append(
-            f"{counts['processing']} claimed item(s) still processing; "
-            "this run did not settle."
+            f"{counts['processing'] - (delegated if in_flight_ok else 0)} claimed "
+            "item(s) still processing; this run did not settle."
         )
     if reviews:
         codes = ", ".join(sorted({review["reason_code"] for review in reviews}))
@@ -951,6 +965,7 @@ def run_report(
         "manual_reviews": reviews,
         "uncertain_notifications": uncertain_notifications,
         "uncertain_external_actions": uncertain_actions,
+        "delegated": delegated,
         "message": message,
         "repeat": False,
     }

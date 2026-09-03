@@ -29,6 +29,7 @@ import customer_content_guard
 import cron_config
 import customer_state_reset
 import inbox_claim
+import inbox_watcher
 import inbox_monitor
 import estimate_record
 import gateway_token
@@ -2480,12 +2481,20 @@ class CronConfigTests(unittest.TestCase):
         )
         job["payload"].pop("lightContext")
         target = cron_config.build_target_binding(job, Path("/workspace"), ROOT)
-        self.assertEqual(target["payload"]["model"], cron_config.MODEL)
-        self.assertEqual(target["payload"]["fallbacks"], [])
-        self.assertEqual(target["payload"]["timeoutSeconds"], cron_config.TIMEOUT_SECONDS)
+        # The canonical job is now the model-free watcher command, whatever
+        # the live job carried before.
+        self.assertEqual(target["payload"]["kind"], "command")
+        self.assertEqual(
+            target["payload"]["argv"],
+            ["sh", "-lc", cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner")],
+        )
+        self.assertEqual(target["payload"]["cwd"], str(Path("/workspace").resolve()))
+        self.assertEqual(target["payload"]["timeoutSeconds"], cron_config.WATCHER_TIMEOUT_SECONDS)
         self.assertEqual(cron_config.TIMEOUT_SECONDS, 900)
-        self.assertTrue(target["payload"]["lightContext"])
-        self.assertEqual(target["payload"]["toolsAllow"], cron_config.TOOLS_ALLOW)
+        self.assertNotIn("message", target["payload"])
+        self.assertEqual(target["schedule"], job["schedule"])
+        self.assertEqual(target["delivery"]["to"], "kolo:test-owner")
+        cron_config.validate_binding(target)
 
     def test_target_binding_preserves_owner_selected_interval(self) -> None:
         job = self.live_job()
@@ -6619,3 +6628,247 @@ class ReviewFindingRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WatcherBindingTests(unittest.TestCase):
+    def live_command_job(self) -> dict:
+        return {
+            "id": "5b9a4cf1-0df1-481f-8d68-bbbc4cb005bd",
+            "name": "jed-inbox-monitor",
+            "enabled": True,
+            "schedule": {"kind": "cron", "expr": "*/2 7-23 * * 1-6", "tz": "America/Los_Angeles"},
+            "sessionTarget": "isolated",
+            "wakeMode": "now",
+            "payload": {
+                "kind": "command",
+                "argv": ["sh", "-lc", cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner")],
+                "cwd": str(Path("/workspace").resolve()),
+                "timeoutSeconds": cron_config.WATCHER_TIMEOUT_SECONDS,
+                "outputMaxBytes": 4096,
+            },
+            "delivery": {"mode": "announce", "channel": "kolo", "to": "kolo:test-owner"},
+            "state": {"lastRunStatus": "ok"},
+        }
+
+    def test_command_binding_round_trips_and_rejects_drift(self) -> None:
+        binding = cron_config.build_binding(self.live_command_job(), Path("/workspace"), ROOT)
+        self.assertEqual(binding["payload"]["kind"], "command")
+        self.assertNotIn("outputMaxBytes", binding["payload"])
+        cron_config.validate_binding(binding)
+        drifted = self.live_command_job()
+        drifted["payload"]["argv"][2] += " --max-workers 9"
+        with self.assertRaisesRegex(ValueError, "canonical command"):
+            cron_config.build_binding(drifted, Path("/workspace"), ROOT)
+        other_target = self.live_command_job()
+        other_target["delivery"]["to"] = "kolo:someone-else"
+        with self.assertRaises(ValueError):
+            cron_config.build_binding(other_target, Path("/workspace"), ROOT)
+        tampered = dict(binding)
+        tampered["payload"] = {**binding["payload"], "timeoutSeconds": 60}
+        with self.assertRaises(ValueError):
+            cron_config.validate_binding(tampered)
+
+    def test_target_binding_from_a_command_live_job_is_stable(self) -> None:
+        live = self.live_command_job()
+        target = cron_config.build_target_binding(live, Path("/workspace"), ROOT)
+        self.assertEqual(target, cron_config.build_binding(live, Path("/workspace"), ROOT))
+
+    def test_watcher_command_and_worker_message_reject_unsafe_values(self) -> None:
+        with self.assertRaises(ValueError):
+            cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:x y")
+        message = cron_config.render_worker_message(
+            Path("/workspace"), ROOT, "1a06400e05547c1c", "jed-0123456789abcdef", "/workspace/estimate-desk/work/abc"
+        )
+        for placeholder in ("<WORKSPACE>", "<BASE_DIR>", "<CLAIMED_GMAIL_ID>", "<ESTIMATE_ID>", "<WORK_DIR>"):
+            self.assertNotIn(placeholder, message)
+        self.assertIn("worker-start", message)
+        self.assertIn("--message-id '1a06400e05547c1c'", message)
+        self.assertIn("reply with exactly `NO_REPLY`", message)
+        self.assertNotIn("claim-next --claim-root", message)
+        self.assertNotIn("assert-settled`. Then", message)
+        with self.assertRaises(ValueError):
+            cron_config.render_worker_message(Path("/workspace"), ROOT, "bad id", "jed-x", "/w")
+        with self.assertRaises(ValueError):
+            cron_config.render_worker_message(Path("/workspace"), ROOT, "1a06400e05547c1c", "jed-x", "relative/dir")
+
+    def test_render_watcher_command_cli(self) -> None:
+        with patch("sys.stdout", io.StringIO()) as stdout:
+            code = cron_config.main([
+                "render-watcher-command", "--workspace", "/workspace", "--base-dir", str(ROOT),
+                "--owner-target", "kolo:test-owner",
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner"))
+
+
+class WatcherTickTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.helper = IntakeTests("test_intake_cli_prints_the_result")
+
+    def workspace(self, directory: str, messages: list[tuple[str, str, dict]]) -> Path:
+        ws = Path(directory) / "ws"
+        desk = ws / "estimate-desk"
+        desk.mkdir(parents=True)
+        monitor_root = desk / "inbox-monitor"
+        inbox_monitor.prepare(monitor_root, self.helper.capabilities(), self.helper.cron())
+        inbox_monitor.activate(monitor_root, self.helper.cron(), 1_000)
+        (desk / "shop-profile.json").write_text(
+            json.dumps({"shop": {"outbound_mailbox": "shop@example.com"}}), encoding="utf-8"
+        )
+        self.messages = {
+            message_id: self.helper.gmail_message(message_id, thread_id, **headers)
+            for message_id, thread_id, headers in messages
+        }
+        self.batch = [
+            {"gmail_message_id": message_id, "thread_id": thread_id, "internal_date_ms": 1_100 + index}
+            for index, (message_id, thread_id, _headers) in enumerate(messages)
+        ]
+        return ws
+
+    def fake_discover(self, monitor_root: Path, token: str, now_ms=None, opener=None) -> dict:
+        result = inbox_monitor.discover_complete(monitor_root, self.batch, 1_000, 2_000)
+        return {"discovered": len(self.batch), **result}
+
+    def fake_fetch(self, monitor_root: Path, claim_root: Path, message_id: str, token: str, opener=None) -> dict:
+        paths = inbox_monitor.prepare_claim_work(monitor_root, claim_root, message_id)
+        message = self.messages[message_id]
+        Path(paths["gmail_message"]).write_text(json.dumps(message), encoding="utf-8")
+        Path(paths["gmail_thread"]).write_text(
+            json.dumps({"id": message["threadId"], "messages": [message]}), encoding="utf-8"
+        )
+        return {"gmail_message": paths["gmail_message"], "gmail_thread": paths["gmail_thread"]}
+
+    def run_tick(self, ws: Path, runner=None, **kwargs) -> tuple[dict, Mock]:
+        if runner is None:
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-1", "name": "jed-worker"}', ""))
+        with (
+            patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+            patch.object(inbox_watcher.gmail_fetch, "discover", side_effect=self.fake_discover),
+            patch.object(inbox_watcher.gmail_fetch, "fetch_claimed", side_effect=self.fake_fetch),
+            patch.object(workflow_safe, "mirror_record"),
+            patch.object(workflow_safe.kolo_safe, "notify_owner_claimed"),
+        ):
+            summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=runner, token="t", **kwargs)
+        return summary, runner
+
+    def test_tick_closes_machine_mail_and_spawns_one_worker_per_inquiry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self.workspace(directory, [
+                ("invite-1", "thread-cal", {"Subject": "Invitation: Builders meeting @ Wed"}),
+                ("inquiry-1", "thread-1", {}),
+            ])
+            summary, runner = self.run_tick(ws)
+            self.assertEqual(summary["discovered"], 2)
+            self.assertEqual(summary["closed"], 1)
+            self.assertEqual(summary["workers"], [{"message_id": "inquiry-1", "job_id": "job-1"}])
+            self.assertEqual(summary["spawn_failures"], 0)
+            self.assertEqual(summary["message"], "NO_REPLY")
+            runner.assert_called_once()
+            argv = runner.call_args.args[0]
+            self.assertEqual(argv[:3], ["openclaw", "cron", "create"])
+            self.assertIn("--delete-after-run", argv)
+            self.assertEqual(argv[argv.index("--name") + 1], "jed-worker-inquiry-1")
+            self.assertEqual(argv[argv.index("--model") + 1], cron_config.MODEL)
+            self.assertEqual(argv[argv.index("--thinking") + 1], "off")
+            self.assertEqual(argv[argv.index("--timeout-seconds") + 1], "900")
+            self.assertEqual(argv[argv.index("--to") + 1], "kolo:test-owner")
+            self.assertEqual(runner.call_args.kwargs.get("shell"), False)
+            message = argv[argv.index("--message") + 1]
+            self.assertIn("--message-id 'inquiry-1'", message)
+            self.assertNotIn("<ESTIMATE_ID>", message)
+            desk = ws / "estimate-desk"
+            claim = inbox_claim.read_state(inbox_claim.claim_path(desk / "inbox-claims", "inquiry-1"))
+            self.assertEqual(claim["status"], "processing")
+            self.assertTrue(inbox_claim.recovery_lease_active(claim))
+            stored = list((desk / "work").glob("*/intake-result.json"))
+            self.assertEqual(len(stored), 1)
+            result = json.loads(stored[0].read_text(encoding="utf-8"))
+            self.assertEqual(result["next_action"], "review_thread")
+            self.assertIn("worker-start", message)
+            self.assertIn(result["estimate_id"], message)
+            self.assertEqual(inbox_monitor.load_queue_item(desk / "inbox-monitor", "invite-1")["processing_status"], "processed")
+            self.assertEqual(inbox_monitor.load_queue_item(desk / "inbox-monitor", "inquiry-1")["processing_status"], "processing")
+
+    def test_tick_caps_workers_and_leaves_the_rest_unclaimed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self.workspace(directory, [
+                ("inquiry-1", "thread-1", {"sender": "one@example.net"}),
+                ("inquiry-2", "thread-2", {"sender": "two@example.net"}),
+                ("inquiry-3", "thread-3", {"sender": "three@example.net"}),
+            ])
+            summary, runner = self.run_tick(ws, max_workers=2)
+            self.assertEqual(len(summary["workers"]), 2)
+            self.assertEqual(runner.call_count, 2)
+            desk = ws / "estimate-desk"
+            self.assertEqual(inbox_monitor.load_queue_item(desk / "inbox-monitor", "inquiry-3")["processing_status"], "unclaimed")
+            report = inbox_monitor.run_report(desk / "inbox-monitor", desk / "inbox-claims", in_flight_ok=True)
+            self.assertEqual(report["delegated"], 2)
+            self.assertEqual(report["message"], "NO_REPLY")
+            plain = inbox_monitor.run_report(desk / "inbox-monitor", desk / "inbox-claims")
+            self.assertIn("still processing", plain["message"])
+
+    def test_spawn_failure_keeps_the_claim_and_says_so(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self.workspace(directory, [("inquiry-1", "thread-1", {})])
+            runner = Mock(side_effect=subprocess.CalledProcessError(1, ["openclaw"], "", "boom"))
+            summary, _runner = self.run_tick(ws, runner=runner)
+            self.assertEqual(summary["workers"], [])
+            self.assertEqual(summary["spawn_failures"], 1)
+            self.assertIn("could not be started", summary["message"])
+            desk = ws / "estimate-desk"
+            claim = inbox_claim.read_state(inbox_claim.claim_path(desk / "inbox-claims", "inquiry-1"))
+            self.assertEqual(claim["status"], "processing")
+
+    def test_tick_does_nothing_while_reconfiguring(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self.workspace(directory, [("inquiry-1", "thread-1", {})])
+            desk = ws / "estimate-desk"
+            state = inbox_monitor.load_monitor_state(desk / "inbox-monitor")
+            state["activation_state"] = "reconfiguring"
+            state["pending_cron_sha256"] = "sha256:" + "a" * 64
+            inbox_monitor.atomic_write_json(desk / "inbox-monitor" / "monitor-state.json", state)
+            summary, runner = self.run_tick(ws)
+            self.assertEqual(summary["skipped"], "reconfiguring")
+            self.assertEqual(summary["message"], "NO_REPLY")
+            runner.assert_not_called()
+
+    def test_worker_start_hands_over_only_while_leased(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self.workspace(directory, [("inquiry-1", "thread-1", {})])
+            summary, _runner = self.run_tick(ws)
+            desk = ws / "estimate-desk"
+            args = argparse.Namespace(
+                monitor_root=desk / "inbox-monitor", claim_root=desk / "inbox-claims", message_id="inquiry-1"
+            )
+            result = workflow_safe.worker_start(args)
+            self.assertEqual(result["next_action"], "review_thread")
+            self.assertEqual(result["message_id"], "inquiry-1")
+            self.assertTrue(result["work_paths"]["gmail_thread"].endswith("gmail-thread.json"))
+            with patch.object(inbox_claim, "recovery_lease_active", return_value=False):
+                with self.assertRaisesRegex(ValueError, "lease has expired"):
+                    workflow_safe.worker_start(args)
+            args.message_id = "missing-1"
+            with self.assertRaises((ValueError, OSError)):
+                workflow_safe.worker_start(args)
+
+    def test_delegate_requires_the_authoritative_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self.workspace(directory, [("inquiry-1", "thread-1", {})])
+            self.run_tick(ws)
+            desk = ws / "estimate-desk"
+            with self.assertRaises(ValueError):
+                inbox_claim.delegate(desk / "inbox-claims", "inquiry-1", "wrong-token", 60)
+            with self.assertRaises(ValueError):
+                inbox_claim.delegate(desk / "inbox-claims", "inquiry-1", "wrong-token", 0)
+
+
+class WorkerTemplateTests(unittest.TestCase):
+    def test_worker_template_is_single_claim_and_silent(self) -> None:
+        text = cron_config.worker_template_path().read_text(encoding="utf-8")
+        self.assertIn("worker-start", text)
+        self.assertIn("Never run `claim-next`", text)
+        self.assertIn("Never run `assert-settled` or `run-report`", text)
+        self.assertIn("not-an-inquiry", text)
+        self.assertIn("cost_components.py prepare", text)
+        self.assertIn("Never read the bundled scripts' source code", text)
+        self.assertNotIn("gmail_fetch.py discover", text)

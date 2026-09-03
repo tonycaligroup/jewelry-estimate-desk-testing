@@ -266,6 +266,13 @@ Persistence across Kolo's reconciliation (test 1) remains open until the
 throwaway job has survived at least one day; everything else the design
 depends on is now proven.
 
+**Stage A — built 2 September 2026 (PR pending deploy).** `scripts/inbox_watcher.py`
+is the command-kind tick; `templates/inbox-worker-cron.txt` is the per-claim
+worker prompt (today's full runbook minus discovery and reporting);
+`workflow_safe.py worker-start` hands a leased claim to its worker; the
+claim's recovery lease doubles as the worker lease; `cron_config` binds the
+watcher command line and produces it as the target for any live job.
+
 **Stage A — split the job (plumbing, low risk).**
 Watcher as a command cron; workers created per claim using today's full
 runbook as the worker prompt. Wins: silent zero-cost empty ticks, one clock
