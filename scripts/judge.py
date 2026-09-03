@@ -54,12 +54,25 @@ def default_openclaw() -> str:
 
 
 def infer_argv(prompt: str, model: str, openclaw: str) -> list[str]:
-    """Argument array for one stateless completion; never a shell string."""
-    return [openclaw, "infer", "model", "run", "--model", model, "--json", "--prompt", prompt]
+    """Argument array for one stateless completion; never a shell string.
+
+    `model run` is a lean provider completion: no agent turn, no tools, no
+    concurrency slot. There is no system-prompt or JSON-mode flag, so the
+    contract lives in the prompt and the answer is validated here. Thinking
+    is off explicitly; the models that honor it are slower with it on.
+    """
+    return [
+        openclaw, "infer", "model", "run",
+        "--model", model, "--thinking", "off", "--json", "--prompt", prompt,
+    ]
 
 
 def _unwrap(stdout: str) -> str:
-    """The CLI's JSON envelope varies by version; find the text inside it."""
+    """The text inside the CLI's JSON envelope.
+
+    The documented envelope is `{"ok": true, "outputs": [{"text": ...}]}`;
+    older or other shapes are walked generically as a fallback.
+    """
     raw = stdout.strip()
     if not raw:
         return ""
@@ -67,6 +80,16 @@ def _unwrap(stdout: str) -> str:
         value = json.loads(raw)
     except json.JSONDecodeError:
         return raw
+    if isinstance(value, dict):
+        if value.get("ok") is False:
+            raise JudgmentError(
+                f"completion reported failure: {str(value.get('error') or value)[:200]}", transient=True
+            )
+        outputs = value.get("outputs")
+        if isinstance(outputs, list) and outputs and isinstance(outputs[0], dict):
+            text = outputs[0].get("text")
+            if isinstance(text, str):
+                return text
     for _ in range(4):
         if isinstance(value, str):
             return value
@@ -102,10 +125,13 @@ def complete(
         raise JudgmentError(f"completion call failed: {exc}", transient=True) from exc
     if completed.returncode != 0:
         raise JudgmentError(
-            f"completion exited {completed.returncode}: {(completed.stderr or '')[:200]}",
+            f"completion exited {completed.returncode}: {(completed.stderr or completed.stdout or '')[:200]}",
             transient=True,
         )
-    return _unwrap(completed.stdout or "")
+    text = _unwrap(completed.stdout or "")
+    if not text.strip():
+        raise JudgmentError("completion returned no text", transient=True)
+    return text
 
 
 def extract_json(text: str) -> dict[str, Any]:

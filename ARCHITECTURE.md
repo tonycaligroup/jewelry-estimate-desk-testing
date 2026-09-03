@@ -266,7 +266,12 @@ Verified on the production pod on 2 September 2026 unless marked otherwise.
 | Maton passthrough exposes Google Calendar event creation with attendees and invitations | Verified live: insert, read, delete with an attendee (Stage 0 test 6) | Executor (booking) |
 | Maton passthrough exposes Gmail incremental history | Reported by Kolo; not yet exercised | Optional cheaper discovery |
 | Images can be generated from a shell command with count and output path | Verified live: `gpt-image-2` default, PNG written (Stage 0 test 7) | Rendering |
-| No Gmail push, no hooks, no public ingress on this pod | Verified | Polling stays |
+| No Gmail push, no hooks, no public ingress on this pod | Verified 2 Sep; a second Kolo instance (3 Sep) says `hooks.gmail` / `openclaw webhooks gmail setup` exist on the platform, so re-check whether Maton-routed Gmail on this pod can use them | Polling stays until re-checked |
+| `openclaw infer model run --model <id> --thinking off --json --prompt <text>` is the supported stateless completion; envelope `{"ok", "outputs": [{"text"}]}`, non-zero exit and `ok:false` on provider failure; no system-prompt, max-tokens, temperature, or JSON-mode flags; consumes no agent concurrency slot; command jobs inherit `LITELLM_API_KEY`/`LITELLM_BASE_URL` | Reported by a second Kolo instance from its CLI and docs, 3 Sep 2026; to confirm on this pod | Inline judgment (speed fix 2) |
+| Cheaper models for extraction and classification: `litellm-fireworks/glm-5-3-flash`, `litellm/claude-haiku-4-5`, `litellm-openai/gemini-3.1-flash-lite-preview` (5-10x cheaper per token than qwen-3-7-plus) | Reported by a second Kolo instance | `pipeline.json` `model` |
+| `openclaw infer image generate --prompt ... --json` returns `outputs[].path`; `infer image edit --file` exists | Reported; generate verified live 2 Sep | Retire the rendering worker later |
+| Edit Intent replaces the brief's execution payload with the owner's edited JSON before it reaches the session | Reported by a second Kolo instance | Executor must validate a revised payload, not re-derive |
+| No reply binding for `kolo notify-owner`; the owner's answer arrives only as a main-session chat message | Reported; matches our design (question code in the text) | Owner questions |
 | Models available include `litellm-fireworks/qwen-3-7-plus` (pod default) and `glm-5-3-flash`; the current job's implicit "high" thinking is silently downgraded on GLM and must be set explicitly if the model changes | Verified from model list and logs | Worker model choice  Workers moved to `qwen-3-7-plus` with thinking off on 3 September 2026 after a glm-5-3 worker managed 14 tool calls in 900 s. |
 
 ---
