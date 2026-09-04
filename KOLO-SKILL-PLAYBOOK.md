@@ -298,7 +298,8 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   rejected text at all; the same transcript holds #107-#109 APPROVED. The
   CLI has only `request-approval` and `update-brief`, so brief status cannot
   be polled either. A skill cannot react to a rejection by itself; the owner
-  has to say something in chat. **observed 4 Sep 2026; retest with reject notes**
+  has to say something in chat. Rejecting WITH a note typed in the notes box
+  is silent too (card for Wed 9 Sep noon, 4 Sep 2026 ~01:30 UTC). **verified 4 Sep 2026**
 - `kolo request-approval --help` and `kolo notify-owner --help` print nothing
   (2m46s, empty output), so flags have to be learned from docs or trial; no
   attachment flag is known for approval cards. **observed 3 Sep 2026**
