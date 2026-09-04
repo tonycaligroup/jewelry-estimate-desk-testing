@@ -164,6 +164,12 @@ location and collect:
 9. Booking mode, IANA timezone, and near-term meeting-offer window. Default the
    window to 7 days so the first meeting is offered ASAP, never near delivery.
 10. Optional inbox-monitoring hours and timezone.
+11. Readiness. Before enabling the cron, and after any platform change, run
+    `python3 {baseDir}/scripts/readiness.py --workspace '<absolute-workspace>'
+    --base-dir '{baseDir}'` and fix every FAIL: profile, calendar and windows,
+    activation binding, monitor state, the inline judgment model, audit-trail
+    access (rejections are read from it), the Kolo backend, and the watcher
+    job. It changes nothing and contacts no customer.
 
 Before reading or processing an inquiry, run:
 
