@@ -60,10 +60,12 @@
   "scheduling": {
     "booking_mode": "ask_owner_each_time",
     "timezone": "America/Los_Angeles",
-    "calendar": null,
+    "calendar": "primary",
     "windows": [],
     "blackouts": [],
-    "durations_minutes": {},
+    "durations_minutes": {
+      "consultation": 30
+    },
     "buffer_minutes": 0,
     "minimum_notice_minutes": 120,
     "book_out_days": 30,

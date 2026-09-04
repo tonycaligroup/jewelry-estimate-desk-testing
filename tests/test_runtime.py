@@ -8370,6 +8370,29 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(status["calendar and windows"], "FAIL")
 
 
+class CalendarListTests(unittest.TestCase):
+    def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
+        class Response:
+            def __init__(self, body): self._body = body
+            def read(self): return json.dumps(self._body).encode("utf-8")
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def opener(request, timeout=20):
+            self.assertEqual(request.get_method(), "GET")
+            self.assertTrue(request.full_url.endswith("/users/me/calendarList"))
+            return Response({"items": [
+                {"id": "shared@group.calendar.google.com", "summary": "Bench", "accessRole": "writer"},
+                {"id": "owner@example.com", "summary": "owner@example.com", "primary": True, "accessRole": "owner"},
+            ]})
+        found = calendar_query.list_calendars("tok", opener=opener)
+        self.assertEqual([c["name"] for c in found], ["owner@example.com", "Bench"])
+        self.assertTrue(found[0]["primary"])
+        template = json.loads((ROOT / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
+        self.assertEqual(template["scheduling"]["calendar"], "primary")
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("never ask for a calendar id", skill)
+
+
 class PlainTextMailTests(unittest.TestCase):
     def test_markdown_from_the_model_is_stripped_before_the_customer_sees_it(self) -> None:
         body = (

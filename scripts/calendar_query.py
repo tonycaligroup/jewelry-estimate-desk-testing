@@ -218,14 +218,48 @@ def delete_event(
         return False
 
 
+CALENDAR_LIST_URL = "https://gateway.maton.ai/google-calendar/calendar/v3/users/me/calendarList"
+
+
+def list_calendars(token: str, opener: Callable[..., Any] = urllib.request.urlopen) -> list[dict[str, Any]]:
+    """The owner's calendars, primary first: id, name, access role."""
+    if not token or any(character in token for character in "\r\n"):
+        raise ValueError("MATON_API_KEY is missing or invalid")
+    request = urllib.request.Request(
+        CALENDAR_LIST_URL, method="GET",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    with opener(request, timeout=20) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    items = body.get("items") if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("calendar provider returned an invalid calendar list")
+    found = [
+        {"id": str(i.get("id")), "name": str(i.get("summary") or i.get("id")), "primary": bool(i.get("primary")),
+         "access": str(i.get("accessRole") or "")}
+        for i in items if isinstance(i, dict) and i.get("id")
+    ]
+    return sorted(found, key=lambda x: (not x["primary"], x["name"].lower()))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--time-min", required=True)
-    parser.add_argument("--time-max", required=True)
-    parser.add_argument("--timezone", required=True)
+    parser.add_argument("--list-calendars", action="store_true", help="print the owner's calendars and exit")
+    parser.add_argument("--time-min")
+    parser.add_argument("--time-max")
+    parser.add_argument("--timezone")
     parser.add_argument("--calendar-id", default="primary")
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
+    if args.list_calendars:
+        try:
+            print(json.dumps({"calendars": list_calendars(gateway_token.load_token())}, sort_keys=True))
+            return 0
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
+            return 2
+    if not (args.time_min and args.time_max and args.timezone and args.output):
+        parser.error("--time-min, --time-max, --timezone, and --output are required for a free/busy query")
     try:
         receipt = query_freebusy(
             args.time_min,

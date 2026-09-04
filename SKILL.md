@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.0.1
+version: 4.0.2
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -163,8 +163,14 @@ location and collect:
    profile. Approval cards always go to the approval queue. This never
    changes the customer's original-channel routing.
 8. Trust stage. Default to Stage 1.
-9. Booking mode, IANA timezone, and near-term meeting-offer window. Default the
-   window to 7 days so the first meeting is offered ASAP, never near delivery.
+9. Scheduling. The calendar is the owner's primary Google Calendar, stored
+   as `primary`; never ask for a calendar id. Only if the owner wants a
+   different calendar, run `python3 {baseDir}/scripts/calendar_query.py
+   --list-calendars` and let them pick by name. Ask for the days and hours
+   they take design consultations (stored as `scheduling.windows`, for
+   example weekdays 10:00 to 17:00) and how long one takes (default 30
+   minutes). IANA timezone from their address. Keep the meeting-offer window
+   at 7 days so the first meeting is offered soon, never near delivery.
 10. Optional inbox-monitoring hours and timezone.
 11. Readiness. Before enabling the cron, and after any platform change, run
     `python3 {baseDir}/scripts/readiness.py --workspace '<absolute-workspace>'
