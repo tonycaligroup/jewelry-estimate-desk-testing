@@ -1,0 +1,28 @@
+{
+  "id": "monogram_pendant",
+  "label": "monogram or initial pendant",
+  "construction": "A monogram pendant: the specified initials as one interlocking or connected piece of metal, every letter touching or joined by a bar so the whole is rigid; one bail at the top or one at each end as fits the shape; the chain passing through the bail. Letter order and style as specified.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, no text, no people, no props.",
+  "views": [
+    "front view, monogram flat to the camera",
+    "slight three-quarter view showing thickness and bail"
+  ],
+  "checks": [
+    {
+      "id": "letters",
+      "question": "Are exactly the specified initials shown, in the specified order?"
+    },
+    {
+      "id": "joined",
+      "question": "Are all letters physically connected into one rigid piece?"
+    },
+    {
+      "id": "bail_chain",
+      "question": "Is there a bail with the chain through it, so the piece hangs from the chain?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

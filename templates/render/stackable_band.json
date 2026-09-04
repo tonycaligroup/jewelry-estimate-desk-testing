@@ -1,0 +1,24 @@
+{
+  "id": "stackable_band",
+  "label": "thin stackable band",
+  "construction": "A thin stackable band: one continuous slender ring of metal, one to two millimeters wide, with the specified profile and finish; if stones are specified they are tiny and set flush or in a short channel.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the thin profile",
+    "standing view showing width and finish"
+  ],
+  "checks": [
+    {
+      "id": "thin",
+      "question": "Is the band a single thin continuous ring, clearly slender?"
+    },
+    {
+      "id": "stones",
+      "question": "If stones are present, are they tiny and set into the band as specified, otherwise is the band plain?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

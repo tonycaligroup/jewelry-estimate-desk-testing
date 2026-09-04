@@ -1,0 +1,28 @@
+{
+  "id": "gemstone_pendant",
+  "label": "gemstone pendant",
+  "construction": "A gemstone pendant: a single stone of the specified shape held in a prong or bezel setting; the setting joined to a small bail above it; a chain through the bail. No stone is unsupported.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, no text, no people, no props.",
+  "views": [
+    "front view of the stone in its setting",
+    "slight three-quarter view showing setting depth and bail"
+  ],
+  "checks": [
+    {
+      "id": "one_stone",
+      "question": "Is there exactly one stone of the specified shape unless more were specified?"
+    },
+    {
+      "id": "seated",
+      "question": "Is the stone held by prongs or a bezel joined to the bail?"
+    },
+    {
+      "id": "bail_chain",
+      "question": "Does the chain pass through a bail joined to the setting?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

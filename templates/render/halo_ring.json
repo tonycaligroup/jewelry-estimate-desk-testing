@@ -1,0 +1,28 @@
+{
+  "id": "halo_ring",
+  "label": "halo ring",
+  "construction": "A halo ring: one continuous shank; a single center stone in a prong or bezel setting; a single ring of small accent stones encircling the center stone, each accent stone seated in shared prongs or beads; the halo joined to the setting and the shank.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the halo, center stone, and shank",
+    "top-down view of the center stone and halo"
+  ],
+  "checks": [
+    {
+      "id": "stones",
+      "question": "Are there one center stone surrounded by one continuous ring of small accent stones?"
+    },
+    {
+      "id": "seated",
+      "question": "Is every stone visibly held by prongs, a bezel, or channel walls that are part of the metal, with no stone floating?"
+    },
+    {
+      "id": "shank",
+      "question": "Is the shank one continuous band joined to the setting?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

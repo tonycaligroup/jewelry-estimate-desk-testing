@@ -1,0 +1,28 @@
+{
+  "id": "bar_pendant",
+  "label": "engraved bar pendant",
+  "construction": "A bar pendant: one solid horizontal bar of metal with the engraving centered on its face; a small loop at each end of the bar, made from the bar's metal; the chain running through both loops so the bar hangs level.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, no text, no people, no props.",
+  "views": [
+    "front view, bar level and flat to the camera",
+    "slight three-quarter view showing the loops and thickness"
+  ],
+  "checks": [
+    {
+      "id": "one_bar",
+      "question": "Is the pendant a single solid bar with the engraving on its face?"
+    },
+    {
+      "id": "two_loops",
+      "question": "Are there loops at both ends with the chain running through both so the bar hangs level?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark or initials were supplied: does the mark on the piece match them exactly? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

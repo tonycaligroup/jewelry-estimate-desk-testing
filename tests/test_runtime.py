@@ -8445,6 +8445,19 @@ class CustomerMailTests(unittest.TestCase):
 
 
 class RenderingLabTests(unittest.TestCase):
+    def test_every_archetype_template_is_complete(self) -> None:
+        found = rendering.archetypes()
+        self.assertGreaterEqual(len(found), 30)
+        for key, value in found.items():
+            self.assertEqual(value["id"], key)
+            for field in ("label", "construction", "photo", "views", "checks"):
+                self.assertTrue(value.get(field), f"{key} lacks {field}")
+            self.assertEqual(len(value["views"]), 2, key)
+            ids = [c["id"] for c in value["checks"]]
+            self.assertEqual(len(ids), len(set(ids)), key)
+            self.assertIn("clean_photo", ids, key)
+            self.assertTrue(all("?" in c["question"] for c in value["checks"]), key)
+
     def test_plan_is_validated_against_the_archetype_menu(self) -> None:
         check = rendering.check_plan(list(rendering.archetypes()))
         out = check({"archetype": "signet", "mark_source": "artwork", "must_be_exact": ["the KOLO wordmark"], "fine_lettering": True})

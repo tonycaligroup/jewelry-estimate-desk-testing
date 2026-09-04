@@ -1,0 +1,28 @@
+{
+  "id": "hoop_earrings",
+  "label": "hoop or huggie earrings",
+  "construction": "A pair of hoops: two matching continuous circles or ovals of metal of the specified diameter and thickness, each with a hinge or post closure; stones, if specified, set into the front of the hoop.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pair shown together, no text, no people, no props.",
+  "views": [
+    "front view of the pair",
+    "three-quarter view showing thickness and closure"
+  ],
+  "checks": [
+    {
+      "id": "pair",
+      "question": "Are there exactly two matching hoops?"
+    },
+    {
+      "id": "closure",
+      "question": "Does each hoop have a visible hinge or post closure?"
+    },
+    {
+      "id": "stones",
+      "question": "If stones are present, are they set into the hoop as specified, otherwise is the hoop plain?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

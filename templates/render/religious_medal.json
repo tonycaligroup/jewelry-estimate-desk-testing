@@ -1,0 +1,28 @@
+{
+  "id": "religious_medal",
+  "label": "cross or religious medal",
+  "construction": "A cross or medal: a single solid piece of metal in the specified form (plain cross, crucifix, saint medal, star, hamsa) with any relief or engraving on its face; a bail at the top joined to the piece; a chain through the bail.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, no text, no people, no props.",
+  "views": [
+    "front view flat to the camera",
+    "slight three-quarter view showing thickness and bail"
+  ],
+  "checks": [
+    {
+      "id": "one_piece",
+      "question": "Is the pendant one solid piece in the specified form?"
+    },
+    {
+      "id": "bail_chain",
+      "question": "Is there a bail at the top with the chain through it?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark or initials were supplied: does the mark on the piece match them exactly? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

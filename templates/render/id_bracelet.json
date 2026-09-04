@@ -1,0 +1,28 @@
+{
+  "id": "id_bracelet",
+  "label": "ID bracelet with an engraved plate",
+  "construction": "An ID bracelet: one solid curved plate with the engraving on its face, a chain of uniform links joined to each end of the plate by rings, and a clasp; the plate centered.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the piece fills the frame, no text, no people, no props.",
+  "views": [
+    "view of the whole bracelet with the plate centered",
+    "close front view of the plate and its end rings"
+  ],
+  "checks": [
+    {
+      "id": "plate",
+      "question": "Is there one solid plate with the engraving on its face?"
+    },
+    {
+      "id": "joined",
+      "question": "Is the chain joined to both ends of the plate, with a clasp?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark or initials were supplied: does the mark on the piece match them exactly? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

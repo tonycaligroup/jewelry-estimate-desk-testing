@@ -1,0 +1,28 @@
+{
+  "id": "remount_ring",
+  "label": "remount of the customer's own stone",
+  "construction": "A remount: the customer's existing center stone (shape and size as specified) set into a new ring of the specified style; one continuous shank; the stone seated in a new prong or bezel setting joined to the shank; the stone is the only stone unless accents are specified.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the stone in its new setting and the shank",
+    "top-down view of the stone shape and setting"
+  ],
+  "checks": [
+    {
+      "id": "stone_shape",
+      "question": "Does the center stone have the shape specified (round, oval, cushion, emerald cut, pear, marquise)?"
+    },
+    {
+      "id": "seated",
+      "question": "Is the stone held by prongs or a bezel joined to the shank?"
+    },
+    {
+      "id": "shank",
+      "question": "Is the shank one continuous band?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

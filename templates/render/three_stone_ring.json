@@ -1,0 +1,28 @@
+{
+  "id": "three_stone_ring",
+  "label": "three-stone ring",
+  "construction": "A three-stone ring: one continuous shank; three stones in a row across the top, the center stone largest unless specified, each in its own prong or bezel setting, the settings joined to each other and to the shank.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing all three stones and the shank",
+    "top-down view of the three stones"
+  ],
+  "checks": [
+    {
+      "id": "stones",
+      "question": "Are there exactly three stones in a row?"
+    },
+    {
+      "id": "seated",
+      "question": "Is every stone visibly held by prongs, a bezel, or channel walls that are part of the metal, with no stone floating?"
+    },
+    {
+      "id": "shank",
+      "question": "Is the shank one continuous band?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

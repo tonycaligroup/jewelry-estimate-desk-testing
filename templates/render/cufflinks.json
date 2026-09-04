@@ -1,0 +1,28 @@
+{
+  "id": "cufflinks",
+  "label": "cufflinks",
+  "construction": "A pair of cufflinks: two matching pieces, each a solid face in the specified shape carrying the mark, joined by a post to a toggle or fixed back; shown as a matched pair.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the piece fills the frame, no text, no people, no props.",
+  "views": [
+    "front view of the pair showing both faces",
+    "three-quarter view showing the posts and backs"
+  ],
+  "checks": [
+    {
+      "id": "pair",
+      "question": "Are there exactly two matching cufflinks?"
+    },
+    {
+      "id": "back",
+      "question": "Does each have a post joined to a toggle or fixed back?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark or initials were supplied: does the mark on the piece match them exactly? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

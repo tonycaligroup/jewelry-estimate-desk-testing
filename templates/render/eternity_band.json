@@ -1,0 +1,28 @@
+{
+  "id": "eternity_band",
+  "label": "eternity or half-eternity band",
+  "construction": "An eternity band: one continuous band with a row of equal stones set into it, all the way round (full eternity) or across the top half only (half eternity) as specified, stones seated in shared prongs, channel, or bezels that are part of the band.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the row of stones and the band",
+    "standing view showing how far round the stones go"
+  ],
+  "checks": [
+    {
+      "id": "row",
+      "question": "Are the stones a single even row of equal-sized stones set into the band?"
+    },
+    {
+      "id": "extent",
+      "question": "Do the stones go all the way round for a full eternity band, or only across the top for a half eternity band, as specified?"
+    },
+    {
+      "id": "seated",
+      "question": "Is every stone held by metal that is part of the band?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

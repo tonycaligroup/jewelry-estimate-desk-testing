@@ -1,0 +1,28 @@
+{
+  "id": "bezel_ring",
+  "label": "bezel-set ring",
+  "construction": "A bezel-set ring: one continuous shank; a single stone wrapped by a smooth continuous rim of metal (the bezel) that covers the stone's edge all the way round; the bezel joined to the shank; no prongs.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the bezel rim and shank",
+    "top-down view of the stone inside its rim"
+  ],
+  "checks": [
+    {
+      "id": "bezel",
+      "question": "Is the stone surrounded by a continuous metal rim with no prongs?"
+    },
+    {
+      "id": "one_stone",
+      "question": "Is there exactly one stone unless more were specified?"
+    },
+    {
+      "id": "shank",
+      "question": "Is the shank one continuous band joined to the bezel?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "charm",
+  "label": "charm",
+  "construction": "A charm: one small solid metal figure in the specified form, with a jump ring or bail joined to it; shown attached to a chain or bracelet link by that ring. Detail is simplified to what can be cast; no floating parts.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the piece fills the frame, no text, no people, no props.",
+  "views": [
+    "front view of the charm on its ring",
+    "three-quarter view showing depth and the jump ring"
+  ],
+  "checks": [
+    {
+      "id": "one_piece",
+      "question": "Is the charm one solid piece in the specified form?"
+    },
+    {
+      "id": "ring",
+      "question": "Is there a jump ring or bail joined to the charm, attached to a chain or link?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

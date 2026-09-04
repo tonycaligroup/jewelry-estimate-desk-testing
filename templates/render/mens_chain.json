@@ -1,0 +1,28 @@
+{
+  "id": "mens_chain",
+  "label": "men's chain necklace",
+  "construction": "A chain necklace: a length of uniform links of the specified style (cuban, curb, rope, figaro, box) and width, closed by a clasp; even links; no gap.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the chain laid in a loose oval showing the links and clasp, no text, no people, no props.",
+  "views": [
+    "view of the whole chain laid in a loose oval",
+    "close view of a section of links"
+  ],
+  "checks": [
+    {
+      "id": "links",
+      "question": "Are the links uniform and of the specified style with no gap?"
+    },
+    {
+      "id": "clasp",
+      "question": "Is there a clasp?"
+    },
+    {
+      "id": "no_extras",
+      "question": "Are there no pendants or ornaments beyond what was specified?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

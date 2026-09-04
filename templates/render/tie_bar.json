@@ -1,0 +1,24 @@
+{
+  "id": "tie_bar",
+  "label": "tie bar or money clip",
+  "construction": "A tie bar or money clip: one solid bar of metal of the specified length with the engraving on its face, folded or hinged at one end so it grips; no separate parts.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the piece fills the frame, no text, no people, no props.",
+  "views": [
+    "front view of the face",
+    "three-quarter view showing the fold or hinge"
+  ],
+  "checks": [
+    {
+      "id": "one_piece",
+      "question": "Is it a single bar with the engraving on its face and a grip at one end?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark or initials were supplied: does the mark on the piece match them exactly? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

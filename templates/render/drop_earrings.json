@@ -1,0 +1,28 @@
+{
+  "id": "drop_earrings",
+  "label": "drop or dangle earrings",
+  "construction": "A pair of drop earrings: two matching pieces, each hanging from an ear wire or post by a connected chain of elements; every element joined to the next by a ring or link; stones seated in settings; nothing floating.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pair shown together, no text, no people, no props.",
+  "views": [
+    "front view of the pair hanging side by side",
+    "three-quarter view showing the links between elements"
+  ],
+  "checks": [
+    {
+      "id": "pair",
+      "question": "Are there exactly two matching earrings?"
+    },
+    {
+      "id": "linked",
+      "question": "Is every element of each earring physically linked to the one above it, up to the wire or post?"
+    },
+    {
+      "id": "seated",
+      "question": "Is every stone held in a setting?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

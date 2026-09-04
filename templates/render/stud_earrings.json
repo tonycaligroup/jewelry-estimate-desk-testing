@@ -1,0 +1,24 @@
+{
+  "id": "stud_earrings",
+  "label": "stud earrings",
+  "construction": "A pair of stud earrings: two matching pieces, each a single stone or motif on a post; each stone held by prongs or a bezel; the post joined behind the setting; shown as a matched pair.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pair shown together, no text, no people, no props.",
+  "views": [
+    "front view of the pair side by side",
+    "three-quarter view showing the settings and posts"
+  ],
+  "checks": [
+    {
+      "id": "pair",
+      "question": "Are there exactly two matching earrings?"
+    },
+    {
+      "id": "seated",
+      "question": "Is each stone or motif held in a setting with a post behind it?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "id": "cluster_ring",
+  "label": "cluster or cocktail ring",
+  "construction": "A cluster ring: one continuous shank; a group of stones arranged close together on a single metal head (a flower, a dome, or a geometric cluster as specified), every stone seated in prongs or beads that are part of that head, the head joined to the shank.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the cluster head and shank",
+    "top-down view of the cluster arrangement"
+  ],
+  "checks": [
+    {
+      "id": "cluster",
+      "question": "Are the stones grouped together on one metal head, with none scattered elsewhere?"
+    },
+    {
+      "id": "seated",
+      "question": "Is every stone held by prongs or beads that are part of the head?"
+    },
+    {
+      "id": "shank",
+      "question": "Is the shank one continuous band joined to the head?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

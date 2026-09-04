@@ -1,0 +1,28 @@
+{
+  "id": "chain_bracelet",
+  "label": "chain bracelet",
+  "construction": "A chain bracelet: a length of uniform links of the specified style (cable, curb, paperclip, box) closed by a clasp; any charm or plate joined to a link by a ring; no gap in the chain.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the piece fills the frame, no text, no people, no props.",
+  "views": [
+    "view of the whole bracelet laid in a loose oval showing the clasp",
+    "close three-quarter view of the links and any charm or plate"
+  ],
+  "checks": [
+    {
+      "id": "links",
+      "question": "Is the chain made of uniform links of the specified style with no gap?"
+    },
+    {
+      "id": "clasp",
+      "question": "Is there a clasp closing the bracelet?"
+    },
+    {
+      "id": "attached",
+      "question": "If a charm or plate is present, is it joined to the chain by a ring or links?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

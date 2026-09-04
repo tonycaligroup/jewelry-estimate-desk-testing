@@ -1,0 +1,28 @@
+{
+  "id": "backplate_pendant",
+  "label": "pendant on a backplate (disc, medallion, or shaped plate)",
+  "construction": "A plate pendant: one solid plate of metal in the specified shape (disc, oval, shield, heart, dog tag) carrying the mark engraved or raised on its face; one bail at the top edge, made from the same metal and joined to the plate; a chain passing through the bail. The mark stays within the plate's edges.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, no text, no people, no props.",
+  "views": [
+    "front view, plate flat to the camera showing the mark",
+    "slight three-quarter view showing the bail and the plate's thickness"
+  ],
+  "checks": [
+    {
+      "id": "one_plate",
+      "question": "Is the pendant a single solid plate with the mark on its face, and nothing floating outside the plate?"
+    },
+    {
+      "id": "bail_chain",
+      "question": "Is there a bail at the top joined to the plate with the chain passing through it?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark or initials were supplied: does the mark on the piece match them exactly? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

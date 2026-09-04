@@ -1,0 +1,28 @@
+{
+  "id": "mothers_ring",
+  "label": "mother's or family birthstone ring",
+  "construction": "A birthstone ring: one continuous shank with the specified number of small stones in a row or cluster across the top, each stone in its own prong or bezel setting joined to the next and to the shank, stone colors as specified in the given order.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the row of stones and shank",
+    "top-down view showing stone order and colors"
+  ],
+  "checks": [
+    {
+      "id": "count",
+      "question": "Is the number of stones exactly as specified?"
+    },
+    {
+      "id": "colors",
+      "question": "Are the stone colors as specified, in the specified order?"
+    },
+    {
+      "id": "seated",
+      "question": "Is every stone held by a setting joined to the shank?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

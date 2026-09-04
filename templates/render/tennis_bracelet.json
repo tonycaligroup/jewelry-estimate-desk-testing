@@ -1,0 +1,28 @@
+{
+  "id": "tennis_bracelet",
+  "label": "tennis bracelet",
+  "construction": "A tennis bracelet: a flexible row of equal stones, each in its own prong or bezel setting, the settings linked to one another in a continuous line, closed by a box clasp with a safety catch.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the piece fills the frame, no text, no people, no props.",
+  "views": [
+    "view of the whole bracelet laid in a loose oval",
+    "close three-quarter view of several settings and their links"
+  ],
+  "checks": [
+    {
+      "id": "row",
+      "question": "Is the bracelet a single continuous row of equal stones in linked settings?"
+    },
+    {
+      "id": "clasp",
+      "question": "Is there a clasp closing the row?"
+    },
+    {
+      "id": "seated",
+      "question": "Is every stone held by its own setting?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

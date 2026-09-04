@@ -1,0 +1,28 @@
+{
+  "id": "locket",
+  "label": "locket",
+  "construction": "A locket: a hinged hollow pendant in the specified shape (round, oval, heart) that opens; a visible hinge on one side and a small clasp on the other; a bail at the top; a chain through the bail; the outer face plain or engraved as specified.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, no text, no people, no props.",
+  "views": [
+    "front view closed, showing the face and bail",
+    "three-quarter view slightly open showing the hinge and the inside"
+  ],
+  "checks": [
+    {
+      "id": "hinge",
+      "question": "Is there a visible hinge and a clasp so the locket would open?"
+    },
+    {
+      "id": "bail_chain",
+      "question": "Is there a bail at the top with the chain through it?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark or initials were supplied: does the mark on the piece match them exactly? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}
