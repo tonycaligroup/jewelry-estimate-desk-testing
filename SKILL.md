@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.0.3
+version: 4.0.4
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -171,7 +171,13 @@ location and collect:
    example weekdays 10:00 to 17:00) and how long one takes (default 30
    minutes). IANA timezone from their address. Keep the meeting-offer window
    at 7 days so the first meeting is offered soon, never near delivery.
-10. Optional inbox-monitoring hours and timezone.
+10. Inbox monitoring hours: ask when the desk should watch the inbox, in the
+    owner's words ("Mon-Fri 8am-6pm", "daily 7-23"), and store them under
+    `inbox_monitoring.business_hours` with the timezone. Suggest the
+    consultation days with an hour either side. Render the cron schedule
+    with `python3 {baseDir}/scripts/cron_config.py schedule-from-hours
+    --hours '<their words>'` and use that expression when creating the
+    watcher job. Outside those hours nothing is read and nothing is sent.
 11. Readiness. Before enabling the cron, and after any platform change, run
     `python3 {baseDir}/scripts/readiness.py --workspace '<absolute-workspace>'
     --base-dir '{baseDir}'` and fix every FAIL: profile, calendar and windows,

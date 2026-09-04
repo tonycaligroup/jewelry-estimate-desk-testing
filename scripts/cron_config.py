@@ -371,6 +371,67 @@ def write_text(path: Path, value: str) -> None:
     path.chmod(0o600)
 
 
+DAY_INDEX = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 0}
+DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def parse_hours(text: str) -> tuple[list[int], int, int]:
+    """Owner words like "Mon-Fri 09:00-17:00", "Mon,Wed,Fri 10-16", or
+    "daily 7am-11pm" as (cron weekdays, first hour, last hour inclusive)."""
+    import re
+
+    words = (text or "").strip().lower().replace("–", "-")
+    match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", words)
+    if not match:
+        raise ValueError("monitoring hours need a start and an end, for example \"Mon-Fri 09:00-17:00\"")
+    def hour(raw: str, suffix: str | None) -> int:
+        value = int(raw)
+        if suffix == "pm" and value < 12:
+            value += 12
+        if suffix == "am" and value == 12:
+            value = 0
+        if not 0 <= value <= 23:
+            raise ValueError("hours must be between 0 and 23")
+        return value
+    start, end = hour(match.group(1), match.group(3)), hour(match.group(4), match.group(6))
+    if end < start:
+        raise ValueError("the end hour must come after the start hour")
+    last = end if match.group(5) and match.group(5) != "00" else max(start, end - 1)
+    day_text = words[: match.start()].strip(" ,")
+    if not day_text or day_text in {"daily", "every day", "everyday", "all days", "7 days"}:
+        days = list(range(0, 7))
+    elif day_text in {"weekdays", "business days"}:
+        days = [1, 2, 3, 4, 5]
+    else:
+        days = []
+        for part in re.split(r"[,\s]+", day_text):
+            if not part:
+                continue
+            if "-" in part:
+                a, b = part.split("-", 1)
+                a, b = a[:3], b[:3]
+                if a not in DAY_INDEX or b not in DAY_INDEX:
+                    raise ValueError(f"unknown day range {part!r}")
+                ia, ib = DAY_ORDER.index(a), DAY_ORDER.index(b)
+                span = DAY_ORDER[ia: ib + 1] if ia <= ib else DAY_ORDER[ia:] + DAY_ORDER[: ib + 1]
+                days += [DAY_INDEX[d] for d in span]
+            else:
+                key = part[:3]
+                if key not in DAY_INDEX:
+                    raise ValueError(f"unknown day {part!r}")
+                days.append(DAY_INDEX[key])
+    days = sorted(set(days))
+    return days, start, last
+
+
+def schedule_expr(text: str, every_minutes: int = 2) -> str:
+    """The watcher's cron expression for the owner's monitoring hours."""
+    days, start, last = parse_hours(text)
+    day_field = "*" if len(days) == 7 else ",".join(str(d) for d in days)
+    hours = f"{start}-{last}" if last > start else str(start)
+    return f"*/{every_minutes} {hours} * * {day_field}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -378,6 +439,9 @@ def main(argv: list[str] | None = None) -> int:
     bind = sub.add_parser("bind-live")
     target = sub.add_parser("target-binding")
     watcher = sub.add_parser("render-watcher-command")
+    hours = sub.add_parser("schedule-from-hours")
+    hours.add_argument("--hours", required=True, help='owner words, e.g. "Mon-Fri 09:00-17:00"')
+    hours.add_argument("--every-minutes", type=int, default=2)
     for command in (render, bind, target, watcher):
         command.add_argument("--workspace", type=Path, required=True)
         command.add_argument("--base-dir", type=Path, required=True)
@@ -388,7 +452,9 @@ def main(argv: list[str] | None = None) -> int:
     target.add_argument("--job", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "render-watcher-command":
+        if args.command == "schedule-from-hours":
+            print(schedule_expr(args.hours, args.every_minutes))
+        elif args.command == "render-watcher-command":
             print(watcher_command(args.workspace, args.base_dir, args.owner_target))
         elif args.command == "render-message":
             # This file is consumed verbatim as payload.message. A trailing

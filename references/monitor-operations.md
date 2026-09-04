@@ -48,15 +48,16 @@ every pre-activation inquiry manually.
    ```
 
 4. Create exactly one disabled `jed-inbox-monitor` command job from the
-   OpenClaw command line (never by retyping through a chat model). Default to
-   every two minutes during the configured business hours in the owner's IANA
-   timezone; a model-free tick costs nothing when the inbox is empty. If the
-   owner requests another interval, use and preserve it. Use a 300-second
+   OpenClaw command line (never by retyping through a chat model). Every two
+   minutes during the monitoring hours the owner gave at setup, rendered with
+   `cron_config.py schedule-from-hours --hours '<their words>'`, in the
+   owner's IANA timezone; a model-free tick costs nothing when the inbox is
+   empty. If the owner requests another interval, use and preserve it. Use a 300-second
    timeout, the workspace as the working directory, and Kolo owner
    announcement delivery:
 
    ```bash
-   openclaw cron create --cron '*/2 7-23 * * 1-6' --tz '<owner-timezone>' \
+   openclaw cron create --cron "$(python3 {baseDir}/scripts/cron_config.py schedule-from-hours --hours '<owner words>')" --tz '<owner-timezone>' \
      --name jed-inbox-monitor --command "$(cat "$WORK/watcher-command.txt")" \
      --command-cwd '<absolute-workspace>' --timeout-seconds 300 \
      --announce --channel kolo --to 'kolo:<owner-chat-id>' --disabled --json

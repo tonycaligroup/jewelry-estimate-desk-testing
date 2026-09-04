@@ -8381,6 +8381,19 @@ class GatewayErrorTests(unittest.TestCase):
             gmail_fetch.fetch_json("messages", {"maxResults": 1}, "tok", opener=opener)
 
 
+class MonitoringHoursTests(unittest.TestCase):
+    def test_owner_words_become_the_watcher_schedule(self) -> None:
+        self.assertEqual(cron_config.schedule_expr("Mon-Fri 09:00-17:00"), "*/2 9-16 * * 1,2,3,4,5")
+        self.assertEqual(cron_config.schedule_expr("Mon,Wed,Fri 10-16"), "*/2 10-15 * * 1,3,5")
+        self.assertEqual(cron_config.schedule_expr("daily 7am-11pm"), "*/2 7-22 * * *")
+        self.assertEqual(cron_config.schedule_expr("weekdays 8am-6:30pm"), "*/2 8-18 * * 1,2,3,4,5")
+        self.assertEqual(cron_config.schedule_expr("Sat-Sun 10-14", every_minutes=5), "*/5 10-13 * * 0,6")
+        with self.assertRaises(ValueError):
+            cron_config.schedule_expr("whenever")
+        with self.assertRaises(ValueError):
+            cron_config.schedule_expr("Funday 9-17")
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:
