@@ -322,15 +322,51 @@ def process_claim(
             reviewed["initiating"], paths, profile, model, judge_runner, openclaw,
         )
     if nxt == "price":
-        chosen = judge.choose_quantities(
-            specification, reviewed["fill"], reviewed["fee_catalog"], reviewed["stone_catalog"],
-            reviewed.get("typical_finished_weights") or {}, model, judge_runner, openclaw,
-        )
-        priced = workflow_safe.price(_namespace(
-            p, message_id, estimate_id,
-            finished_grams=chosen["finished_grams"], bench_hours=chosen["bench_hours"],
-            center_carat=chosen.get("center_carat"), fees=chosen["fees"],
-            accents=[f"{a['key']}:{a['carats']}" for a in chosen["accents"]],
-        ))
-        return {"outcome": "approval_requested", "proposed_price": priced.get("proposed_price"), "next": "done"}
+        return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw)
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")
+
+
+def _price_after_review(
+    p: dict[str, Path], message_id: str, estimate_id: str, specification: dict[str, Any], reviewed: dict[str, Any],
+    model: str | None, judge_runner: Runner, openclaw: str | None,
+) -> dict[str, Any]:
+    chosen = judge.choose_quantities(
+        specification, reviewed["fill"], reviewed["fee_catalog"], reviewed["stone_catalog"],
+        reviewed.get("typical_finished_weights") or {}, model, judge_runner, openclaw,
+    )
+    priced = workflow_safe.price(_namespace(
+        p, message_id, estimate_id,
+        finished_grams=chosen["finished_grams"], bench_hours=chosen["bench_hours"],
+        center_carat=chosen.get("center_carat"), fees=chosen["fees"],
+        accents=[f"{a['key']}:{a['carats']}" for a in chosen["accents"]],
+    ))
+    return {"outcome": "approval_requested", "proposed_price": priced.get("proposed_price"), "next": "done"}
+
+
+def price_from_record(
+    workspace: Path, message_id: str, estimate_id: str,
+    model: str | None = None, judge_runner: Runner = subprocess.run, command_runner: Runner = subprocess.run,
+    openclaw: str | None = None,
+) -> dict[str, Any]:
+    """After the owner supplied a missing rate: price from the review already on
+    the record. The specification is not judged again, so the review recorded
+    before the question stands and nothing conflicts."""
+    desk = workspace / "estimate-desk"
+    p = {"monitor_root": desk / "inbox-monitor", "claim_root": desk / "inbox-claims", "record_root": desk / "records",
+         "shop_profile": desk / "shop-profile.json"}
+    paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    specification = record.get("specification") or {}
+    if not specification:
+        raise ValueError("the record has no reviewed specification to price")
+    review_path = Path(paths["work_dir"]) / "review.json"
+    workflow_safe.write_private(review_path, {
+        "specification": specification, "missing_required_fields": list(record.get("missing_required_fields") or []),
+    })
+    reviewed = workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner))
+    nxt = reviewed.get("next")
+    if nxt == "price":
+        return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw)
+    if nxt == "done":
+        return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
+    raise ValueError(f"the record is not ready to price (review said {nxt!r})")

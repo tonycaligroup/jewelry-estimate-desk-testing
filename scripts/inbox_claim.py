@@ -456,6 +456,7 @@ def reopen(
     root: Path,
     message_id: str,
     lease_seconds: int,
+    allow_manual_review: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a parked (awaiting_owner) claim to processing under a new token.
@@ -472,7 +473,8 @@ def reopen(
     path = claim_path(root, message_id)
     with state_lock(path):
         state = read_state(path)
-        if state.get("status") != "awaiting_owner":
+        allowed = {"awaiting_owner", "manual_review"} if allow_manual_review else {"awaiting_owner"}
+        if state.get("status") not in allowed:
             raise ValueError(f"claim is {state.get('status')}, not awaiting_owner; nothing to reopen")
         state["status"] = "processing"
         state["claim_token"] = secrets.token_hex(16)

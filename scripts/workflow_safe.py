@@ -1093,6 +1093,15 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
     p = inbox_watcher.paths_for(workspace)
     root = owner_questions.questions_root(p["monitor_root"])
     question = _question_to_answer(args, p, root)
+    if question["status"] == "answered" and question["kind"] == "missing_rate":
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], question["estimate_id"]))
+        if record.get("status") == "awaiting_specs" and _rate_claim_resumable(p, question):
+            # The rate is on the card already; the pricing after it never
+            # finished. Price now from the recorded review.
+            message_id, estimate_id = question["gmail_message_id"], question["estimate_id"]
+            _resume_parked_claim(p, message_id)
+            priced = _price_after_rate_answer(args, workspace, p, message_id, estimate_id)
+            return {"outcome": "replayed", "question_id": question["question_id"], "estimate_id": estimate_id, **(priced or {})}
     if question["status"] == "answered":
         if question["kind"] in owner_questions.DECISION_KINDS and _claim_still_waiting(p, question):
             # An earlier run recorded the answer and then failed before the
@@ -1141,9 +1150,7 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
     estimate_id = question["estimate_id"]
     import cron_config  # local import keeps module import order unchanged
 
-    reopened = inbox_monitor.reopen_item(
-        p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS
-    )
+    reopened = _resume_parked_claim(p, message_id)
     work_dir = Path(reopened["work_paths"]["work_dir"])
     if not Path(reopened["work_paths"]["gmail_message"]).exists():
         import gmail_fetch  # local import; only needed when the work file was cleaned up
@@ -1171,6 +1178,10 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
         "value": value,
         "worker_job_id": None,
     }
+    priced = _price_after_rate_answer(args, workspace, p, message_id, estimate_id)
+    if priced is not None:
+        result.update(priced)
+        return result
     try:
         result["worker_job_id"] = inbox_watcher.spawn_worker(
             workspace,
@@ -1255,11 +1266,66 @@ def _claim_still_waiting(p: dict[str, Path], question: dict[str, Any]) -> bool:
     return not (work_dir / "intake-result.json").exists()
 
 
+RESUMABLE_REVIEW_REASONS = frozenset({
+    "conflicting_thread_review_for_source_message",
+    "stale_processing_retry_exhausted",
+    "initiating_claim_not_processed",
+})
+
+
+def _rate_claim_resumable(p: dict[str, Path], question: dict[str, Any]) -> bool:
+    try:
+        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], question["gmail_message_id"]))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    if state.get("status") == "awaiting_owner":
+        return True
+    # A processing claim is a worker or a tick still at it; the stale
+    # reconciler decides that one, not a repeat of the answer.
+    return state.get("status") == "manual_review" and state.get("reason_code") in RESUMABLE_REVIEW_REASONS
+
+
+def _price_after_rate_answer(args: argparse.Namespace, workspace: Path, p: dict[str, Path],
+                             message_id: str, estimate_id: str) -> dict[str, Any] | None:
+    """Price inline from the recorded review; None means fall back to a worker."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+    import pipeline  # local import: pipeline imports this module
+
+    switch = pipeline.settings(workspace / "estimate-desk")
+    if not switch.get("inline"):
+        return None
+    inbox_claim.delegate(
+        p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
+        __import__("cron_config").WORKER_LEASE_SECONDS,
+    )
+    done = pipeline.price_from_record(
+        workspace, message_id, estimate_id, model=switch.get("model"),
+        judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
+        openclaw=getattr(args, "openclaw", None) or inbox_watcher.default_openclaw(),
+    )
+    return {"pipeline": done.get("outcome"), "proposed_price": done.get("proposed_price")}
+
+
 def _resume_parked_claim(p: dict[str, Path], message_id: str) -> dict[str, Any]:
     """Lease the parked claim for the answer; carry on if an earlier attempt already reopened it."""
     import cron_config  # local import keeps module import order unchanged
 
     state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], message_id))
+    if state.get("status") == "manual_review" and state.get("reason_code") in RESUMABLE_REVIEW_REASONS:
+        # A review the desk opened on itself (a conflict or a stale claim), not
+        # one the owner asked for: take it back and carry on.
+        item = inbox_monitor.load_queue_item(p["monitor_root"], message_id)
+        if item.get("review_status", "open") == "open":
+            inbox_monitor.resolve_manual_review(p["monitor_root"], item["gmail_message_id_sha256"])
+        inbox_claim.reopen(p["claim_root"], message_id, cron_config.WORKER_LEASE_SECONDS, allow_manual_review=True)
+        queue_item = inbox_monitor.load_queue_item(p["monitor_root"], message_id)
+        for key in ("review_status", "review_resolved_at"):
+            queue_item.pop(key, None)
+        inbox_monitor.atomic_write_json(inbox_monitor.queue_path(p["monitor_root"], message_id), queue_item)
+        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], message_id))
+        queue_item = inbox_monitor.sync_claim(p["monitor_root"], message_id, {"acquired": True, **state})
+        return {"queue_item": queue_item, "claim": {"acquired": True, "resumed": True, **state},
+                "work_paths": inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)}
     if state.get("status") == "awaiting_owner":
         return inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
     if state.get("status") == "processing":

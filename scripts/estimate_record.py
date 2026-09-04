@@ -565,6 +565,23 @@ def record_thread_review(
                 and comparable == legacy_evidence
             ):
                 return record
+            if (
+                not post_estimate
+                and record["status"] == "awaiting_specs"
+                and existing.get("outcome") == "specs_complete"
+                and not followup_sent(record, source_message_id)
+            ):
+                # Nothing was sent or priced on the earlier reading; a fresh
+                # reading of the same email (after an owner answer, or a
+                # resumed run) replaces it instead of stranding the claim.
+                existing.clear()
+                existing.update(evidence)
+                existing["recorded_at"] = datetime.now(timezone.utc).isoformat()
+                existing["superseded_earlier_review"] = True
+                record["specification"] = specification
+                record["missing_required_fields"] = sorted(missing)
+                write_object(path, record)
+                return record
             raise ValueError("conflicting thread review for source message")
         if record["status"] != "awaiting_specs" and not post_estimate:
             raise ValueError(

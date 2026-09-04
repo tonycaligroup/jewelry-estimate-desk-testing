@@ -8916,6 +8916,7 @@ class OwnerQuestionTests(unittest.TestCase):
             ws = Path(directory) / "ws"
             desk = ws / "estimate-desk"
             desk.mkdir(parents=True)
+            (desk / "pipeline.json").write_text('{"inline": false}', encoding="utf-8")  # this test covers the worker path
             # Build the parked state inside a real workspace layout.
             args, paths = helper.claimed(str(desk), sender="tony@example.net")
             # helper.claimed used desk/monitor and desk/claims; move to the watcher layout.
@@ -8990,6 +8991,60 @@ class OwnerQuestionTests(unittest.TestCase):
                 workflow_safe.answer_question(argparse.Namespace(
                     workspace=ws, base_dir=ROOT, question=None, answer="450", openclaw="openclaw", runner=spawner,
                 ))
+
+    def test_rate_answer_prices_inline_from_the_recorded_review(self) -> None:
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            desk = ws / "estimate-desk"
+            desk.mkdir(parents=True)
+            args, paths = helper.claimed(str(desk), sender="tony@example.net")
+            (desk / "monitor").rename(desk / "inbox-monitor")
+            (desk / "claims").rename(desk / "inbox-claims")
+            args.monitor_root = desk / "inbox-monitor"
+            args.claim_root = desk / "inbox-claims"
+            args.record_root = desk / "records"
+            args.shop_profile = desk / "shop-profile.json"
+            record = estimate_record.create_initial_record(args.record_root, gmail_route.build_route(helper.gmail_message("inquiry-1", "thread-1"), "shop@example.com"), 1_000)
+            root = owner_questions.questions_root(args.monitor_root)
+            _c, q = owner_questions.create_missing_rate(root, record["estimate_id"], "inquiry-1",
+                {"rate_kind": "stones_per_carat", "rate_key": "natural_diamond", "suggested_key": "natural_diamond", "description": "natural diamond", "candidates": []},
+                "Pat", "a ring")
+            token = inbox_claim.authoritative_claim_token(args.claim_root, "inquiry-1")
+            inbox_monitor.park_item(args.monitor_root, "inquiry-1", args.claim_root, token, "missing_rate")
+            spawner = Mock()
+            with (
+                patch.object(workflow_safe.owner_questions, "save_rate") as save_rate,
+                patch.object(workflow_safe.pipeline if hasattr(workflow_safe, "pipeline") else __import__("pipeline"), "price_from_record",
+                             return_value={"outcome": "approval_requested", "proposed_price": 1234.5}) as priced,
+                patch.object(workflow_safe.inbox_watcher if hasattr(workflow_safe, "inbox_watcher") else __import__("inbox_watcher"), "spawn_worker", spawner),
+            ):
+                out = workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=None, answer="Use $1500", openclaw="openclaw",
+                    runner=Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),
+                ))
+            save_rate.assert_called_once()
+            self.assertEqual(out["value"], 1500.0)
+            self.assertEqual(out["pipeline"], "approval_requested")
+            self.assertEqual(out["proposed_price"], 1234.5)
+            spawner.assert_not_called()
+            priced.assert_called_once()
+            # A second run after the answer is recorded: a claim the desk parked on itself is taken back and priced again.
+            state_path = inbox_claim.claim_path(args.claim_root, "inquiry-1")
+            state = inbox_claim.read_state(state_path)
+            with inbox_claim.state_lock(state_path):
+                state["status"] = "manual_review"; state["reason_code"] = "conflicting_thread_review_for_source_message"
+                state["finished_at"] = "2026-09-04T19:46:53+00:00"
+                inbox_claim.write_state(state_path, state)
+            inbox_monitor.sync_claim(args.monitor_root, "inquiry-1", {"acquired": False, **state})
+            with patch.object(__import__("pipeline"), "price_from_record", return_value={"outcome": "approval_requested", "proposed_price": 1234.5}):
+                again = workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=owner_questions.reference(q["question_id"]), answer="Use $1500",
+                    openclaw="openclaw", runner=Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),
+                ))
+            self.assertEqual(again["outcome"], "replayed")
+            self.assertEqual(again["pipeline"], "approval_requested")
+            self.assertEqual(inbox_claim.read_state(state_path)["status"], "processing")
 
     def test_answer_question_refuses_a_hand_edited_record_before_saving_anything(self) -> None:
         helper = IntakeTests("test_intake_cli_prints_the_result")
