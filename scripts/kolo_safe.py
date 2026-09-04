@@ -136,9 +136,30 @@ def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     profit = review.get("estimated_gross_profit")
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (price, hard, profit)):
         pct = f" ({profit / price * 100:.0f}%)" if price else ""
-        tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}"
-    room = 120 - len("Price approval: ") - len(tail)
-    return f"Price approval: {piece[:max(room, 12)]}{tail}"
+        tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}" + _assumptions(review)
+    room = TITLE_LIMIT - len("Price approval: ") - len(tail)
+    return f"Price approval: {piece[:max(room, 12)]}{tail}"[:TITLE_LIMIT]
+
+
+TITLE_LIMIT = 700  # Kolo showed a 120-character title in full by SMS; longer is being tested
+
+
+def _assumptions(review: dict[str, Any]) -> str:
+    """The cost sheet in one line, so an SMS carries every assumption."""
+    parts: list[str] = []
+    for line in review.get("metal_costs") or []:
+        if isinstance(line, dict) and line.get("quantity_grams") is not None:
+            parts.append(f"{line.get('metal')} {float(line['quantity_grams']):g}g x {_money(line.get('unit_cost') or 0)}")
+    for line in review.get("stone_costs") or []:
+        if isinstance(line, dict) and line.get("quantity") is not None:
+            parts.append(f"{line.get('stone')} {float(line['quantity']):g}ct x {_money(line.get('unit_cost') or 0)}")
+    for line in review.get("labor_costs") or []:
+        if isinstance(line, dict) and line.get("hours") is not None:
+            parts.append(f"{line.get('task')} {float(line['hours']):g}h x {_money(line.get('rate') or 0)}")
+    for line in review.get("other_hard_costs") or []:
+        if isinstance(line, dict) and line.get("total_cost") is not None:
+            parts.append(f"{line.get('label')} {_money(line.get('total_cost'))}")
+    return (". Assumptions: " + "; ".join(parts)) if parts else ""
 
 
 def approval_details(details: dict[str, Any], estimate_id: str) -> dict[str, str]:
@@ -305,6 +326,7 @@ def build_request_rendering_approval(
         "Customer": customer,
         "Piece": piece,
         "Images": f"{len(images)} view(s), sent to you in chat just before this card",
+        **({"Checker": str(details_object.get("checker"))[:200]} if details_object.get("checker") else {}),
         "Approve means": "Email these renderings to the customer in their thread, with the note that the written specification controls the piece.",
         "Reject means": "Nothing is sent; tell the desk what to change if you want new views.",
         "Estimate": estimate_id,

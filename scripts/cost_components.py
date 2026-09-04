@@ -147,8 +147,41 @@ def extract_metal(specification: Any) -> dict[str, Any]:
     }
 
 
+PAVE_WORDS = ("pave", "pavé", "melee", "micro pave", "micropave", "accent stones", "cluster", "eternity", "encrusted")
+
+
+def has_center_stone(specification: Any) -> bool:
+    """Whether the piece has one main stone to price per carat.
+
+    The customer's words decide when they are explicit (center_stone yes or
+    no from the extractor); otherwise small pave or melee stones with no
+    stated carat mean there is no center stone, and anything else keeps the
+    old assumption that a named stone is the center stone.
+    """
+    if not isinstance(specification, dict):
+        return True
+    explicit = str(specification.get("center_stone") or "").strip().lower()
+    if explicit in {"no", "none", "false"}:
+        return False
+    if explicit in {"yes", "true"}:
+        return True
+    if specification.get("stone_carat") not in (None, "", []):
+        return True
+    words = " ".join(
+        str(specification.get(key) or "").lower()
+        for key in ("setting_style", "notes", "accent_stones", "stone_count", "stone_type", "dimensions")
+    )
+    if any(word in words for word in PAVE_WORDS):
+        return False
+    if re.search(r"\b(?:0?\.\d+|1(?:\.\d+)?|2(?:\.\d+)?)\s*mm\b", words) and "center" not in words:
+        return False
+    return True
+
+
 def extract_center_stone(specification: Any) -> dict[str, Any]:
     """Find the center stone's type, origin, and carat in a specification."""
+    if not has_center_stone(specification):
+        return {"stone_type": None, "origin": None, "carat": None, "description": None}
     flat = _flatten(specification)
     stone_type: str | None = None
     origin: tuple[str, ...] | None = None

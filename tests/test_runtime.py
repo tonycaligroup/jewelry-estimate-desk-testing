@@ -8388,7 +8388,14 @@ class BriefTitleTests(unittest.TestCase):
         title = kolo_safe.approval_title(details, "jed-0123456789abcdef")
         self.assertTrue(title.startswith("Price approval: an engagement ring"))
         self.assertIn("quote $3,945.60, cost $2,100.00, profit $1,845.60 (47%)", title)
-        self.assertLessEqual(len(title), 120)
+        self.assertLessEqual(len(title), kolo_safe.TITLE_LIMIT)
+        # The whole cost sheet rides in the title so an SMS carries every assumption.
+        full = kolo_safe.approval_title({**details, "owner_review": {**details["owner_review"],
+            "metal_costs": [{"metal": "14K yellow gold", "quantity_grams": 28.5, "unit_cost": 82.95}],
+            "stone_costs": [{"stone": "natural diamond melee", "quantity": 0.75, "unit_cost": 500.0}],
+            "labor_costs": [{"task": "bench labor", "hours": 22.5, "rate": 42.0}],
+            "other_hard_costs": [{"label": "cad", "total_cost": 100.0}]}}, "jed-0123456789abcdef")
+        self.assertIn("Assumptions: 14K yellow gold 28.5g x $82.95; natural diamond melee 0.75ct x $500.00; bench labor 22.5h x $42.00; cad $100.00", full)
         # Without a review the title still names the price.
         self.assertTrue(kolo_safe.approval_title({"specification": {"piece_type": "band"}, "proposed_price": 900.0}, "jed-0123456789abcdef").endswith(", $900.00"))
 
@@ -8522,6 +8529,63 @@ class RenderingLabTests(unittest.TestCase):
         self.assertEqual(len(check["unsure"]), 4)
 
 
+class CenterStoneTests(unittest.TestCase):
+    def test_pave_only_pieces_have_no_center_stone(self) -> None:
+        pave = {"piece_type": "signet ring", "metal": "gold", "metal_karat": 14, "stone_type": "natural diamond",
+                "notes": "Feature the logo on the face. Eyes outlined in black diamonds, background set with small white diamonds. Stones are about 1mm in size."}
+        self.assertFalse(cost_components_module.has_center_stone(pave))
+        self.assertIsNone(cost_components_module.extract_center_stone(pave)["stone_type"])
+        explicit_no = {"stone_type": "diamond", "stone_carat": 1.0, "center_stone": "no"}
+        self.assertFalse(cost_components_module.has_center_stone(explicit_no))
+        solitaire = {"piece_type": "engagement ring", "stone_type": "diamond", "stone_carat": 1.0}
+        self.assertTrue(cost_components_module.has_center_stone(solitaire))
+        self.assertEqual(cost_components_module.extract_center_stone(solitaire)["carat"], 1.0)
+        named_only = {"piece_type": "pendant", "stone_type": "sapphire"}
+        self.assertTrue(cost_components_module.has_center_stone(named_only))  # the old assumption stands when nothing says otherwise
+
+    def test_prepare_prices_pave_pieces_without_a_center_line_or_a_rate_question(self) -> None:
+        record = {"schema_version": 1, "estimate_id": "jed-0123456789abcdef", "status": "awaiting_specs",
+                  "route": {"channel": "gmail", "thread_id": "t", "gmail_message_id": "m0", "recipient": "c@example.net",
+                            "identity_key": gmail_route.email_identity_key("c@example.net"), "mailbox": "shop@example.com",
+                            "original_subject": "Ring", "original_message_id": "<a@b>", "references": []},
+                  "inbound_timestamp_ms": 1,
+                  "specification": {"piece_type": "signet ring", "metal": "gold", "metal_karat": 14, "metal_color": "yellow",
+                                    "stone_type": "natural diamond", "setting_style": "pave", "notes": "1mm black and white diamonds fill the logo"}}
+        profile = {"pricing": {"bench_labor_per_hour": 42, "metal_per_gram": {"14k_yellow_gold": 82.95},
+                               "stones_per_carat": {"natural_diamond_melee": 500, "black_diamond": 450}, "fees": {}, "spot_metal": {"enabled": False}}}
+        skeleton = cost_components_module.prepare(record, profile)
+        self.assertEqual(skeleton["cost_components"]["stone_lines"], [])
+        self.assertFalse([u for u in skeleton.get("unresolved", []) if "stone" in u.get("line", "")])
+        self.assertEqual(cost_components_module.missing_rates(record, profile), [])
+
+
+class ArtworkTests(unittest.TestCase):
+    def test_image_attachments_are_found_and_fetched_newest_first(self) -> None:
+        import artwork
+        thread = {"messages": [
+            {"id": "m1", "internalDate": "1000", "payload": {"mimeType": "multipart/mixed", "parts": [
+                {"mimeType": "text/plain", "body": {"size": 10}},
+                {"mimeType": "image/png", "filename": "logo.png", "body": {"attachmentId": "a1", "size": 500}}]}},
+            {"id": "m2", "internalDate": "2000", "payload": {"mimeType": "multipart/mixed", "parts": [
+                {"mimeType": "image/jpeg", "filename": "sketch.jpg", "body": {"attachmentId": "a2", "size": 700}},
+                {"mimeType": "application/pdf", "filename": "x.pdf", "body": {"attachmentId": "a3", "size": 700}}]}},
+        ]}
+        parts = artwork.image_parts(thread)
+        self.assertEqual([p["attachment_id"] for p in parts], ["a2", "a1"])
+        class Response:
+            def __init__(self, body): self._body = body
+            def read(self): return json.dumps(self._body).encode("utf-8")
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def opener(request, timeout=30):
+            self.assertIn("/attachments/", request.full_url)
+            return Response({"data": base64.urlsafe_b64encode(b"imagebytes").decode("ascii").rstrip("=")})
+        with tempfile.TemporaryDirectory() as directory:
+            saved = artwork.collect(thread, Path(directory) / "art", "tok", opener=opener)
+            self.assertEqual([p.name for p in saved], ["artwork-1.jpg", "artwork-2.png"])
+            self.assertEqual(saved[0].read_bytes(), b"imagebytes")
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:
@@ -8569,28 +8633,31 @@ class PlainTextMailTests(unittest.TestCase):
 
 class TickRenderingTests(unittest.TestCase):
     def test_render_and_send_uses_the_shell_image_command_and_falls_back_to_a_worker(self) -> None:
+        import rendering
         p = {k: Path("/ws/estimate-desk") / v for k, v in (("monitor_root", "inbox-monitor"), ("claim_root", "inbox-claims"), ("record_root", "records"))}
         record = {"specification": {"piece_type": "pendant", "metal": "14k yellow gold", "stone_type": "ruby", "setting_style": "bezel"}}
         with tempfile.TemporaryDirectory() as directory:
             paths = {"customer_reply": str(Path(directory) / "customer-reply.txt"), "gmail_payload": str(Path(directory) / "p.json"),
                      "gmail_provider_response": str(Path(directory) / "r.json"), "current_record": str(Path(directory) / "c.json"),
-                     "appointment_intent": str(Path(directory) / "ai.json"), "appointment_approval": str(Path(directory) / "aa.json")}
-            calls = []
-            def run(argv, **_kwargs):
-                calls.append(argv)
-                return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "outputs": [{"path": f"/media/{len(calls)}.png"}]}), "")
+                     "appointment_intent": str(Path(directory) / "ai.json"), "appointment_approval": str(Path(directory) / "aa.json"),
+                     "work_dir": directory, "gmail_thread": str(Path(directory) / "gmail-thread.json")}
+            report = {"plan": {"archetype": "gemstone_pendant"}, "prompts": ["a", "b"], "views": [
+                {"slot": 1, "image": "/media/1.png", "passed": True, "failed": [], "attempts": 1},
+                {"slot": 2, "image": "/media/2.png", "passed": False, "failed": ["seated"], "attempts": 2}]}
             with (
+                patch.object(rendering, "run", return_value=report) as lab,
                 patch.object(pipeline.rendering_materialize, "materialize", side_effect=lambda mr, cr, mid, src, slot: {"path": f"/work/rendering-{slot}.png", "slot": slot}) as mat,
                 patch.object(pipeline.workflow_safe, "request_rendering_approval", return_value={"outcome": "rendering_approval_requested", "images": 2, "next": "done"}) as gate,
             ):
-                out = pipeline.render_and_send(p, "msg-1", "jed-0123456789abcdef", record, paths, "openclaw", run)
+                out = pipeline.render_and_send(p, "msg-1", "jed-0123456789abcdef", record, paths, "openclaw", Mock())
             # Renderings never go to the customer from here: the owner approves first.
             self.assertEqual(out["outcome"], "rendering_approval_requested")
-            self.assertEqual([c[:4] for c in calls], [["openclaw", "infer", "image", "generate"]] * 2)
-            self.assertIn("front three-quarter", calls[0][5])
-            self.assertIn("side profile", calls[1][5])
+            lab.assert_called_once()
+            self.assertEqual(lab.call_args.args[0], record["specification"])
             self.assertEqual(mat.call_count, 2)
             gate.assert_called_once()
+            self.assertEqual(gate.call_args.args[0].checker, "view 1 passed (1 attempt); view 2 failed seated (2 attempts)")
+            self.assertEqual(gate.call_args.args[0].archetype, "gemstone_pendant")
             # A failed generation hands the claim to a worker instead of dropping it.
             failing = Mock(return_value=subprocess.CompletedProcess([], 0, "not json", ""))
             paths["work_dir"] = directory

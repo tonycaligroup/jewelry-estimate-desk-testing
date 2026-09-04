@@ -381,6 +381,20 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.2.0 (built 4 September 2026).** Renderings go through `rendering.py`:
+a planning call picks a construction archetype from `templates/render/`
+(32 of them), code assembles the prompts from the archetype's clauses, the
+image model renders two views with the customer's artwork attached
+(`artwork.py` fetches image attachments from the thread), and a vision
+model answers the archetype's bench questions per view with one
+regeneration; the card carries the checker's verdicts. A piece whose
+stones are all small pave or accents has no center stone
+(`cost_components.has_center_stone`), so no center rate is asked for and no
+center carat is sized. A rate answer prices inline from the recorded
+review and can be replayed. The price brief title carries the whole cost
+sheet. Every customer email is written for its thread by `customer_mail.py`
+and checked before it goes.
+
 **Batch 6: rejections read from the audit trail (built 4 September 2026).**
 `kolo audit-query` returns `brief_lifecycle` events: `brief.submitted` when
 the desk files a card (with the brief id and number), `brief.rejected` when

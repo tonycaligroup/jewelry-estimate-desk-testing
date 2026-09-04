@@ -1457,6 +1457,8 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
         "customer_email": record["route"]["recipient"],
         "piece": piece,
         "images": [{"slot": index, "sha256": _sha256_file(image)} for index, image in enumerate(images, start=1)],
+        **({"checker": str(getattr(args, "checker", ""))[:200]} if getattr(args, "checker", None) else {}),
+        **({"archetype": str(getattr(args, "archetype", ""))[:40]} if getattr(args, "archetype", None) else {}),
         "execute": execute_line(
             args.monitor_root, "send-approved-rendering",
             estimate_id=args.estimate_id, message_id=args.message_id, brief_id="<Brief ID>",

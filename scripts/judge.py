@@ -28,7 +28,7 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 SPEC_KEYS = (
     "piece_type", "quantity", "metal", "metal_karat", "metal_color", "stone_type",
     "stone_origin", "stone_shape", "stone_carat", "stone_color", "stone_clarity",
-    "stone_cut", "stone_count", "accent_stones", "finger_size", "dimensions",
+    "stone_cut", "stone_count", "center_stone", "accent_stones", "finger_size", "dimensions",
     "setting_style", "finish", "engraving", "event_date", "budget",
     "customer_supplied_materials", "certificate", "reference_images",
     "scheduling_intent", "notes",
@@ -262,6 +262,8 @@ def extract_specification(
         "specification. Answer with one JSON object only: {\"specification\": {...}}.\n"
         f"Allowed keys (use only those the customer answered): {', '.join(SPEC_KEYS)}.\n"
         "Rules: stone_origin is \"natural\" or \"lab-grown\" only when the customer said so. "
+        "center_stone is \"yes\" when the piece has one main feature stone and \"no\" when every stone is a small "
+        "accent, pave, melee, or cluster stone (for example 1mm stones filling a logo or a band); omit it when unclear. "
         "metal_karat is a number like 14 or 18 when stated. finger_size is the ring size. "
         "dimensions is length or size for a chain, bracelet, or pendant. "
         "setting_style is the customer's own design wording (classic band, solitaire, bezel, channel-set, halo) or "

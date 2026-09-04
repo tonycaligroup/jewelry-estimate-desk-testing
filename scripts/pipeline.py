@@ -123,33 +123,48 @@ def _image_generate_argv(prompt: str, openclaw: str) -> list[str]:
 def render_and_send(
     p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any],
     paths: dict[str, str], openclaw: str, command_runner: Runner,
+    model: str | None = None, judge_runner: Runner | None = None,
 ) -> dict[str, Any]:
-    """Generate two views from the shell, materialize them, and send the note."""
-    images: list[Path] = []
-    for slot, prompt in enumerate(rendering_prompts(record.get("specification") or {}), start=1):
-        completed = command_runner(
-            _image_generate_argv(prompt, openclaw), check=True, capture_output=True, text=True, shell=False,
+    """Plan, render two checked views, materialize them, and ask the owner."""
+    import artwork as artwork_module
+    import rendering
+
+    work_dir = Path(paths["work_dir"])
+    thread = workflow_safe.read_object(Path(paths["gmail_thread"])) if Path(paths["gmail_thread"]).exists() else {}
+    art = None
+    try:
+        import gateway_token  # local import; only needed when the thread carries images
+
+        found = artwork_module.collect(thread, work_dir / "artwork", gateway_token.load_token())
+        art = found[-1] if found else None
+    except Exception:  # noqa: BLE001 - artwork is a bonus; a render without it still goes to the owner
+        art = None
+    try:
+        report = rendering.run(
+            record.get("specification") or {}, work_dir / "renders", openclaw, artwork=art,
+            context=judge.thread_text(gmail_text.thread_digest(thread, message_id)) if thread else "",
+            model=model, runner=command_runner,
         )
-        raw = completed.stdout or ""
-        try:
-            envelope = json.loads(raw[raw.find("{"):])
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise ValueError("image generation returned no JSON") from exc
-        outputs = envelope.get("outputs") or []
-        source = outputs[0].get("path") if outputs and isinstance(outputs[0], dict) else None
-        if not isinstance(source, str) or not source:
-            raise ValueError("image generation returned no file path")
+    except judge.JudgmentError as exc:
+        raise ValueError(f"rendering plan failed: {exc}") from exc
+    images: list[Path] = []
+    for view in report["views"][:2]:
         materialized = rendering_materialize.materialize(
-            p["monitor_root"], p["claim_root"], message_id, Path(source), slot
+            p["monitor_root"], p["claim_root"], message_id, Path(view["image"]), view["slot"]
         )
         images.append(Path(str(materialized["path"])))
+    checker = "; ".join(
+        f"view {v['slot']} " + ("passed" if v["passed"] else "failed " + ", ".join(v["failed"])) + f" ({v['attempts']} attempt{'s' if v['attempts'] != 1 else ''})"
+        for v in report["views"]
+    )
+    workflow_safe.write_private(work_dir / "rendering-report.json", report)
     # WORKFLOW.md 6.6: renderings are approval-gated at every stage. The owner
     # sees the views in chat and gets a card; nothing reaches the customer
     # until they approve.
     return workflow_safe.request_rendering_approval(argparse.Namespace(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
-        runner=command_runner,
+        runner=command_runner, checker=checker, archetype=report["plan"]["archetype"],
     ))
 
 
