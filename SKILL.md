@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.0.7
+version: 4.0.8
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -145,6 +145,10 @@ location and collect:
    email communications.
 3. Business website (if available) — used for calendar invites and email
    signatures.
+3a. Voice, one or two sentences in the owner's words ("warm, short, first
+   names, sign as Cali Jewelers"). Stored as `shop.voice`; every customer
+   email is written from the whole thread in that voice, then checked for
+   the exact figures. Optional; the default is warm and plain.
 4. Nothing to ask here: the desk is retail only. Leave `shop.mode` as
    `retailer`; never offer a wholesale or trade mode.
 5. Pricing model: cost-plus multiplier or target margin. For cost-plus, convert

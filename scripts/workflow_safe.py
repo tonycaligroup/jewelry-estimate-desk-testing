@@ -18,6 +18,7 @@ import brief_registry
 import activation_binding
 import calendar_query
 import customer_content_guard
+import customer_mail
 import estimate_record
 import gmail_reply
 import gmail_safe
@@ -1435,14 +1436,20 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
     if len(images) != len(expected) or any(_sha256_file(img) != expected.get(i) for i, img in enumerate(images, start=1)):
         raise ValueError("rendering images changed since the owner approved them")
     body = Path(paths["customer_reply"])
-    body.write_text(RENDERING_NOTE, encoding="utf-8")
+    record_now = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+    text, body_source = _draft_customer_email(
+        p, record_now, args.message_id, "rendering",
+        {"piece": approval.get("piece") or "the piece", "shop name": (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"},
+        RENDERING_NOTE, args,
+    )
+    body.write_text(text, encoding="utf-8")
     record = send_rendering(argparse.Namespace(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         message_id=args.message_id, estimate_id=args.estimate_id, body=body, images=images,
         gmail_payload=Path(paths["gmail_payload"]), provider_response=Path(paths["gmail_provider_response"]),
         record_output=Path(paths["current_record"]),
     ))
-    result = {"outcome": "rendering_sent", "images": len(images), "record_status": record.get("status")}
+    result = {"outcome": "rendering_sent", "images": len(images), "record_status": record.get("status"), "email": body_source}
     if getattr(args, "brief_id", None):
         kolo_safe.run_command(
             kolo_safe.build_update_brief(args.brief_id, "executed", result),
@@ -1528,9 +1535,15 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         # Rescheduling: the new event is in; take the old one off the calendar.
         cancelled_old = calendar_query.delete_event(calendar_id, existing.get("calendar_event_id", ""), token, **kwargs) \
             if existing.get("calendar_event_id") else False
-        body = RESCHEDULE_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+        fixed = RESCHEDULE_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+        kind = "reschedule"
     else:
-        body = CONFIRMATION_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+        fixed = CONFIRMATION_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+        kind = "confirmation"
+    body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
+        "piece": piece, "time_labels": [chosen["label"]], "shop name": shop,
+        "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
+    }, fixed, args)
     customer_content_guard.validate_customer_text(body)
     payload = gmail_reply.build_reply(record["route"], body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
@@ -1552,7 +1565,8 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     mirror_record(booked, work_dir / "current-record.json")
     _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the time booked")
     result = {"outcome": "appointment_rescheduled" if existing else "appointment_booked",
-              "confirmed_start": chosen["start"], "calendar_event_id": event["id"], "record_status": booked.get("status")}
+              "confirmed_start": chosen["start"], "calendar_event_id": event["id"], "record_status": booked.get("status"),
+              "email": body_source}
     if existing:
         result["previous_start"] = existing.get("confirmed_start")
         result["previous_event_cancelled"] = bool(cancelled_old)
@@ -1568,11 +1582,16 @@ OFFER_NOTE = (
 
 
 def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, options: list[dict[str, Any]],
-                piece: str, runner: Any, label: str) -> dict[str, Any]:
+                piece: str, runner: Any, label: str, args: argparse.Namespace | None = None) -> dict[str, Any]:
     profile = read_object(p["shop_profile"])
     shop = (profile.get("shop") or {}).get("name") or "the shop"
-    lines = "\n".join(f"- {o.get('label') or o['start']}" for o in options)
-    body = OFFER_NOTE.format(piece=piece, lines=lines, shop=shop)
+    labels = [o.get("label") or o["start"] for o in options]
+    lines = "\n".join(f"- {l}" for l in labels)
+    fixed = OFFER_NOTE.format(piece=piece, lines=lines, shop=shop)
+    body, body_source = _draft_customer_email(
+        p, record, message_id, "offer", {"piece": piece, "time_labels": labels, "shop name": shop}, fixed,
+        args or argparse.Namespace(),
+    )
     customer_content_guard.validate_customer_text(body)
     work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1584,8 +1603,7 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     )
     updated = estimate_record.record_times_offered(p["record_root"], record["estimate_id"], message_id, options, delivery)
     mirror_record(updated, work_dir / "current-record.json")
-    return {"outcome": "times_offered", "options": [o.get("label") or o["start"] for o in options],
-            "provider_message_id": delivery["id"]}
+    return {"outcome": "times_offered", "options": labels, "provider_message_id": delivery["id"], "email": body_source}
 
 
 def send_approved_times(args: argparse.Namespace) -> dict[str, Any]:
@@ -1610,7 +1628,7 @@ def send_approved_times(args: argparse.Namespace) -> dict[str, Any]:
     options = approval.get("calendar_availability") or []
     if not options:
         raise ValueError("this card had no times to offer; reject it and answer the desk's question")
-    result = _send_times(p, record, args.message_id, options, approval.get("piece") or "your piece", runner, "approved")
+    result = _send_times(p, record, args.message_id, options, approval.get("piece") or "your piece", runner, "approved", args)
     _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the times offered")
     _report_brief(args, result, runner)
     return result
@@ -1749,6 +1767,29 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
     result.update({"outcome": "offer_card_filed", "options": [o["label"] for o in options[:3]], "piece": piece})
     return result
 
+def _draft_customer_email(p: dict[str, Path], record: dict[str, Any], message_id: str, kind: str,
+                          facts: dict[str, Any], fallback: str, args: argparse.Namespace) -> tuple[str, str]:
+    """Write the email for this thread, or fall back to the fixed text."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+    import pipeline  # local import: pipeline imports this module
+
+    profile = read_object(p["shop_profile"])
+    switch = pipeline.settings(p["monitor_root"].resolve().parent.parent / "estimate-desk")
+    judge_runner = getattr(args, "judge_runner", subprocess.run)
+    openclaw = getattr(args, "openclaw", None) or inbox_watcher.default_openclaw()
+    try:
+        digest = customer_mail.fetch_thread_digest(
+            record, message_id, (profile.get("shop") or {}).get("outbound_mailbox"), gateway_token.load_token(),
+            opener=getattr(args, "opener", None),
+        )
+    except Exception:  # noqa: BLE001 - a missing thread only costs the draft its context
+        digest = {"messages": []}
+    try:
+        return customer_mail.draft(kind, facts, digest, profile, fallback, switch.get("model"), judge_runner, openclaw)
+    except Exception:  # noqa: BLE001 - the fixed text always goes out
+        return fallback, "fallback"
+
+
 def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any) -> None:
     brief_id = getattr(args, "brief_id", None)
     if brief_id and brief_id != "<Brief ID>":
@@ -1804,10 +1845,16 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
         if value not in (None, "", []) and key != "notes"
     )
-    body = ESTIMATE_NOTE.format(
+    fixed = ESTIMATE_NOTE.format(
         piece=owner_questions.summary_of_piece(spec), spec_lines=spec_lines, price=f"{price:,.2f}",
         lead_time=lead_time, valid_through=valid_through, shop=shop,
     )
+    body, body_source = _draft_customer_email(p, record, record.get("approval_source_message_id") or "", "estimate", {
+        "piece": owner_questions.summary_of_piece(spec), "price": f"${price:,.2f}",
+        "specification": ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in spec.items() if v not in (None, "", []) and k != "notes"),
+        "lead time": (f"about {lead} business days from design approval, an estimate not a guarantee" if lead else ""),
+        "valid_through": valid_through, "shop name": shop,
+    }, fixed, args)
     work_dir = p["monitor_root"].resolve().parent / "work" / f"estimate-{args.estimate_id}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     (work_dir / "customer-reply.txt").write_text(body, encoding="utf-8")
@@ -1818,7 +1865,7 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         gmail_payload=work_dir / "gmail-send.json", provider_response=work_dir / "gmail-provider-response.json",
         record_output=work_dir / "current-record.json", message_id=None, current_state=None,
     ))
-    result = {"outcome": "estimate_sent", "price": price, "record_status": sent.get("status")}
+    result = {"outcome": "estimate_sent", "price": price, "record_status": sent.get("status"), "email": body_source}
     _report_brief(args, result, runner)
     return result
 

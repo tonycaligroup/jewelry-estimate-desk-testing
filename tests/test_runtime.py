@@ -28,6 +28,7 @@ import brief_registry
 import activation_binding
 import business_state_reset
 import customer_content_guard
+import customer_mail
 import cron_config
 import customer_state_reset
 import inbox_claim
@@ -8389,6 +8390,57 @@ class BriefTitleTests(unittest.TestCase):
         self.assertLessEqual(len(title), 120)
         # Without a review the title still names the price.
         self.assertTrue(kolo_safe.approval_title({"specification": {"piece_type": "band"}, "proposed_price": 900.0}, "jed-0123456789abcdef").endswith(", $900.00"))
+
+
+class CustomerMailTests(unittest.TestCase):
+    digest = {"messages": [
+        {"sent_by": "customer", "date": "Thu, 3 Sep", "subject": "Ring", "body": "Hi, I am Michael. Could you quote a ring?"},
+        {"sent_by": "shop", "date": "Thu, 3 Sep", "subject": "Re: Ring", "body": "Hello,\n\nThank you for the details."},
+        {"sent_by": "customer", "date": "Thu, 3 Sep", "subject": "Re: Ring", "body": "Great, what would it cost?", "claimed": True},
+    ]}
+    profile = {"shop": {"name": "Cali Jewelers", "voice": "warm, short, first names, sign as Cali Jewelers"}}
+
+    def judged(self, body: str):
+        return Mock(return_value=subprocess.CompletedProcess(
+            [], 0, json.dumps({"ok": True, "capability": "model.run", "outputs": [{"text": json.dumps({"body": body})}]}), ""))
+
+    def test_estimate_is_written_for_the_thread_and_checked(self) -> None:
+        good = (
+            "Hi Michael,\n\nHere is where the estimate lands for your ring: $2,186.30. We estimate on the high side on "
+            "purpose, and the figure is pending final design approval; the final number often comes in lower and we pass "
+            "that along. Nothing is locked in until you have approved the final design. The estimate is good through "
+            "September 11, 2026.\n\nIf you would like to go over the design together, just reply and we will find a time.\n\nCali Jewelers"
+        )
+        runner = self.judged(good)
+        body, source = customer_mail.draft("estimate", {"price": "$2,186.30", "valid_through": "September 11, 2026"},
+                                           self.digest, self.profile, "FALLBACK", "m", runner, "openclaw")
+        self.assertEqual(source, "model")
+        self.assertIn("$2,186.30", body)
+        prompt = runner.call_args.args[0][runner.call_args.args[0].index("--prompt") + 1]
+        self.assertIn("Could you quote a ring?", prompt)  # the whole thread rides along
+        self.assertIn("sign as Cali Jewelers", prompt)
+        self.assertIn("do not reuse its opening", prompt)
+
+    def test_wrong_price_or_missing_time_falls_back_to_the_fixed_text(self) -> None:
+        bad = "Hi Michael,\n\nYour ring will be $1,999.00, estimated high, pending design, could come in lower, nothing locked until approved. Good through September 11, 2026.\n\nCali Jewelers"
+        body, source = customer_mail.draft("estimate", {"price": "$2,186.30", "valid_through": "September 11, 2026"},
+                                           self.digest, self.profile, "FALLBACK", "m", self.judged(bad), "openclaw")
+        self.assertEqual((body, source), ("FALLBACK", "fallback"))
+        no_time = "Hi Michael,\n\nHappy to meet. Here are a couple of options that are open on our side this week; reply with the one that suits you and we will lock it in.\n\nCali Jewelers"
+        body, source = customer_mail.draft("offer", {"time_labels": ["Tuesday, September 8 at 2:00 PM PDT"]},
+                                           self.digest, self.profile, "FALLBACK", "m", self.judged(no_time), "openclaw")
+        self.assertEqual(source, "fallback")
+        with_time = "Hi Michael,\n\nHappy to meet. Here is what is open on our side:\n- Tuesday, September 8 at 2:00 PM PDT\nReply with what works and we will lock it in.\n\nCali Jewelers"
+        body, source = customer_mail.draft("offer", {"time_labels": ["Tuesday, September 8 at 2:00 PM PDT"]},
+                                           self.digest, self.profile, "FALLBACK", "m", self.judged(with_time), "openclaw")
+        self.assertEqual(source, "model")
+        self.assertNotIn("**", body)
+
+    def test_model_failure_falls_back(self) -> None:
+        runner = Mock(return_value=subprocess.CompletedProcess([], 1, "", "provider down"))
+        body, source = customer_mail.draft("confirmation", {"time_labels": ["Monday at 10"]}, self.digest, self.profile,
+                                           "FALLBACK", "m", runner, "openclaw")
+        self.assertEqual((body, source), ("FALLBACK", "fallback"))
 
 
 class CalendarListTests(unittest.TestCase):

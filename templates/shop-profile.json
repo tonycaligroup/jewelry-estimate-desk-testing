@@ -13,7 +13,8 @@
     "outbound_mailbox": "",
     "cc_always": [],
     "signature_block": "",
-    "disclose_agent_as_assistant": false
+    "disclose_agent_as_assistant": false,
+    "voice": ""
   },
   "autonomy": {
     "trust_stage": 1,
