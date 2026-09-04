@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 3.0.0
+version: 3.13.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail or wholesale custom-jewelry estimate workflows; do not use for appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
