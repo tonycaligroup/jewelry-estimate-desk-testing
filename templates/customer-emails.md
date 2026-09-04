@@ -1,6 +1,7 @@
 # Customer Email Templates
 
-Fill the brackets. Never send below the trust stage that authorizes it.
+Fill the brackets. Only the missing-information request goes out without a
+card; everything else waits for the owner's approval at every stage.
 Nothing here contains a price except the estimate template.
 
 > **Plain text only.** Customer mail is sent as plain text: no bold stars,
@@ -14,7 +15,7 @@ Nothing here contains a price except the estimate template.
 
 ---
 
-## 1. Missing-information request (Stage 2+, or owner-sent at Stage 1)
+## 1. Missing-information request (sent by the desk at every stage)
 
 No prices. Not even a range. One email, batched.
 
@@ -127,7 +128,7 @@ date, never a promise against a wedding, unless the owner said so in writing.
 
 ---
 
-## 3. Appointment offer (Stage 3+ for autonomous send)
+## 3. Appointment offer (only after the owner approves the offer card)
 
 Always 2-3 named times. Always the timezone. Never "what works for you?"
 Every label must be produced from a fresh provider-backed calendar receipt by

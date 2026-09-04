@@ -46,17 +46,20 @@ def materialize(
 ) -> dict[str, str | int]:
     if slot not in {1, 2}:
         raise ValueError("rendering slot must be 1 or 2")
+    # Two trusted sources: a file the Kolo image tool put in its media root,
+    # or a file the desk itself rendered into its private work directory.
     media_root_input = media_root or default_media_root()
     if media_root_input.is_symlink():
         raise ValueError("Kolo media root is unavailable")
     media_root = media_root_input.resolve()
-    if not media_root.is_dir():
-        raise ValueError("Kolo media root is unavailable")
+    desk_work = (monitor_root.resolve().parent / "work").resolve()
     if source.is_symlink():
         raise ValueError("rendering source must not be a symlink")
     resolved_source = source.resolve(strict=True)
-    if not is_within(resolved_source, media_root) or not resolved_source.is_file():
-        raise ValueError("rendering source must be a regular Kolo media file")
+    inside_media = media_root.is_dir() and is_within(resolved_source, media_root)
+    inside_desk = desk_work.is_dir() and is_within(resolved_source, desk_work)
+    if not (inside_media or inside_desk) or not resolved_source.is_file():
+        raise ValueError("rendering source must be a regular Kolo media file or a desk work file")
     data = resolved_source.read_bytes()
     if not data.startswith(PNG_SIGNATURE):
         raise ValueError("Kolo rendering source must be a PNG image")

@@ -285,7 +285,8 @@ def tick(
             if done.get("outcome") != "needs_worker":
                 summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome")})
                 continue
-            summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action")})
+            summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action"),
+                                      **({"error": done["error"]} if done.get("error") else {})})
         claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
         inbox_claim.delegate(
             p["claim_root"], message_id, claim_token, cron_config.WORKER_LEASE_SECONDS

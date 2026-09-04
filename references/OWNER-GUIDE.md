@@ -7,13 +7,16 @@ turning on.
 
 ## The short version
 
-When someone emails or texts asking about a custom piece, I read it, work out
-what it should cost using **your** numbers, write the reply, and hand the
-whole thing to you to approve. If they want to come in, I offer real open
-times from your calendar and book it.
+When someone emails asking about a custom piece, I read it, ask them for any
+detail that is still missing, work out what it should cost using **your**
+numbers, write the reply, and hand the whole thing to you to approve. If
+they want to come in, I check your calendar and put the time in front of you
+before anything is booked.
 
-**You approve every price before any customer sees it.** That never changes,
-at any setting, ever.
+**You approve every price, every rendering, and every booking before the
+customer sees it.** That never changes, at any setting, ever. The only
+email I send on my own is a price-free question back to the customer asking
+for details I need (finger size, metal color, and so on).
 
 The Kolo user who installs and activates the skill is the approver
 automatically. Setup does not ask for a separate approver name or email.
@@ -24,30 +27,26 @@ consultation on the books while the customer is still excited.
 
 ---
 
-## How much rope you give me is your call
+## What goes through you, and what does not
 
-I start at **Stage 1** — the most cautious setting — and I do **not** move
-myself up. You move me, when you're ready, by just saying so. You can put me
-back to Stage 1 anytime with one sentence.
+Three things always come to you as a card to approve or reject: a price,
+a set of renderings, and a meeting time. Approve and I act; reject and I
+ask you here what you want instead. Nothing is sent or booked on a card
+you have not approved.
 
-**Stage 1 — Watch me.** *(where everyone starts)*
-I send nothing. Not one email. I draft the reply, work out the price, and show
-you. You send it yourself, or you don't. Run a week here and read what I
-would have said. That's the point — you get to see my judgment before you
-trust it.
+One thing I do on my own: when someone writes "I want a custom ring"
+without saying what metal, what size, or what stone, I email them those
+questions. **No prices.** Just the questions, so they are answering while
+you are still at the bench.
 
-**Stage 2 — Let me ask questions.**
-When someone says "I want a custom ring" without saying what metal, what
-stone, or what budget, I can email them those questions on my own. **No
-prices.** Just the questions. This one is worth a lot: they're answering
-while you're still asleep.
-
-**Stage 3 — Let me book appointments.**
-You tell me your hours once — "weekdays 10 to 5, Saturdays 11 to 3, don't
-book my lunch, two hours' notice minimum" — and I can offer and book inside
-them. I check your actual calendar every time, so I can't put two people in
-the same slot. **I tell you every time I book something.** No surprises on
-your Monday.
+For meetings, you tell me your hours once ("weekdays 10 to 5, half an
+hour each") and I check your actual calendar every time, so I cannot put
+two people in the same slot. When a customer names a time that is free,
+you get a yes-or-no card for that time. When they name a time that is
+taken, or no time at all, you get a card with two or three free times to
+offer them; approve it and I email those times, and nothing is booked
+until they pick one and you approve that. If the calendar has nothing to
+offer, I ask you here instead of sending you an empty card.
 
 ---
 
@@ -123,8 +122,6 @@ Say **"pause"** or **"stop."** I stop all outbound work immediately — no
 "just finishing this one" — I keep the drafts, and I confirm it in one line.
 Nothing goes out until you say go.
 
-Say **"go back to Stage 1"** and I'm back to drafting only.
-
 ---
 
 ## How to check my work
@@ -160,10 +157,11 @@ wrong.
 
 Two things, and the second one is optional at first.
 
-**1. Required shop settings.** Your business name; retail or trade mode;
-cost-plus or target-margin pricing; which mailbox sends; what
-trust stage to use; which timezone controls dates; and how often to refresh
-spot metal prices. I also record whether you want owner alerts in Kolo, email,
+**1. Required shop settings.** Your business name and address; how you
+want your emails to sound; cost-plus or target-margin pricing; which
+mailbox sends; your consultation days and hours; when to watch the inbox;
+which timezone controls dates; and whether to use live spot metal prices.
+The desk is for retail shops only; it never quotes trade or wholesale. I also record whether you want owner alerts in Kolo, email,
 or SMS. Today, only Kolo chat is an active supported owner-alert channel;
 email/SMS requests remain clearly marked inactive until Kolo supports and
 verifies them. I validate these settings before reading the first inquiry.

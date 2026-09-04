@@ -381,6 +381,22 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.3.1 (built 4 September 2026): the full check.** A golden-path test
+(`tests/test_golden_path.py`) drives the real watcher tick and the exact
+execute lines from the cards through inquiry, follow-up, rate question,
+price brief, estimate, rendering from the customer's logo, booking card,
+rejection, the owner's words, offer card, the customer's pick, booking,
+and reschedule, with Gmail, Kolo, the calendar, and the model faked by
+contract. It found four seams: stones described only as accents counted as
+a center stone (carat and cut were asked); the materializer refused the
+desk's own renders because they were not under the Kolo media root; a
+customer asking to meet when the calendar offered nothing (or could not be
+read) got a card with no times, now a direct question with the claim
+parked until the owner answers; and the pipeline built executor namespaces
+without the runners, so brief registration and question delivery bypassed
+them. The tick summary now carries the reason when an inline claim hands
+off to a worker.
+
 **4.3.0 (built 4 September 2026): the pieces made to fit.** Customer
 emails are drafted when the card is filed (estimate at `request-approval`,
 rendering note at `request-rendering-approval`, confirmation or offer at

@@ -105,6 +105,7 @@ def _send_followup(
     p: dict[str, Path], base_dir: Path, message_id: str, estimate_id: str,
     digest: dict[str, Any], missing: list[str], initiating: bool, paths: dict[str, str],
     profile: dict[str, Any], model: str | None, judge_runner: Runner, openclaw: str | None,
+    command_runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
     try:
@@ -124,6 +125,7 @@ def _send_followup(
         gmail_payload=Path(paths["gmail_payload"]),
         provider_response=Path(paths["gmail_provider_response"]),
         record_output=Path(paths["current_record"]), initiating=initiating,
+        runner=command_runner,
     ))
     return {"outcome": "followup_sent", "missing_required_fields": missing, "next": "done"}
 
@@ -278,9 +280,10 @@ def post_estimate_actions(
         )
         workflow_safe.request_appointment_approval(argparse.Namespace(
             monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+            shop_profile=p.get("shop_profile"),
             message_id=message_id, estimate_id=estimate_id, appointment_intent=intent_path,
             appointment_approval=Path(paths["appointment_approval"]), record_output=Path(paths["current_record"]),
-            defer_finalize_for_rendering=wants_rendering,
+            defer_finalize_for_rendering=wants_rendering, runner=command_runner, judge_runner=judge_runner,
         ))
         if not wants_rendering:
             return {"outcome": "appointment_approval_requested", "next": "done"}
@@ -328,7 +331,7 @@ def process_claim(
     if pending is not None:
         return _send_followup(
             p, base_dir, message_id, estimate_id, digest, pending["missing_required_fields"],
-            pending["initiating"], paths, profile, model, judge_runner, openclaw,
+            pending["initiating"], paths, profile, model, judge_runner, openclaw, command_runner,
         )
 
     review_path = Path(paths["work_dir"]) / "review.json"
@@ -367,16 +370,16 @@ def process_claim(
     if nxt == "send_spec_followup":
         return _send_followup(
             p, base_dir, message_id, estimate_id, digest, reviewed["missing_required_fields"],
-            reviewed["initiating"], paths, profile, model, judge_runner, openclaw,
+            reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner,
         )
     if nxt == "price":
-        return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw)
+        return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")
 
 
 def _price_after_review(
     p: dict[str, Path], message_id: str, estimate_id: str, specification: dict[str, Any], reviewed: dict[str, Any],
-    model: str | None, judge_runner: Runner, openclaw: str | None,
+    model: str | None, judge_runner: Runner, openclaw: str | None, command_runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     chosen = judge.choose_quantities(
         specification, reviewed["fill"], reviewed["fee_catalog"], reviewed["stone_catalog"],
@@ -387,6 +390,7 @@ def _price_after_review(
         finished_grams=chosen["finished_grams"], bench_hours=chosen["bench_hours"],
         center_carat=chosen.get("center_carat"), fees=chosen["fees"],
         accents=[f"{a['key']}:{a['carats']}" for a in chosen["accents"]],
+        runner=command_runner, judge_runner=judge_runner,
     ))
     return {"outcome": "approval_requested", "proposed_price": priced.get("proposed_price"), "next": "done"}
 
@@ -420,7 +424,7 @@ def price_from_record(
     reviewed = workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner))
     nxt = reviewed.get("next")
     if nxt == "price":
-        return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw)
+        return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
     if nxt == "done":
         return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
     raise ValueError(f"the record is not ready to price (review said {nxt!r})")

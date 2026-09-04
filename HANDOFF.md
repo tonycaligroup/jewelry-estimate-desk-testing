@@ -10,8 +10,11 @@ inquiry to price brief inside one watcher tick, plain-text estimate on
 approval, rendering previews plus a card, bookings and offers with the
 three appointment scenarios, rejections read from the Kolo audit trail and
 answered by the owner in plain words, rescheduling, and a readiness command
-for setup. PRs #61 through #72 merged tonight. 331 tests pass with
-`python3 -m unittest discover -s tests`.
+for setup. PRs #61 through #72 merged tonight. 376 tests pass with
+`python3 -m unittest discover -s tests`; `tests/test_golden_path.py` runs
+the whole desk end to end on the real code (ticks plus the exact execute
+lines from the cards) with only Gmail, Kolo, the calendar, and the model
+faked, and six side branches beside it.
 
 ## Where the code is
 
@@ -34,7 +37,7 @@ version come from the SKILL.md frontmatter (`name:` and `version:`).
   `jewelry-estimate-desk`, version 2.0.0, from 23 August. The main session
   ran scripts from that stale copy once by mistake. Publish the new build
   over that slug, or delete the old listing, so no instance can pick it up.
-- Frontmatter version is `4.3.0` on master (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
+- Frontmatter version is `4.3.1` on master (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
 - `tests/`, `ARCHITECTURE.md`, `WORKFLOW.md`, `KOLO-SKILL-PLAYBOOK.md`,
   `HANDOFF.md`, and `TESTING-CHANGE-REPORT.md` are not needed on an
   instance; shipping them is harmless.

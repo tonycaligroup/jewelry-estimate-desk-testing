@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.3.0
+version: 4.3.1
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -103,8 +103,9 @@ model with thinking off. If Kolo cannot verify the model, stop.
   messages/threads through fixed Maton requests without model-built commands.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
   key from the exact inbound Gmail message rather than a display name.
-- `scripts/rendering_materialize.py`: copy a native Kolo-generated PNG from the
-  managed media directory into the claimed canonical rendering path.
+- `scripts/rendering_materialize.py`: copy a PNG the desk rendered into its
+  own work folder (or one the Kolo image tool put in the managed media
+  directory) into the claimed canonical rendering path.
 - `scripts/rendering_wait.py`: keep an asynchronous rendering claim active for
   at most eight fixed 30-second intervals while awaiting its completion event.
 - `scripts/workflow_safe.py`: execute complete spec-follow-up, approval-request,
@@ -210,19 +211,14 @@ Do not modify the installed skill to store shop settings.
 
 ## Trust stages
 
-| Stage | Autonomous work | Owner approval still required |
-|---|---|---|
-| 1 — Watch me | Read, calculate, and draft | Every outbound message, booking, and price |
-| 2 — Ask questions | Stage 1 plus price-free specification requests | Every booking and price |
-| 3 — Book me | Stage 2 plus offer and book inside declared windows | Every price |
-
-Act on scheduling intent immediately at every stage; never delay a meeting
-offer until near the desired delivery date. At Stage 1 or 2, prepare the
-near-term options for owner action and route the visible action request through
-the cron's Kolo-chat result described in Inbox monitoring. Only Stage 3 authorizes autonomous offers,
-calendar writes, and confirmations inside
-declared windows. Never advance the stage automatically. Missing or unreadable
-stage means Stage 1.
+The profile records a trust stage (1, 2, or 3; missing or unreadable means
+1), but today every stage behaves the same, by the owner's decision
+(WORKFLOW.md 6.6): every price, every rendering, every offer of meeting
+times, and every booking goes to the owner as an approval card, at every
+stage. The one customer email the desk sends on its own is the price-free
+specification follow-up. Act on scheduling intent immediately at every
+stage; never delay a meeting offer until near the desired delivery date.
+Never advance the stage automatically.
 
 ## Inbox monitoring
 
@@ -403,7 +399,7 @@ For each returned message:
    Generic mailbox alerts tied to a claimed message must never call
    `notify-monitor` directly.
 
-   Exception: when a Stage 1 or 2 reply contains appointment intent, do not use
+   Exception: when a reply contains appointment intent, do not use
    the generic `customer-replied` notification as the appointment route and do
    not rely on the cron's final chat delivery. Write this exact-shape private
    artifact to `work_paths.appointment_intent`:
@@ -752,10 +748,10 @@ python3 {baseDir}/scripts/appointment_options.py \
   --window-days '<profile scheduling.meeting_offer_window_days>'
 ```
 
-Use slots only from the validated `work_paths.calendar_options`. At Stage 1,
-draft the specification request. At Stage 2 or 3, send it automatically
-with `workflow_safe.py send-spec-followup`; never ask the owner whether to
-draft, send, or continue routing.
+Use slots only from the validated `work_paths.calendar_options`. Send the
+specification request with `workflow_safe.py send-spec-followup` at every
+stage; it carries no price. Never ask the owner whether to draft, send, or
+continue routing.
 For Gmail, send it only through the Email reply invariant above.
 After one partial reply, ask once more only for load-bearing gaps; then escalate
 the decision to the owner.
@@ -1056,8 +1052,10 @@ session: reject the brief and tell the owner the desk will re-price.
 The desk asks the owner questions in plain words and parks the claim: which
 rate to use, whether a new thread from a known customer is the same piece or
 a new one, what an unclear reply meant, what to do after a rejected
-appointment card. Every such message ends with one line, `desk-answer
-<CODE>`. When the owner replies to it, run exactly this, their words
+appointment card, and what to do when a customer asks to meet but the
+calendar offers no free time (or could not be read); that last case gets a
+question straight away, never a card with nothing on it. Every such message
+ends with one line, `desk-answer <CODE>`. When the owner replies to it, run exactly this, their words
 verbatim:
 
 ```bash

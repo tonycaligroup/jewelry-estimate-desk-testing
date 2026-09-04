@@ -147,7 +147,8 @@ def extract_metal(specification: Any) -> dict[str, Any]:
     }
 
 
-PAVE_WORDS = ("pave", "pavé", "melee", "micro pave", "micropave", "accent stones", "cluster", "eternity", "encrusted")
+PAVE_WORDS = ("pave", "pavé", "melee", "micro pave", "micropave", "accent", "cluster", "eternity", "encrusted",
+              "shoulder", "side stone", "side-stone", "small diamond", "small stone", "tiny")
 
 
 def has_center_stone(specification: Any) -> bool:
@@ -172,6 +173,10 @@ def has_center_stone(specification: Any) -> bool:
         for key in ("setting_style", "notes", "accent_stones", "stone_count", "stone_type", "dimensions")
     )
     if any(word in words for word in PAVE_WORDS):
+        return False
+    # Stones described only as accents, with no carat and nothing called a
+    # center or main stone, are accents: nothing to price per carat.
+    if specification.get("accent_stones") not in (None, "", []) and "center" not in words and "main stone" not in words:
         return False
     # Small millimetre sizes count only when they describe the stones, not a
     # band or shank ("stones about 1mm" yes; "2mm band" no).

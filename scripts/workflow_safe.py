@@ -385,6 +385,28 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     # The reject row names a code; a reply with that code and a plan reaches
     # this question. Kolo delivers approvals to the session but not rejections.
     qroot = owner_questions.questions_root(args.monitor_root)
+    if not options:
+        # Nothing to approve: the calendar gave no free time (or could not be
+        # read). A card with no times would only be rejected, so ask now.
+        reason = str(approval.get("availability_note") or "no free time inside the declared windows")[:160]
+        _created, question = owner_questions.create_decision(
+            qroot, "appointment_next", args.estimate_id, args.message_id,
+            _appointment_ask_text(record, approval, reason),
+            {"rejected_action": approval.get("action_type"), "rejected_options": [], "reason": reason},
+            dormant=False,
+        )
+        question = _attach_answer_command(qroot, args.monitor_root, question)
+        if _created:
+            owner_questions.deliver(qroot, question, runner=getattr(args, "runner", subprocess.run),
+                                    extra_args=kolo_safe.owner_channel_args(args.monitor_root))
+        # No card was filed, so nothing to record as requested; the review is
+        # already on the record. The claim waits for the owner's answer the
+        # way a missing rate does, and the answer closes it.
+        mirror_record(record, args.record_output)
+        if not args.defer_finalize_for_rendering:
+            token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+            inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "appointment_next_question")
+        return record
     _created, dormant = owner_questions.create_decision(
         qroot, "appointment_next", args.estimate_id, args.message_id,
         _appointment_next_text(record, approval),
@@ -1278,6 +1300,14 @@ def _dormant_for_answer(p: dict[str, Path], root: Path, answer: str) -> dict[str
     return sorted(pool, key=lambda q: q["asked_at"])[-1]
 
 
+def _claim_parked(p: dict[str, Path], message_id: str) -> bool:
+    try:
+        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], message_id))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return state.get("status") == "awaiting_owner"
+
+
 def _claim_still_waiting(p: dict[str, Path], question: dict[str, Any]) -> bool:
     """True while the answered question's inquiry has not moved past the answer.
 
@@ -1766,6 +1796,18 @@ def _appointment_next_text(record: dict[str, Any], approval: dict[str, Any]) -> 
     )
 
 
+def _appointment_ask_text(record: dict[str, Any], approval: dict[str, Any], reason: str) -> str:
+    """The same question, asked without a card: the calendar offered nothing."""
+    customer = kolo_safe._sender_display(record["route"]["recipient"])
+    piece = approval.get("piece") or "their piece"
+    asked = "; ".join(approval.get("requested_times") or []) or "no particular time"
+    return (
+        f"{customer} asked to meet about {piece} (they asked for {asked}), but I have no time to offer: {reason}. "
+        "What would you like to do? Reply with times to offer them (for example \"Tuesday 2pm or Wednesday at 11\"), "
+        "\"other times\" and I will look again, or \"handle myself\" and I will leave the thread to you."
+    )
+
+
 def _supersede_reject_question(p: dict[str, Path], estimate_id: str, message_id: str, why: str) -> None:
     root = owner_questions.questions_root(p["monitor_root"])
     qid = owner_questions.question_id(estimate_id, "appointment_next", message_id)
@@ -1818,6 +1860,8 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
     estimate_id = question["estimate_id"]
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "appointment_next", "decision": outcome}
     if outcome == "handle_myself":
+        if _claim_parked(p, message_id):
+            _close_parked_claim(p, message_id, "owner_decided_handle_myself")
         if question["status"] == "open":
             owner_questions.record_decision(root, question, args.answer, outcome)
         result["note"] = "the desk leaves this thread to the owner"
@@ -1884,6 +1928,9 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
     )
     _rows, _reasoning, title = kolo_safe.appointment_card(approval, estimate_id)
     _register_brief(p["monitor_root"], "appointment", title, estimate_id, message_id, runner)
+    if _claim_parked(p, message_id):
+        # The question was asked without a card; the card is now filed.
+        _close_parked_claim(p, message_id, "owner_answered_appointment_question")
     result.update({"outcome": "offer_card_filed", "options": [o["label"] for o in options[:3]], "piece": piece})
     return result
 

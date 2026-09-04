@@ -284,7 +284,7 @@ class InstructionCoherenceTests(unittest.TestCase):
         self.assertIn("reason `invalid_thread_review`", cron)
         self.assertIn("do not return `NO_REPLY`", cron)
 
-    def test_stage_three_is_the_autonomous_booking_stage(self) -> None:
+    def test_every_stage_gates_prices_renderings_and_bookings(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         owner_guide = (ROOT / "references" / "OWNER-GUIDE.md").read_text(
             encoding="utf-8"
@@ -292,9 +292,12 @@ class InstructionCoherenceTests(unittest.TestCase):
         customer = (ROOT / "templates" / "customer-emails.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Only Stage 3 authorizes autonomous offers", skill)
-        self.assertIn("Stage 3 — Let me book appointments", owner_guide)
-        self.assertIn("Stage 3+ for autonomous send", customer)
+        self.assertIn("every stage behaves the same", skill)
+        self.assertNotIn("Only Stage 3 authorizes autonomous offers", skill)
+        self.assertIn("every booking before the\ncustomer sees it", owner_guide)
+        self.assertNotIn("Stage 3 — Let me book appointments", owner_guide)
+        self.assertIn("only after the owner approves the offer card", customer)
+        self.assertNotIn("autonomous send", customer)
 
     def test_main_session_has_explicit_appointment_approval_handoff(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")

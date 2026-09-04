@@ -19,8 +19,9 @@ nudges.
    and thread ID to match the stored route, then build the nudge with
    `scripts/gmail_reply.py`. Never select a customer by name or use the owner's
    `deliveryContext.to` for a customer message.
-4. At Stage 1, draft the nudge for owner review. At Stage 2 or 3, send only when
-   the stored trust stage and standing authorization permit it.
+4. A nudge asks the customer something and carries no price, so it may be
+   sent like a specification follow-up; anything with a price or a time
+   waits for the owner's card.
 
 ## Cron requirements
 
