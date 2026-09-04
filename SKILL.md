@@ -1042,14 +1042,16 @@ python3 {baseDir}/scripts/workflow_safe.py answer-question \
   --question '<CODE>' --answer '<the owner's reply, verbatim>'
 ```
 
-An appointment card names a code in its reject row; an owner who rejected
-the card and then writes that code with a plan (times to offer, "other
-times", "handle myself") is answering that question: run the same command
-with that code. Paste the output. It applies the answer (saves the rate and
-prices; quotes a new piece; emails the owner's times; closes the thread to
-the owner). If it refuses, tell the owner what it said and wait; never pick
-an answer or re-run with a different one. If it fails part way (a
-traceback), run the same command again: it carries on from where it stopped.
+Kolo does not tell the desk when a card is rejected. An owner who rejected
+an appointment card then says what they want in this chat, in their own
+words: times to offer, "other times", or "handle myself". That is an answer
+too: run the same command without `--question` and with their words. The
+desk matches it to the customer whose card was filed last, or to the
+customer they named. Times become a new offer card; nothing reaches the
+customer until that card is approved. Paste the output. If the command
+refuses, tell the owner what it said and wait; never pick an answer or
+re-run with a different one. If it fails part way (a traceback), run the
+same command again: it carries on from where it stopped.
 
 ## Phase 5: records, follow-up, and cleanup
 
