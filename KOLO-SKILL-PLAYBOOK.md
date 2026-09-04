@@ -292,6 +292,13 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   `POST https://gateway.maton.ai/google-calendar/calendar/v3/calendars/<id>/events?sendUpdates=all`
   with a Bearer MATON_API_KEY; the response is a `calendar#event` with `id`.
   Gmail sends: `POST .../google-mail/gmail/v1/users/me/messages/send`. **verified 3 Sep 2026 (session curl)**
+- A rejected brief is NOT delivered into the session the way an approved one
+  is: after Tony rejected booking card #110 (4 Sep 2026 ~00:52 UTC) the
+  session transcript shows no "Strategic Brief #110 REJECTED" and no
+  rejected text at all; the same transcript holds #107-#109 APPROVED. The
+  CLI has only `request-approval` and `update-brief`, so brief status cannot
+  be polled either. A skill cannot react to a rejection by itself; the owner
+  has to say something in chat. **observed 4 Sep 2026; retest with reject notes**
 - `kolo request-approval --help` and `kolo notify-owner --help` print nothing
   (2m46s, empty output), so flags have to be learned from docs or trial; no
   attachment flag is known for approval cards. **observed 3 Sep 2026**

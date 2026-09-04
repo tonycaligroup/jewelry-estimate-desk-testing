@@ -1027,19 +1027,29 @@ approve books it; an offer card lists two or three times and approve emails
 them to the customer, nothing booked. An edited price is not applied by the
 session: reject the brief and tell the owner the desk will re-price.
 
-### Owner questions: run the command in the question
+### Owner questions: the `desk-answer` tag
 
-The desk asks the owner questions in plain words with a six-character code
-and parks the claim: which rate to use, whether a new thread from a known
-customer is the same piece or a new one, what an unclear reply meant. Each
-question message ends with the exact `answer-question` command; when the owner
-replies, run it with their words verbatim in `--answer` and paste the output.
-It applies the answer (saves the rate and prices; quotes a new piece; or
-closes the thread to the owner). If it refuses, tell the owner what it said
-and wait; never pick an answer or re-run with a different one. If it fails
-part way (a traceback), run the same command again: it carries on from where
-it stopped. Without a code, `--question` may be omitted when exactly one
-question is open.
+The desk asks the owner questions in plain words and parks the claim: which
+rate to use, whether a new thread from a known customer is the same piece or
+a new one, what an unclear reply meant, what to do after a rejected
+appointment card. Every such message ends with one line, `desk-answer
+<CODE>`. When the owner replies to it, run exactly this, their words
+verbatim:
+
+```bash
+python3 {baseDir}/scripts/workflow_safe.py answer-question \
+  --workspace '<absolute-workspace>' --base-dir '{baseDir}' \
+  --question '<CODE>' --answer '<the owner's reply, verbatim>'
+```
+
+An appointment card names a code in its reject row; an owner who rejected
+the card and then writes that code with a plan (times to offer, "other
+times", "handle myself") is answering that question: run the same command
+with that code. Paste the output. It applies the answer (saves the rate and
+prices; quotes a new piece; emails the owner's times; closes the thread to
+the owner). If it refuses, tell the owner what it said and wait; never pick
+an answer or re-run with a different one. If it fails part way (a
+traceback), run the same command again: it carries on from where it stopped.
 
 ## Phase 5: records, follow-up, and cleanup
 
