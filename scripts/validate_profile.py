@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PHONE_RE = re.compile(r"^\+[1-9][0-9]{7,14}$")
-VALID_MODES = {"retailer", "wholesale_middle_man", "both"}
+VALID_MODES = {"retailer"}
 VALID_PRICING_MODELS = {"cost_plus_multiplier", "target_margin"}
 VALID_OWNER_CHANNELS = {"kolo_chat", "email", "sms"}
 
@@ -39,8 +39,9 @@ def validate_profile(data: Any) -> dict[str, Any]:
         errors.append("schema_version must be 1")
 
     mode = _read_path(data, "shop.mode")
-    if mode not in VALID_MODES:
-        errors.append("shop.mode must be retailer, wholesale_middle_man, or both")
+    if mode is not None and mode != "retailer":
+        # WORKFLOW.md: retail only. A missing mode means retailer.
+        errors.append("shop.mode must be retailer; the desk has no wholesale or trade mode")
 
     shop_name = _read_path(data, "shop.name")
     if not isinstance(shop_name, str) or not shop_name.strip():

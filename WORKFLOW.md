@@ -440,7 +440,8 @@ closed by follow-up changes:
   Failures of the desk itself are a plain notice. An owner's "change" or
   "second piece" answer closes the thread to the owner for now; the desk does
   not yet reopen the gate or open a second estimate on the same thread.
-- The implementation still carries a wholesale mode, wholesale email wording,
+- Setup no longer asks retail or wholesale (4 September 2026); the profile
+  validator accepts `retailer` only. The implementation still carries wholesale email wording,
   and a trade markup setting. This document is retail only; those are to be
   removed. The tests that pin customer wording and phase order
 exist to keep the implementation faithful to this document.
