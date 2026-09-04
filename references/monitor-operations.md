@@ -118,14 +118,12 @@ rebind.
 
 ## Inline judgment (no worker jobs)
 
-Create `<workspace>/estimate-desk/pipeline.json` containing
-`{"inline": true}` (optionally `"model": "<provider/model>"`) and the watcher
-finishes claims itself with one-shot completions instead of starting worker
-jobs; delete the file or set `"inline": false` to go back. No rebind is
-needed either way. Before enabling it on a pod, confirm that
-`openclaw infer model run --model qwen --json --prompt 'Reply with {"ok":true}'`
-works from a shell there and that the watcher's command job inherits the
-LiteLLM environment. Rendering and appointment work still uses a worker job.
+Inline judgment is on by default: the watcher finishes claims itself with a
+few one-shot completions instead of starting worker jobs. To turn it off on
+a pod, create `<workspace>/estimate-desk/pipeline.json` containing
+`{"inline": false}`; to pin a model, `{"model": "<provider/model>"}`. No
+rebind is needed either way. `scripts/readiness.py` confirms the model call
+works from the watcher's environment.
 
 ## Updating an active monitor
 

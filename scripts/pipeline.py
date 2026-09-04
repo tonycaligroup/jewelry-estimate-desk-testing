@@ -40,15 +40,20 @@ NOT_AN_INQUIRY = {"not_a_quote_request", "vendor_or_marketing", "personal_or_int
 
 
 def settings(desk: Path) -> dict[str, Any]:
-    """The inline switch; absent or unreadable means off."""
+    """The inline switch: on unless pipeline.json says {"inline": false}.
+
+    Inline judgment (a few stateless model calls inside the tick) is the
+    normal path since 3 September 2026; worker jobs are the fallback. A pod
+    can still opt out with the file.
+    """
     path = desk / SWITCH_FILE
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
-        return {"inline": False}
+        return {"inline": True, "model": None}
     if not isinstance(value, dict):
-        return {"inline": False}
-    return {"inline": bool(value.get("inline")), "model": value.get("model") or None}
+        return {"inline": True, "model": None}
+    return {"inline": value.get("inline", True) is not False, "model": value.get("model") or None}
 
 
 def _template_text(base_dir: Path) -> str:

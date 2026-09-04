@@ -6782,6 +6782,7 @@ class WatcherTickTests(unittest.TestCase):
         ws = Path(directory) / "ws"
         desk = ws / "estimate-desk"
         desk.mkdir(parents=True)
+        (desk / "pipeline.json").write_text('{"inline": false}', encoding="utf-8")  # these tests cover the worker path
         monitor_root = desk / "inbox-monitor"
         inbox_monitor.prepare(monitor_root, self.helper.capabilities(), self.helper.cron())
         inbox_monitor.activate(monitor_root, self.helper.cron(), 1_000)
@@ -7587,6 +7588,7 @@ class DecisionQuestionTests(unittest.TestCase):
         ws = Path(directory) / "ws"
         desk = ws / "estimate-desk"
         desk.mkdir(parents=True)
+        (desk / "pipeline.json").write_text('{"inline": false}', encoding="utf-8")  # these tests cover the worker path
         args, _paths = helper.claimed(str(desk))
         (desk / "monitor").rename(desk / "inbox-monitor")
         (desk / "claims").rename(desk / "inbox-claims")
@@ -8329,6 +8331,43 @@ class AcceptedOfferTests(unittest.TestCase):
             estimate_record.persist_record(record_root, record)
             self.assertEqual(pipeline._last_offered_times({"record_root": record_root}, "jed-0123456789abcdef"), offered)
             self.assertEqual(pipeline._last_offered_times({"record_root": record_root}, None), [])
+
+
+class ReadinessTests(unittest.TestCase):
+    def test_inline_is_the_default_and_the_file_can_turn_it_off(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            desk = Path(directory)
+            self.assertTrue(pipeline.settings(desk)["inline"])
+            (desk / "pipeline.json").write_text('{"inline": false}', encoding="utf-8")
+            self.assertFalse(pipeline.settings(desk)["inline"])
+            (desk / "pipeline.json").write_text('{"model": "x/y"}', encoding="utf-8")
+            self.assertEqual(pipeline.settings(desk), {"inline": True, "model": "x/y"})
+
+    def test_readiness_reports_every_check(self) -> None:
+        import readiness
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            (ws / "estimate-desk" / "inbox-monitor").mkdir(parents=True)
+            (ws / "estimate-desk" / "shop-profile.json").write_text("{}", encoding="utf-8")
+            def runner(argv, **kwargs):
+                if argv[:3] == ["openclaw", "infer", "model"]:
+                    return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "capability": "model.run", "outputs": [{"text": '{"ok":true}'}]}), "")
+                if argv[:2] == ["kolo", "audit-query"]:
+                    return subprocess.CompletedProcess(argv, 0, '{"status": "ok", "events": []}', "")
+                if argv[:2] == ["kolo", "ping"]:
+                    return subprocess.CompletedProcess(argv, 0, "pong", "")
+                if argv[:3] == ["openclaw", "cron", "list"]:
+                    return subprocess.CompletedProcess(argv, 0, json.dumps({"jobs": [{"name": "jed-inbox-monitor", "enabled": True, "schedule": "*/2 7-23 * * 1-6"}]}), "")
+                return subprocess.CompletedProcess(argv, 1, "", "unexpected")
+            rows = readiness.checks(ws, ROOT, "openclaw", runner=runner)
+            status = {r["check"]: r["status"] for r in rows}
+            self.assertEqual(status["inline judgment"], "PASS")
+            self.assertEqual(status["audit trail access"], "PASS")
+            self.assertEqual(status["kolo backend"], "PASS")
+            self.assertEqual(status["watcher cron"], "PASS")
+            self.assertEqual(status["shop profile"], "FAIL")
+            self.assertEqual(status["activation binding"], "FAIL")
+            self.assertEqual(status["calendar and windows"], "FAIL")
 
 
 class PlainTextMailTests(unittest.TestCase):
