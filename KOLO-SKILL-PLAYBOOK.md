@@ -145,6 +145,19 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   `litellm/claude-haiku-4-5`, `litellm-openai/gemini-3.1-flash-lite-preview`.
   Rate limits and per-token cost are the same whether a model is called from
   a script or an agent turn. **reported**
+- Image CLI on a pod (OpenClaw 2026.6.11): `openclaw infer image generate
+  --prompt <text> [--count N] [--size 1024x1024] [--quality low|medium|high|auto]
+  [--resolution 1K|2K|4K] [--aspect-ratio 1:1] [--background transparent|opaque]
+  [--output-format png|jpeg|webp] [--output <path>] [--model <p/m>] --json`;
+  `infer image edit --file <png> [--file ...] --prompt <text> ...` (same
+  options; image-conditioned); `infer image describe --file <png> --prompt
+  <hint> [--model <text+image model>] --json` and `describe-many` (vision
+  read of an image, usable as a checker); `infer image providers --json`.
+  Configured provider: litellm, default model gpt-image-2 (generate and edit).
+  Available but unconfigured: fal (FLUX dev, image-to-image, up to 10 input
+  images), ComfyUI (workflow), MiniMax, OpenAI direct, OpenRouter, xAI, Vydra.
+  Vision-capable text models for describe: qwen-3-7-plus, claude-haiku-4-5,
+  gemini-3.1-flash-lite, claude-fable-5. **verified 4 Sep 2026**
 - Images: `openclaw infer image generate --prompt <text> --model <id> --json`
   writes a PNG and returns `outputs[].path` (default model gpt-image-2 on our
   pod, **verified 2 Sep**); `infer image edit --file <png> --prompt <text>`
