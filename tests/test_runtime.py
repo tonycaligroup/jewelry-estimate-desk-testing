@@ -8628,6 +8628,25 @@ class NothingToAskTests(unittest.TestCase):
         self.assertIn("body", judge.check_body({"body": "Hi Tony, thanks for the details. Could you tell me the ring size you would like? Warmly, the shop"}))
 
 
+class EmailFlowGuardTests(unittest.TestCase):
+    def test_same_greeting_is_fine_but_same_opening_sentence_is_not(self) -> None:
+        import customer_mail
+        previous = "Hello David,\n\nThanks for the details on the bracelet. Could you tell me natural or lab-grown?"
+        check = customer_mail._check("rendering", {}, previous)
+        same_greeting = "Hello David,\n\nAttached are two illustrations of the design direction we discussed. The written specification and the final design you approve control the finished piece. Reply here with anything you would like changed.\n\nThe shop"
+        self.assertIn("body", check({"body": same_greeting}))
+        same_opening = "Hello David,\n\nThanks for the details on the bracelet. Attached are two illustrations of the design direction. The written specification and the final design you approve control the finished piece. Reply here with anything you would like changed.\n\nThe shop"
+        with self.assertRaisesRegex(ValueError, "same sentence"):
+            check({"body": same_opening})
+
+    def test_follow_up_falls_back_to_a_plain_question_list(self) -> None:
+        body = pipeline.plain_followup(["stone_origin", "finger_size"], "Lomelino Jewelry")
+        self.assertIn("natural or lab-grown", body)
+        self.assertIn("ring size", body)
+        self.assertIn("?", body)
+        self.assertNotIn("**", body)
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:

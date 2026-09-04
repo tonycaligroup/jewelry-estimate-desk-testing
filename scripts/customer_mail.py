@@ -62,6 +62,20 @@ def _last_desk_email(digest: dict[str, Any]) -> str:
     return ""
 
 
+GREETING_RE = re.compile(r"^(hi|hello|hey|dear|good (morning|afternoon|evening))\b", re.IGNORECASE)
+
+
+def _opening(text: str) -> str:
+    """The first real sentence after the greeting line, lowercased; empty when short."""
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if lines and GREETING_RE.match(lines[0]) and len(lines[0]) < 40:
+        lines = lines[1:]
+    if not lines:
+        return ""
+    sentence = re.split(r"(?<=[.!?])\s", lines[0], maxsplit=1)[0].strip().lower()
+    return sentence if len(sentence) > 20 else ""
+
+
 def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def check(value: dict[str, Any]) -> dict[str, Any]:
         body = value.get("body")
@@ -87,9 +101,8 @@ def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[st
         for label in facts.get("time_labels") or []:
             if label not in body:
                 raise ValueError(f"the email must state this time exactly as written: {label}")
-        first = body.strip().splitlines()[0].strip().lower()
-        if previous and first and first == previous.strip().splitlines()[0].strip().lower() and len(first) > 12:
-            raise ValueError("do not open with the same line as the last email on this thread")
+        if previous and _opening(body) and _opening(body) == _opening(previous):
+            raise ValueError("do not open with the same sentence as the last email on this thread")
         return {"body": body}
     return check
 

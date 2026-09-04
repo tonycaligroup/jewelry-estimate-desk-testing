@@ -75,13 +75,46 @@ def _manual_review(p: dict[str, Path], message_id: str, reason: str, runner: Run
     return {"outcome": "manual_review", "reason_code": reason, "next": "done"}
 
 
+FIELD_QUESTIONS = {
+    "stone_origin": "would you like natural or lab-grown stones?",
+    "stone_type": "which stone would you like?",
+    "stone_carat": "what carat weight or stone size do you have in mind?",
+    "stone_color": "any preference on stone color?",
+    "stone_clarity": "any preference on clarity?",
+    "stone_cut": "which cut or shape?",
+    "metal": "which metal would you like?",
+    "metal_karat": "which karat, 14K or 18K?",
+    "metal_color": "yellow, white, or rose?",
+    "finger_size": "what ring size?",
+    "dimensions": "what length or size should it be?",
+    "setting_style": "what setting style do you have in mind?",
+    "piece_type": "what kind of piece is this for?",
+}
+
+
+def plain_followup(missing: list[str], shop_name: str) -> str:
+    asks = [FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?") for field in missing[:4]]
+    lines = "\n".join(f"- {q[0].upper() + q[1:]}" for q in asks) or "- Is there anything else we should know?"
+    return (
+        "Hello,\n\nThank you for reaching out. To put together an accurate estimate, could you share:\n\n"
+        f"{lines}\n\nIf you are not sure about any of these, tell us the look you are after and we will recommend.\n\n{shop_name}\n"
+    )
+
+
 def _send_followup(
     p: dict[str, Path], base_dir: Path, message_id: str, estimate_id: str,
     digest: dict[str, Any], missing: list[str], initiating: bool, paths: dict[str, str],
     profile: dict[str, Any], model: str | None, judge_runner: Runner, openclaw: str | None,
 ) -> dict[str, Any]:
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
-    drafted = judge.draft_followup(digest, missing, _template_text(base_dir), shop_name, model, judge_runner, openclaw)
+    try:
+        drafted = judge.draft_followup(digest, missing, _template_text(base_dir), shop_name, model, judge_runner, openclaw)
+    except judge.JudgmentError as exc:
+        if exc.transient:
+            raise
+        # The model could not write a proper question twice; a plain one
+        # still moves the inquiry, and the owner sees nothing odd.
+        drafted = {"body": plain_followup(missing, shop_name)}
     body_path = Path(paths["customer_reply"])
     body_path.parent.mkdir(parents=True, exist_ok=True)
     body_path.write_text(drafted["body"] + "\n", encoding="utf-8")
