@@ -874,9 +874,16 @@ def record_appointment_booked(
                 raise ValueError("appointment_booked receipt is invalid")
             comparable = dict(existing)
             comparable.pop("booked_at", None)
+            comparable.pop("replaced_by", None)
             if comparable == evidence:
                 return record
-            raise ValueError("conflicting_appointment_receipt")
+            if existing.get("source_message_id_sha256") == source_hash:
+                raise ValueError("conflicting_appointment_receipt")
+            # A later approved time replaces the booking; the old one is kept.
+            history = record.setdefault("appointment_history", [])
+            if not isinstance(history, list):
+                raise ValueError("appointment_history must be an array")
+            history.append({**existing, "replaced_at": datetime.now(timezone.utc).isoformat()})
         evidence["booked_at"] = datetime.now(timezone.utc).isoformat()
         record["appointment_booked"] = evidence
         record["status"] = "appointment_booked"

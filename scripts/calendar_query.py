@@ -194,6 +194,30 @@ def create_event(
     return event
 
 
+def delete_event(
+    calendar_id: str,
+    event_id: str,
+    token: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> bool:
+    """Cancel one event (attendees are told); False when the provider refuses."""
+    if not isinstance(event_id, str) or not event_id or len(event_id) > 255:
+        raise ValueError("event_id must contain 1-255 characters")
+    url = EVENTS_URL.format(calendar=urllib.parse.quote(calendar_id, safe="")).replace(
+        "/events?", f"/events/{urllib.parse.quote(event_id, safe='')}?"
+    )
+    request = urllib.request.Request(
+        url, method="DELETE",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    try:
+        with opener(request, timeout=20) as response:
+            status = getattr(response, "status", 200)
+        return 200 <= int(status or 200) < 300
+    except (OSError, ValueError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--time-min", required=True)
