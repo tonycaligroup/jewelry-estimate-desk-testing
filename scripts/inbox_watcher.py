@@ -215,6 +215,8 @@ def tick(
     )
     # A question the owner has not answered for a working day gets one
     # reminder, then waits (WORKFLOW.md 6.10).
+    # Kolo says nothing when a card is rejected; the audit trail does.
+    summary["rejections"] = workflow_safe.handle_rejected_briefs(workspace, runner=runner)
     summary["reminders"] = owner_questions.send_due_reminders(
         owner_questions.questions_root(p["monitor_root"]), runner=runner,
         extra_args=kolo_safe.owner_channel_args(p["monitor_root"]),

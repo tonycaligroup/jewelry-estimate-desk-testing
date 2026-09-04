@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
+import brief_registry
 import activation_binding
 import business_state_reset
 import customer_content_guard
@@ -7320,7 +7321,7 @@ class BundledWorkerStepTests(unittest.TestCase):
                 ))
             self.assertEqual(priced["outcome"], "approval_requested")
             self.assertEqual(priced["record_status"], "pending_approval")
-            self.assertEqual(brief.call_args.args[0][:2], ["kolo", "request-approval"])
+            self.assertTrue(any(c.args[0][:2] == ["kolo", "request-approval"] for c in brief.call_args_list))
             lines = priced["cost_components"]
             self.assertEqual(lines["metal_lines"][0]["quantity_grams"], 4.5)
             self.assertEqual(lines["labor_lines"][0]["hours"], 3.0)
@@ -7512,7 +7513,7 @@ class InlinePipelineTests(unittest.TestCase):
             self.assertEqual(out["outcome"], "approval_requested")
             self.assertGreater(out["proposed_price"], 0)
             self.assertEqual(runner.call_count, 3)
-            self.assertEqual(kolo.call_args.args[0][:2], ["kolo", "request-approval"])
+            self.assertTrue(any(c.args[0][:2] == ["kolo", "request-approval"] for c in kolo.call_args_list))
             record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
             self.assertEqual(record["status"], "pending_approval")
 
@@ -8137,8 +8138,7 @@ class AppointmentScenarioTests(unittest.TestCase):
             self.assertEqual(out["outcome"], "offer_card_filed")
             self.assertEqual(out["options"], ["2026-09-08T14:00:00-07:00", "2026-09-09T11:00:00-07:00"])
             send.assert_not_called()
-            argv = runner.call_args.args[0]
-            self.assertEqual(argv[:2], ["kolo", "request-approval"])
+            argv = next(c.args[0] for c in runner.call_args_list if c.args[0][:2] == ["kolo", "request-approval"])
             self.assertTrue(argv[argv.index("--action") + 1].startswith("Offer meeting times:"))
             payload = json.loads(argv[argv.index("--execution-payload") + 1])
             self.assertEqual(payload["action_type"], "appointment_offer")
@@ -8185,6 +8185,62 @@ class AppointmentScenarioTests(unittest.TestCase):
                 {"monitor_root": args.monitor_root}, record["estimate_id"], args.message_id, "approved"
             )
             self.assertEqual(owner_questions.find(qroot, code)["answer"]["outcome"], "superseded")
+
+class RejectionPollTests(unittest.TestCase):
+    def audit(self, events):
+        return subprocess.CompletedProcess([], 0, json.dumps({"status": "ok", "events": events}), "")
+
+    def test_filing_records_the_brief_id_from_the_trail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            monitor_root = Path(directory) / "estimate-desk" / "inbox-monitor"
+            monitor_root.mkdir(parents=True)
+            runner = Mock(return_value=self.audit([
+                {"event_type": "brief.submitted", "brief_id": "b-1", "brief_number": 113, "description": "Offer meeting times: a band",
+                 "created_at": "2026-09-04T01:28:32Z"},
+            ]))
+            entry = brief_registry.register(monitor_root, "appointment", "Offer meeting times: a band", "jed-0123456789abcdef", "m-2", runner=runner)
+            self.assertEqual(entry["brief_id"], "b-1")
+            self.assertEqual(runner.call_args.args[0][:4], ["kolo", "audit-query", "--page-size", "100"])
+            self.assertEqual(brief_registry.load_all(monitor_root)[0]["outcome"], "pending")
+            self.assertIsNone(brief_registry.register(monitor_root, "price", "Something else", "jed-0123456789abcdef", "m-3", runner=runner))
+
+    def test_rejected_appointment_card_wakes_the_question_and_rendering_closes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            p = inbox_watcher.paths_for(ws)
+            p["monitor_root"].mkdir(parents=True)
+            (ws / "estimate-desk" / "shop-profile.json").write_text("{}", encoding="utf-8")
+            root = owner_questions.questions_root(p["monitor_root"])
+            _c, dormant = owner_questions.create_decision(root, "appointment_next", "jed-0123456789abcdef", "m-2", "You passed.", {}, dormant=True)
+            brief_registry._write(brief_registry.root_for(p["monitor_root"]) / "b-1.json", {
+                "brief_id": "b-1", "kind": "appointment", "estimate_id": "jed-0123456789abcdef", "message_id": "m-2", "outcome": "pending"})
+            brief_registry._write(brief_registry.root_for(p["monitor_root"]) / "b-2.json", {
+                "brief_id": "b-2", "kind": "rendering", "estimate_id": "jed-0123456789abcdef", "message_id": "m-9", "outcome": "pending"})
+            calls = []
+            def runner(argv, **kwargs):
+                calls.append(argv)
+                if argv[:2] == ["kolo", "audit-query"]:
+                    return self.audit([
+                        {"event_type": "brief.rejected", "brief_id": "b-1", "details": {"note": "not that day"}, "created_at": "2026-09-04T01:32:21Z"},
+                        {"event_type": "brief.rejected", "brief_id": "b-2", "details": {}, "created_at": "2026-09-04T01:35:00Z"},
+                    ])
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            with patch.object(workflow_safe, "_close_parked_claim") as close:
+                handled = workflow_safe.handle_rejected_briefs(ws, runner=runner)
+            self.assertEqual([h["kind"] for h in handled], ["appointment", "rendering"])
+            asked = owner_questions.find(root, dormant["question_id"])
+            self.assertFalse(asked["dormant"])
+            self.assertEqual(asked["delivery"]["status"], "sent")
+            notify = [c for c in calls if c[:2] == ["kolo", "notify-owner"]]
+            self.assertIn("You passed.", notify[0][3])
+            self.assertIn("held back", notify[1][3])
+            close.assert_called_once()
+            self.assertEqual({e["outcome"] for e in brief_registry.load_all(p["monitor_root"])}, {"rejected"})
+            # Second poll: nothing pending, no audit call.
+            calls.clear()
+            self.assertEqual(workflow_safe.handle_rejected_briefs(ws, runner=runner), [])
+            self.assertEqual(calls, [])
+
 
 class PlainTextMailTests(unittest.TestCase):
     def test_markdown_from_the_model_is_stripped_before_the_customer_sees_it(self) -> None:

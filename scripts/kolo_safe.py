@@ -624,6 +624,33 @@ def build_log_action(
     ]
 
 
+def audit_events(
+    event_type: str | None = None,
+    from_date: str | None = None,
+    category: str | None = None,
+    brief_id: str | None = None,
+    page_size: int = 100,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Read the org audit trail (newest first); empty on any failure."""
+    argv = ["kolo", "audit-query", "--page-size", str(page_size)]
+    if event_type:
+        argv += ["--event-type", event_type]
+    if category:
+        argv += ["--category", category]
+    if from_date:
+        argv += ["--from-date", from_date]
+    if brief_id:
+        argv += ["--brief-id", brief_id]
+    try:
+        result = run_command(argv, runner=runner or subprocess.run)
+        body = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return []
+    events = body.get("events") if isinstance(body, dict) else None
+    return [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
+
+
 def run_command(
     argv: Sequence[str],
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,

@@ -993,12 +993,12 @@ delivers the decision as approved, copy that line, replace `<Brief ID>` with
 the Brief ID from the delivered decision, run it, and paste its output. That
 one command re-verifies the bound state, sends or books through the desk's
 own helpers, records the receipt, and reports the brief executed. A repeat is
-a no-op. When Kolo delivers a decision as rejected and the payload carries
-`execute_on_reject`, run that line the same way: for appointment cards it
-asks the owner what to do for that customer. A rejected rendering runs
-`workflow_safe.py reject-rendering --workspace '<absolute-workspace>'
---message-id '<gmail_message_id from the payload>'`. Other rejected briefs
-need no command.
+a no-op. Rejections need no command from this session: Kolo does not
+deliver them here, and the watcher reads them from the audit trail every
+tick, then asks the owner what to do (appointment cards), holds the
+renderings back, or notes the passed price. If Kolo ever does deliver a
+rejected decision whose payload carries `execute_on_reject`, run that line;
+it is harmless when the watcher got there first.
 
 The execute lines are, for reference:
 
@@ -1042,13 +1042,13 @@ python3 {baseDir}/scripts/workflow_safe.py answer-question \
   --question '<CODE>' --answer '<the owner's reply, verbatim>'
 ```
 
-Kolo does not tell the desk when a card is rejected. An owner who rejected
-an appointment card then says what they want in this chat, in their own
-words: times to offer, "other times", or "handle myself". That is an answer
-too: run the same command without `--question` and with their words. The
-desk matches it to the customer whose card was filed last, or to the
-customer they named. Times become a new offer card; nothing reaches the
-customer until that card is approved. Paste the output. If the command
+When the owner rejects an appointment card, the watcher notices within a
+tick and asks them here what to do. The owner may also answer before the
+question arrives, in their own words: times to offer, "other times", or
+"handle myself". Either way, run the same command without `--question` and
+with their words; the desk matches it to the customer whose card was filed
+last, or to the customer they named. Times become a new offer card; nothing
+reaches the customer until that card is approved. Paste the output. If the command
 refuses, tell the owner what it said and wait; never pick an answer or
 re-run with a different one. If it fails part way (a traceback), run the
 same command again: it carries on from where it stopped.
