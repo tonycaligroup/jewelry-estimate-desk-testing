@@ -295,12 +295,11 @@ class InstructionCoherenceTests(unittest.TestCase):
 
     def test_main_session_has_explicit_appointment_approval_handoff(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn(
-            "Handling approved appointment requests in the main Kolo session",
-            skill,
-        )
-        self.assertIn("Query Google Calendar again", skill)
-        self.assertIn("authoritative original thread", skill)
+        # Batch 3: the session runs the execute line the payload carries.
+        self.assertIn("Approved briefs: run the payload's `execute` line", skill)
+        self.assertIn("book-approved-appointment", skill)
+        self.assertIn("send-approved-estimate-brief", skill)
+        self.assertIn("Owner questions: run the command in the question", skill)
 
 
 class ApprovalTests(unittest.TestCase):
@@ -7754,6 +7753,190 @@ class RequestedTimeFirstTests(unittest.TestCase):
         self.assertEqual(offered["options"][0]["start"], "2026-09-04T13:00:00-07:00")
         self.assertEqual(len(offered["options"]), 3)
         self.assertEqual(offered["options"][1]["start"], "2026-09-03T16:30:00-07:00")  # then the earliest free slot
+
+
+class CommandTravelsWithTheDecisionTests(unittest.TestCase):
+    """Batch 3: the main session never guesses a command."""
+
+    def test_question_text_carries_the_answer_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "estimate-desk" / "questions"
+            monitor_root = Path(directory) / "estimate-desk" / "inbox-monitor"
+            _created, q = owner_questions.create_decision(
+                root, "same_sender", "jed-0000000000000000", "m-1", "Same piece or new?", {}
+            )
+            q = workflow_safe._attach_answer_command(root, monitor_root, q)
+            text = owner_questions.question_text(q)
+            self.assertIn("answer-question", text)
+            self.assertIn(f"--question {owner_questions.reference(q['question_id'])}", text)
+            self.assertIn(f"--workspace {Path(directory).resolve()}", text)
+            self.assertIn("Same piece or new?", text)
+            self.assertTrue(owner_questions.question_text(q, reminder=True).startswith("Reminder"))
+
+    def test_execute_line_names_the_skill_and_workspace(self) -> None:
+        line = workflow_safe.execute_line(Path("/ws/estimate-desk/inbox-monitor"), "book-approved-appointment",
+                                          estimate_id="jed-1", brief_id="<Brief ID>", option="1")
+        self.assertTrue(line.startswith("python3 "))
+        self.assertIn("/scripts/workflow_safe.py book-approved-appointment --workspace /ws --estimate-id jed-1", line)
+        self.assertTrue(line.endswith("--brief-id <Brief ID> --option 1"))
+
+    def test_appointment_payload_carries_its_execute_line(self) -> None:
+        record = {
+            "schema_version": 1, "estimate_id": "jed-0123456789abcdef", "status": "estimate_sent",
+            "route": {"channel": "gmail", "thread_id": "t", "gmail_message_id": "m0", "recipient": "c@example.net",
+                      "identity_key": gmail_route.email_identity_key("c@example.net"), "mailbox": "shop@example.com",
+                      "original_subject": "Ring", "original_message_id": "<a@b>", "references": []},
+            "inbound_timestamp_ms": 1,
+        }
+        details = workflow_safe._appointment_approval_details(
+            record, "m-2", {"requested_times": [], "calendar_availability": []}, Path("/ws/estimate-desk/inbox-monitor")
+        )
+        self.assertIn("book-approved-appointment --workspace /ws --estimate-id jed-0123456789abcdef --message-id m-2", details["execute"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "records"
+            estimate_record.persist_record(root, record)
+            stored = estimate_record.record_appointment_approval_requested(root, record["estimate_id"], "m-2", details)
+            self.assertEqual(len(stored["appointment_approval_requests"]), 1)
+
+
+class OneCommandExecutorTests(unittest.TestCase):
+    def workspace(self, directory: str) -> tuple[Path, dict, dict]:
+        ws = Path(directory) / "ws"
+        desk = ws / "estimate-desk"
+        (desk / "inbox-monitor").mkdir(parents=True)
+        (desk / "inbox-claims").mkdir()
+        record_root = desk / "records"
+        route = {"channel": "gmail", "thread_id": "thread-1", "gmail_message_id": "m0", "recipient": "customer@example.net",
+                 "identity_key": gmail_route.email_identity_key("customer@example.net"), "mailbox": "shop@example.com",
+                 "original_subject": "Band", "original_message_id": "<orig@example.net>", "references": []}
+        record = {"schema_version": 1, "estimate_id": "jed-0123456789abcdef", "status": "estimate_sent", "route": route,
+                  "inbound_timestamp_ms": 1, "specification": {"piece_type": "wedding band", "metal": "gold", "metal_karat": 18}}
+        estimate_record.persist_record(record_root, record)
+        profile = {"shop": {"name": "Cali Jewelers"}, "terms": {"quote_valid_days": 7, "lead_time_business_days": 15},
+                   "scheduling": {"timezone": "America/Los_Angeles", "calendar": "primary",
+                                  "windows": [{"days": ["fri"], "start": "10:00", "end": "17:00"}]}}
+        (desk / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+        return ws, record, profile
+
+    def test_book_approved_appointment_rechecks_books_confirms_and_records(self) -> None:
+        import email.utils
+        with tempfile.TemporaryDirectory() as directory:
+            ws, record, _profile = self.workspace(directory)
+            p = inbox_watcher.paths_for(ws)
+            slot = {"start": "2026-09-04T13:00:00-07:00", "end": "2026-09-04T13:30:00-07:00", "label": "Friday, September 4 at 1:00 PM PDT"}
+            approval = workflow_safe._appointment_approval_details(
+                record, "m-2", {"requested_times": ["tomorrow at 1pm"], "calendar_availability": [slot]}, p["monitor_root"]
+            )
+            workflow_safe.write_private(workflow_safe.approval_store_path(p["monitor_root"], record["estimate_id"], "m-2"), approval)
+            estimate_record.record_appointment_approval_requested(p["record_root"], record["estimate_id"], "m-2", approval)
+            now = datetime(2026, 9, 3, 23, 0, tzinfo=timezone.utc)
+            class Response:
+                headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+                def __init__(self, body): self._body = body
+                def read(self): return json.dumps(self._body).encode("utf-8")
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            posted = []
+            def opener(request, timeout=15):
+                body = json.loads(request.data.decode("utf-8"))
+                posted.append((request.full_url, body))
+                if "freeBusy" in request.full_url:
+                    return Response({"kind": "calendar#freeBusy", "timeMin": body["timeMin"], "timeMax": body["timeMax"],
+                                     "calendars": {"primary": {"busy": []}}})
+                return Response({"kind": "calendar#event", "id": "evt-1", "htmlLink": "https://cal/evt-1"})
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            with (
+                patch.object(workflow_safe.gateway_token, "load_token", return_value="tok"),
+                patch.object(workflow_safe.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")),
+                patch.object(workflow_safe.gmail_safe, "send_reply_claimed", return_value={"id": "conf-1", "threadId": "thread-1"}) as send,
+                patch.object(workflow_safe, "mirror_record"),
+            ):
+                out = workflow_safe.book_approved_appointment(argparse.Namespace(
+                    workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id="0123abcd-0000",
+                    option=1, start=None, runner=runner, opener=opener,
+                ))
+            self.assertEqual(out["outcome"], "appointment_booked")
+            self.assertEqual(out["calendar_event_id"], "evt-1")
+            self.assertEqual(posted[1][0], "https://gateway.maton.ai/google-calendar/calendar/v3/calendars/primary/events?sendUpdates=all")
+            self.assertEqual(posted[1][1]["attendees"], [{"email": "customer@example.net"}])
+            self.assertEqual(posted[1][1]["start"]["dateTime"], slot["start"])
+            body = json.loads(Path(send.call_args.args[4]).read_text(encoding="utf-8"))
+            self.assertEqual(body["threadId"], "thread-1")
+            stored = estimate_record.read_object(estimate_record.record_path(p["record_root"], record["estimate_id"]))
+            self.assertEqual(stored["status"], "appointment_booked")
+            self.assertEqual(stored["appointment_booked"]["calendar_event_id"], "evt-1")
+            self.assertEqual(runner.call_args.args[0][:3], ["kolo", "update-brief", "--brief-id"])
+            # A second run books nothing and only reports.
+            again = workflow_safe.book_approved_appointment(argparse.Namespace(
+                workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id="0123abcd-0000",
+                option=1, start=None, runner=runner, opener=opener,
+            ))
+            self.assertEqual(again["outcome"], "already_booked")
+            self.assertEqual(len(posted), 2)
+
+    def test_book_refuses_a_time_that_is_no_longer_free(self) -> None:
+        import email.utils
+        with tempfile.TemporaryDirectory() as directory:
+            ws, record, _profile = self.workspace(directory)
+            p = inbox_watcher.paths_for(ws)
+            slot = {"start": "2026-09-04T13:00:00-07:00", "end": "2026-09-04T13:30:00-07:00", "label": "Friday 1 PM"}
+            approval = workflow_safe._appointment_approval_details(
+                record, "m-2", {"requested_times": [], "calendar_availability": [slot]}, p["monitor_root"]
+            )
+            workflow_safe.write_private(workflow_safe.approval_store_path(p["monitor_root"], record["estimate_id"], "m-2"), approval)
+            estimate_record.record_appointment_approval_requested(p["record_root"], record["estimate_id"], "m-2", approval)
+            now = datetime(2026, 9, 3, 23, 0, tzinfo=timezone.utc)
+            class Response:
+                headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+                def __init__(self, body): self._body = body
+                def read(self): return json.dumps(self._body).encode("utf-8")
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            def opener(request, timeout=15):
+                body = json.loads(request.data.decode("utf-8"))
+                return Response({"kind": "calendar#freeBusy", "timeMin": body["timeMin"], "timeMax": body["timeMax"],
+                                 "calendars": {"primary": {"busy": [{"start": body["timeMin"], "end": body["timeMax"]}]}}})
+            with (
+                patch.object(workflow_safe.gateway_token, "load_token", return_value="tok"),
+                patch.object(workflow_safe.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")),
+                patch.object(workflow_safe.gmail_safe, "send_reply_claimed") as send,
+                self.assertRaisesRegex(ValueError, "no longer free"),
+            ):
+                workflow_safe.book_approved_appointment(argparse.Namespace(
+                    workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id=None,
+                    option=1, start=None, runner=Mock(), opener=opener,
+                ))
+            send.assert_not_called()
+
+    def test_send_approved_estimate_brief_writes_plain_text_and_sends_the_bound_price(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, record, _profile = self.workspace(directory)
+            p = inbox_watcher.paths_for(ws)
+            record["status"] = "pending_approval"
+            record["proposed_price"] = 2186.3
+            record["approval_binding_hash"] = "sha256:" + "0" * 64
+            estimate_record.persist_record(p["record_root"], record)
+            captured = {}
+            def fake_send(args):
+                captured["body"] = args.body.read_text(encoding="utf-8")
+                captured["approved"] = json.loads(args.approved.read_text(encoding="utf-8"))
+                return {"status": "estimate_sent"}
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            with patch.object(workflow_safe, "send_approved_estimate", side_effect=fake_send):
+                out = workflow_safe.send_approved_estimate_brief(argparse.Namespace(
+                    workspace=ws, estimate_id=record["estimate_id"], brief_id="0123abcd-0000", approved_price=None, runner=runner,
+                ))
+            self.assertEqual(out["outcome"], "estimate_sent")
+            self.assertIn("Estimate: $2,186.30", captured["body"])
+            self.assertIn("high end on purpose", captured["body"])
+            self.assertIn("about 15 business days", captured["body"])
+            self.assertNotIn("*", captured["body"])
+            self.assertEqual(captured["approved"]["owner_approved_price"], 2186.3)
+            self.assertEqual(captured["approved"]["binding_hash"], record["approval_binding_hash"])
+            with self.assertRaisesRegex(ValueError, "fresh brief"):
+                workflow_safe.send_approved_estimate_brief(argparse.Namespace(
+                    workspace=ws, estimate_id=record["estimate_id"], brief_id=None, approved_price=1999.0, runner=runner,
+                ))
 
 
 class PlainTextMailTests(unittest.TestCase):

@@ -332,9 +332,31 @@ def record_decision(
 
 def question_text(question: dict[str, Any], reminder: bool = False) -> str:
     if question["kind"] == "missing_rate":
-        return missing_rate_text(question, reminder)
-    text = question["text"]
-    return f"Reminder, still waiting on this: {text}" if reminder else text
+        text = missing_rate_text(question, reminder)
+    else:
+        text = question["text"]
+        text = f"Reminder, still waiting on this: {text}" if reminder else text
+    return with_answer_command(question, text)
+
+
+def with_answer_command(question: dict[str, Any], text: str) -> str:
+    """The exact command the desk session runs with the owner's words.
+
+    The main Kolo session reads the owner's reply in the same thread as this
+    message, so the command travels with the question and nothing is left to
+    guess (WORKFLOW.md 6.10).
+    """
+    command = question.get("answer_command")
+    if not isinstance(command, str) or not command.strip():
+        return text
+    return f"{text}\n\nDesk: apply the owner's reply with exactly this command, their words verbatim in --answer:\n{command}"
+
+
+def answer_command(base_dir: Path, workspace: Path, question_id: str) -> str:
+    return (
+        f"python3 {base_dir}/scripts/workflow_safe.py answer-question --workspace {workspace} "
+        f"--base-dir {base_dir} --question {reference(question_id)} --answer '<owner reply>'"
+    )
 
 
 def notify_command(text: str, extra: list[str] | None = None) -> list[str]:
@@ -365,7 +387,7 @@ def deliver(
     else:
         if question["delivery"]["status"] != "pending":
             return question
-        text = question["text"]
+        text = question_text(question)
         question["delivery"] = {"status": "pending", "attempted_at": current}
         field = "delivery"
     save(root, question)
