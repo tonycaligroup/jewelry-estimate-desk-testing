@@ -1141,14 +1141,43 @@ def _question_to_answer(args: argparse.Namespace, p: dict[str, Path], root: Path
         return owner_questions.find(root, args.question)
     try:
         return owner_questions.only_open(root)
-    except ValueError:
+    except ValueError as exc:
         answered = [
             q for q in owner_questions.list_questions(root, "answered")
             if q["kind"] in owner_questions.DECISION_KINDS and _claim_still_waiting(p, q)
         ]
         if len(answered) == 1:
             return answered[0]
-        raise
+        dormant = _dormant_for_answer(p, root, args.answer or "")
+        if dormant is not None:
+            return dormant
+        raise exc
+
+
+def _dormant_for_answer(p: dict[str, Path], root: Path, answer: str) -> dict[str, Any] | None:
+    """After a rejected appointment card the owner just says what they want.
+
+    The words go to the customer whose card was filed most recently, or to
+    the one whose name or address the owner mentioned when several are open.
+    """
+    candidates = [q for q in owner_questions.list_questions(root, "open")
+                  if q["kind"] == "appointment_next" and q.get("dormant")]
+    if not candidates:
+        return None
+    words = answer.lower()
+    named = []
+    for q in candidates:
+        try:
+            record = estimate_record.read_object(estimate_record.record_path(p["record_root"], q["estimate_id"]))
+        except (OSError, ValueError):
+            continue
+        recipient = str(record.get("route", {}).get("recipient", "")).lower()
+        local = recipient.split("@")[0]
+        display = kolo_safe._sender_display(recipient).lower()
+        if recipient and (recipient in words or (local and local in words) or any(part in words for part in display.split() if len(part) > 2)):
+            named.append(q)
+    pool = named or candidates
+    return sorted(pool, key=lambda q: q["asked_at"])[-1]
 
 
 def _claim_still_waiting(p: dict[str, Path], question: dict[str, Any]) -> bool:
@@ -1568,7 +1597,12 @@ def appointment_rejected(args: argparse.Namespace) -> dict[str, Any]:
 
 def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
                              question: dict[str, Any], outcome: str) -> dict[str, Any]:
-    """Apply the owner's answer after a rejected appointment card."""
+    """Apply the owner's answer after a rejected appointment card.
+
+    Times the owner names, or "other times", become a fresh offer card: the
+    customer hears nothing until that card is approved. "Handle myself"
+    leaves the thread to the owner.
+    """
     import inbox_watcher  # local import: inbox_watcher imports this module
 
     runner = getattr(args, "runner", subprocess.run)
@@ -1602,23 +1636,46 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
         if not requested:
             raise ValueError("could not read a specific day and time from that reply; give a day and a clock time")
     opener = getattr(args, "opener", None)
-    out_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-owner"
+    round_no = len([q for q in owner_questions.list_questions(root) if q["kind"] == "appointment_next"
+                    and q["estimate_id"] == estimate_id and q["status"] == "answered"]) + 1
+    out_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-round{round_no}"
     offered = slots.offer_times(profile, gateway_token.load_token(), out_dir, now=now, opener=opener,
                                 requested=requested, force_offer=True)
     options = offered["options"]
     if outcome == "times_given":
-        # Keep the owner's own times; drop only the ones the calendar says are taken.
         wanted = {r for r in requested}
         options = [o for o in options if o["start"][:16] in wanted] or options
     if not options:
         raise ValueError("none of those times are free inside the declared windows; try others")
     if question["status"] == "open":
         owner_questions.record_decision(root, question, args.answer, outcome)
-    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "your piece"
-    sent = _send_times(p, record, message_id, options[:3], piece, runner, "owner")
-    result.update(sent)
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their piece"
+    intent = {
+        "requested_times": [f"owner: {args.answer.strip()[:120]}"],
+        "calendar_availability": [{"start": o["start"], "end": o["end"], "label": o["label"]} for o in options[:3]],
+        "mode": "offer",
+        "availability_note": "times you chose after passing on the last card",
+    }
+    approval = _appointment_approval_details(record, message_id, intent, p["monitor_root"])
+    approval["source_message_id"] = message_id
+    # A second card for the same message: keep it distinct from the first one.
+    store = approval_store_path(p["monitor_root"], estimate_id, message_id)
+    write_private(store, approval)
+    qroot = root
+    _created, dormant = owner_questions.create_decision(
+        qroot, "appointment_next", estimate_id, f"{message_id}#round{round_no}", _appointment_next_text(record, approval),
+        {"rejected_action": "appointment_offer", "rejected_options": approval["calendar_availability"]}, dormant=True,
+    )
+    _attach_answer_command(qroot, p["monitor_root"], dormant)
+    approver = activation_binding.load(activation_binding.binding_path(p["monitor_root"]))
+    approval_path = out_dir / "appointment-approval.json"
+    write_private(approval_path, approval)
+    kolo_safe.run_command(
+        kolo_safe.build_request_appointment_approval(estimate_id, approval_path, approver["session_key"]),
+        runner=runner,
+    )
+    result.update({"outcome": "offer_card_filed", "options": [o["label"] for o in options[:3]], "piece": piece})
     return result
-
 
 def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any) -> None:
     brief_id = getattr(args, "brief_id", None)

@@ -7806,7 +7806,7 @@ class CommandTravelsWithTheDecisionTests(unittest.TestCase):
         rows, reasoning, title = kolo_safe.appointment_card(details, record["estimate_id"])
         self.assertTrue(title.startswith("Book appointment:"))
         self.assertNotIn("Option 1", rows)
-        self.assertIn("asks you what to do next", rows["Reject means"])
+        self.assertIn("tell the desk here what you want", rows["Reject means"])
         rows2, _r, title2 = kolo_safe.appointment_card(offer, record["estimate_id"])
         self.assertTrue(title2.startswith("Offer meeting times:"))
         self.assertIn("Option 2", rows2)
@@ -8071,7 +8071,8 @@ class AppointmentScenarioTests(unittest.TestCase):
             code = approval["reject_code"]
             self.assertRegex(code, r"[0-9A-F]{6}")
             rows, _reasoning, _title = kolo_safe.appointment_card(approval, record["estimate_id"])
-            self.assertIn(f'"{code}"', rows["Reject means"])
+            self.assertIn("tell the desk here what you want", rows["Reject means"])
+            self.assertIn("new card before anything is sent", rows["Reject means"])
             qroot = owner_questions.questions_root(args.monitor_root)
             dormant = owner_questions.find(qroot, code)
             self.assertTrue(dormant["dormant"])
@@ -8090,14 +8091,16 @@ class AppointmentScenarioTests(unittest.TestCase):
             )
             self.assertEqual(owner_questions.find(qroot, code)["answer"]["outcome"], "superseded")
 
-    def test_owner_typed_times_are_offered_to_the_customer(self) -> None:
+    def test_owner_typed_times_become_a_new_offer_card_not_an_email(self) -> None:
         import email.utils
         with tempfile.TemporaryDirectory() as directory:
             ws, p, record, _approval = self.seeded_offer(directory)
             runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
-            asked = workflow_safe.appointment_rejected(argparse.Namespace(
-                workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id=None, runner=runner,
-            ))
+            # Kolo never delivers the rejection; the dormant question filed with the card is the target.
+            qroot = owner_questions.questions_root(p["monitor_root"])
+            _c, dormant = owner_questions.create_decision(
+                qroot, "appointment_next", record["estimate_id"], "m-2", "You passed on offering those times.", {}, dormant=True,
+            )
             judged = Mock(return_value=subprocess.CompletedProcess(
                 [], 0, json.dumps({"ok": True, "capability": "model.run", "outputs": [{"text": json.dumps(
                     {"requested_times": ["Tuesday 2pm", "Wednesday at 11"], "resolved_times": ["2026-09-08T14:00", "2026-09-09T11:00"]}
@@ -8122,18 +8125,66 @@ class AppointmentScenarioTests(unittest.TestCase):
                 patch.object(workflow_safe.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")),
                 patch.object(slots.appointment_options, "build_options", side_effect=lambda receipt, free, tz, days, now=None: {"options": [dict(s, label=s["start"]) for s in free]}),
                 patch.object(slots.calendar_query, "write_private"),
-                patch.object(workflow_safe.gmail_safe, "send_reply_claimed", return_value={"id": "offer-2", "threadId": "thread-1"}) as send,
-                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.activation_binding, "load", return_value={"session_key": "agent:main:kolo:direct:c"}),
+                patch.object(workflow_safe.gmail_safe, "send_reply_claimed") as send,
             ):
+                # No code, no --question: the owner just says what they want.
                 out = workflow_safe.answer_question(argparse.Namespace(
-                    workspace=ws, base_dir=ROOT, question=asked["reference"], answer="Tuesday 2pm or Wednesday at 11",
+                    workspace=ws, base_dir=ROOT, question=None, answer="Tuesday 2pm or Wednesday at 11",
                     openclaw="openclaw", runner=runner, judge_runner=judged, opener=opener,
                 ))
             self.assertEqual(out["decision"], "times_given")
-            self.assertEqual(out["outcome"], "times_offered")
-            self.assertEqual(send.call_count, 1)
+            self.assertEqual(out["outcome"], "offer_card_filed")
             self.assertEqual(out["options"], ["2026-09-08T14:00:00-07:00", "2026-09-09T11:00:00-07:00"])
+            send.assert_not_called()
+            argv = runner.call_args.args[0]
+            self.assertEqual(argv[:2], ["kolo", "request-approval"])
+            self.assertTrue(argv[argv.index("--action") + 1].startswith("Offer meeting times:"))
+            payload = json.loads(argv[argv.index("--execution-payload") + 1])
+            self.assertEqual(payload["action_type"], "appointment_offer")
+            self.assertIn("send-approved-times", payload["execute"])
+            self.assertEqual(owner_questions.find(qroot, dormant["question_id"])["answer"]["outcome"], "times_given")
 
+    def test_card_carries_a_reject_code_and_approval_supersedes_the_dormant_question(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = WorkflowApprovalTransactionTests("test_rendering_and_appointment_commands_require_the_bound_intent")
+            args, record = helper.post_estimate_args(root, intents=["appointment_request"])
+            slot = {"start": "2026-09-04T13:00:00-07:00", "end": "2026-09-04T13:30:00-07:00", "label": "Friday, September 4 at 1:00 PM PDT"}
+            args.appointment_intent = root / "appointment-intent.json"
+            args.appointment_intent.write_text(json.dumps({"requested_times": ["Friday 1pm"], "calendar_availability": [slot], "mode": "book"}), encoding="utf-8")
+            args.appointment_approval = root / "appointment-approval.json"
+            args.defer_finalize_for_rendering = False
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "request_appointment_approval_claimed") as card,
+                patch.object(workflow_safe.activation_binding, "load", return_value={"session_key": "agent:main:kolo:direct:c"}),
+                patch.object(workflow_safe, "finish_processed"),
+            ):
+                workflow_safe.request_appointment_approval(args)
+            approval = json.loads(args.appointment_approval.read_text(encoding="utf-8"))
+            code = approval["reject_code"]
+            self.assertRegex(code, r"[0-9A-F]{6}")
+            rows, _reasoning, _title = kolo_safe.appointment_card(approval, record["estimate_id"])
+            self.assertIn("tell the desk here what you want", rows["Reject means"])
+            self.assertIn("new card before anything is sent", rows["Reject means"])
+            qroot = owner_questions.questions_root(args.monitor_root)
+            dormant = owner_questions.find(qroot, code)
+            self.assertTrue(dormant["dormant"])
+            self.assertEqual(dormant["status"], "open")
+            # Dormant questions are not "the open question" and get no reminder.
+            with self.assertRaises(ValueError):
+                owner_questions.only_open(qroot)
+            runner = Mock()
+            owner_questions.deliver(qroot, dormant, runner=runner, reminder=True,
+                                    now=datetime.now(timezone.utc) + timedelta(days=3))
+            runner.assert_not_called()
+            # Approving the card closes it as superseded.
+            ws = args.monitor_root.resolve().parent.parent
+            workflow_safe._supersede_reject_question(
+                {"monitor_root": args.monitor_root}, record["estimate_id"], args.message_id, "approved"
+            )
+            self.assertEqual(owner_questions.find(qroot, code)["answer"]["outcome"], "superseded")
 
 class PlainTextMailTests(unittest.TestCase):
     def test_markdown_from_the_model_is_stripped_before_the_customer_sees_it(self) -> None:
