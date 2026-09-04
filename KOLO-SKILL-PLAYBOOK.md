@@ -25,6 +25,15 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   (`git fetch && git checkout --detach <sha>`) and verified with `sha256sum` of
   the files that matter. Run the skill's own test suite on the installed copy
   before trusting it. **verified**
+- A marketplace-installed skill is an archive of `SKILL.md`, `scripts/`,
+  `references/`, `templates/` unpacked to `<workspace>/skills/<slug>` with a
+  `.clawhub/origin.json` (registry, slug, `installedVersion`, artifact
+  sha256, SKILL.md sha256). The slug and version come from SKILL.md
+  frontmatter (`name:`, `version:`). Our pod carried a stale
+  `jewelry-estimate-desk` v2.0.0 beside the git checkout, and the main
+  session ran scripts from the stale copy once (the invented record on 3
+  Sep). Publish over the old slug and remove hand checkouts before a test.
+  **verified 4 Sep 2026**
 - Marketplace skills are updated at boot (`openclaw skills update <name>`) and
   updates force-overwrite local edits. Never hand-edit a marketplace skill's
   directory. **reported (kolo-product-docs SKILL.md)**
