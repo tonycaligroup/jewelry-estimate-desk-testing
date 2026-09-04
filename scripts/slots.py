@@ -110,6 +110,100 @@ def candidate_slots(
     return slots
 
 
+def _inside_windows(scheduling: dict[str, Any], start: datetime, length: timedelta) -> bool:
+    minute = start.hour * 60 + start.minute
+    span = int(length.total_seconds() // 60)
+    return any(
+        start.weekday() in days and minute >= w_start and minute + span <= w_end
+        for days, w_start, w_end in parse_windows(scheduling)
+    )
+
+
+def _slot(start: datetime, length: timedelta) -> dict[str, str]:
+    return {"start": start.isoformat(), "end": (start + length).isoformat()}
+
+
+def neighbour_slots(scheduling: dict[str, Any], requested: dict[str, str], now: datetime) -> list[dict[str, str]]:
+    """Alternatives near a time the customer asked for: the half-hours around it
+    that day, then the same clock time on the following working days."""
+    zone = ZoneInfo(scheduling.get("timezone") or "UTC")
+    length = timedelta(minutes=duration_minutes(scheduling))
+    notice = timedelta(minutes=int(scheduling.get("minimum_notice_minutes") or 0))
+    earliest = now.astimezone(zone) + notice
+    asked = datetime.fromisoformat(requested["start"]).astimezone(zone)
+    candidates: list[datetime] = []
+    for step in (30, -30, 60, -60, 90, -90):
+        candidates.append(asked + timedelta(minutes=step))
+    days_ahead = int(scheduling.get("meeting_offer_window_days") or 7)
+    for offset in range(1, days_ahead + 1):
+        candidates.append(asked + timedelta(days=offset))
+    found: list[dict[str, str]] = []
+    for start in candidates:
+        if start >= earliest and _inside_windows(scheduling, start, length):
+            slot = _slot(start, length)
+            if slot not in found:
+                found.append(slot)
+    return found
+
+
+def all_window_slots(scheduling: dict[str, Any], now: datetime) -> list[dict[str, str]]:
+    """Every slot inside the declared windows over the offer period, earliest first."""
+    zone = ZoneInfo(scheduling.get("timezone") or "UTC")
+    windows = parse_windows(scheduling)
+    length = timedelta(minutes=duration_minutes(scheduling))
+    buffer = timedelta(minutes=int(scheduling.get("buffer_minutes") or 0))
+    notice = timedelta(minutes=int(scheduling.get("minimum_notice_minutes") or 0))
+    days_ahead = int(scheduling.get("meeting_offer_window_days") or 7)
+    local_now = now.astimezone(zone)
+    earliest = local_now + notice
+    found: list[dict[str, str]] = []
+    for offset in range(days_ahead + 1):
+        day = (local_now + timedelta(days=offset)).date()
+        for days, w_start, w_end in sorted(windows, key=lambda w: w[1]):
+            if day.weekday() not in days:
+                continue
+            cursor = datetime(day.year, day.month, day.day, w_start // 60, w_start % 60, tzinfo=zone)
+            close = datetime(day.year, day.month, day.day, w_end // 60, w_end % 60, tzinfo=zone)
+            while cursor + length <= close:
+                if cursor >= earliest:
+                    found.append(_slot(cursor, length))
+                cursor += length + buffer
+    return found
+
+
+def spread_slots(slots_in_order: list[dict[str, str]], is_free: Callable[[dict[str, str]], bool]) -> list[dict[str, str]]:
+    """When no time was asked for: the nearest days, not the whole week.
+
+    Up to two free slots on the first day that has any (a morning and an
+    afternoon when both exist, otherwise the first two), then the earliest
+    free slot on the next day with one. Three at most.
+    """
+    found: list[dict[str, str]] = []
+    per_day: dict[str, list[dict[str, str]]] = {}
+    for slot in slots_in_order:
+        if len(found) >= MAX_OPTIONS:
+            break
+        day = slot["start"][:10]
+        taken = per_day.setdefault(day, [])
+        if len(per_day) > 2 or (len(per_day) == 2 and day == list(per_day)[1] and taken):
+            continue  # second day contributes one; a third day never
+        if len(taken) >= 2:
+            continue
+        if taken and datetime.fromisoformat(slot["start"]).hour < 14 and datetime.fromisoformat(taken[0]["start"]).hour < 14:
+            # Prefer an afternoon slot as the day's second time when one is free later on.
+            later = next((s for s in slots_in_order if s["start"][:10] == day and datetime.fromisoformat(s["start"]).hour >= 14 and is_free(s)), None)
+            if later is not None and later not in taken:
+                taken.append(later)
+                found.append(later)
+                continue
+        if not is_free(slot):
+            continue
+        taken.append(slot)
+        found.append(slot)
+    found.sort(key=lambda s: s["start"])
+    return found[:MAX_OPTIONS]
+
+
 def preferred_slots(scheduling: dict[str, Any], requested: list[str], now: datetime) -> list[dict[str, str]]:
     """The customer's own resolved times as slots, kept only when inside the windows."""
     zone = ZoneInfo(scheduling.get("timezone") or "UTC")
@@ -143,6 +237,7 @@ def offer_times(
     now: datetime | None = None,
     opener: Callable[..., Any] | None = None,
     requested: list[str] | None = None,
+    force_offer: bool = False,
 ) -> dict[str, Any]:
     """Live-checked options for the owner's card, or an empty list with a reason.
 
@@ -168,20 +263,39 @@ def offer_times(
         if isinstance(b, dict)
     ]
     query_end = calendar_query.parse_timestamp(time_max, "time_max")
-    free: list[dict[str, str]] = []
-    for slot in preferred_slots(scheduling, requested or [], current) + candidate_slots(scheduling, current):
-        if slot in free:
-            continue
+
+    def is_free(slot: dict[str, str]) -> bool:
         start = calendar_query.parse_timestamp(slot["start"], "slot.start")
         end = calendar_query.parse_timestamp(slot["end"], "slot.end")
         if end > query_end:
-            continue
-        if any(start < b_end and end > b_start for b_start, b_end in busy):
-            continue
-        free.append(slot)
-        if len(free) >= MAX_OPTIONS:
-            break
+            return False
+        return not any(start < b_end and end > b_start for b_start, b_end in busy)
+
+    asked = preferred_slots(scheduling, requested or [], current)
+    mode = "offer"
+    free: list[dict[str, str]] = []
+    if force_offer and asked:
+        # The owner named times to offer: keep every free one, in order.
+        free = [s for s in asked if is_free(s)][:MAX_OPTIONS]
+    elif asked and is_free(asked[0]):
+        # Scenario 1: the customer's time works. One time, a yes-or-no card.
+        mode, free = "book", [asked[0]]
+    elif asked:
+        # Scenario 3: asked for a time that is taken; offer times around it.
+        free = [s for s in neighbour_slots(scheduling, asked[0], current) if is_free(s)][:MAX_OPTIONS]
+    else:
+        # Scenario 2: no time given; offer a spread across the day and the week.
+        free = spread_slots(all_window_slots(scheduling, current), is_free)
+    free.sort(key=lambda s: s["start"])
     (out_dir / "calendar-candidate-slots.json").write_text(json.dumps(free), encoding="utf-8")
-    options = appointment_options.build_options(receipt, free, scheduling["timezone"], days_ahead, now=current)
-    calendar_query.write_private(out_dir / "calendar-options.json", options)
-    return {"options": options["options"], "reason": "" if options["options"] else "no free slot inside the declared windows"}
+    labelled: list[dict[str, Any]] = []
+    if free:
+        options = appointment_options.build_options(receipt, free, scheduling["timezone"], days_ahead, now=current)
+        calendar_query.write_private(out_dir / "calendar-options.json", options)
+        labelled = options["options"]
+    return {
+        "mode": mode,
+        "options": labelled,
+        "requested_slot": asked[0] if asked else None,
+        "reason": "" if labelled else "no free slot inside the declared windows",
+    }

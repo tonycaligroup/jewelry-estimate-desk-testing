@@ -187,8 +187,8 @@ def build_request_appointment_approval(
     estimate_id = validate_estimate_id(estimate_id)
     session_key = validate_session_key(session_key)
     details_object = json.loads(read_json_argument(details))
-    if details_object.get("action_type") != "appointment_booking":
-        raise ValueError("appointment approval action_type must be appointment_booking")
+    if details_object.get("action_type") not in {"appointment_booking", "appointment_offer"}:
+        raise ValueError("appointment approval action_type must be appointment_booking or appointment_offer")
     if details_object.get("estimate_id") != estimate_id:
         raise ValueError("appointment approval estimate_id does not match")
     payload = json.dumps(
@@ -216,36 +216,53 @@ def build_request_appointment_approval(
 
 
 def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[str, str], str, str]:
-    """Flat rows the owner can check against their own calendar."""
+    """Flat rows the owner can check against their own calendar.
+
+    Booking cards are yes-or-no on one time. Offer cards list the times the
+    desk would email the customer. Either way, reject makes the desk ask the
+    owner what to do next.
+    """
     customer = str(details.get("customer_email") or "unknown")[:120]
     piece = str(details.get("piece") or "their estimate")[:120]
     asked = details.get("requested_times") or []
     asked_text = "; ".join(str(t) for t in asked)[:200] if asked else "no time given"
     options = details.get("calendar_availability") or []
+    booking = details.get("action_type") == "appointment_booking"
     rows: dict[str, str] = {
         "Customer": customer,
         "Piece": piece,
         "Customer asked for": asked_text,
         "Estimate": estimate_id,
     }
-    for index, slot in enumerate(options[:3], start=1):
-        rows[f"Option {index}"] = str(slot.get("label") or slot.get("start") or "")[:120]
-    if options:
-        first = str(options[0].get("label") or options[0].get("start"))[:120]
-        rows["Approve means"] = (
-            f"Book Option 1 ({first}) on your calendar, invite the customer, and confirm in their email thread."
-        )
-        rows["Reject means"] = "Nothing is booked; the desk will ask you for a time instead."
-        title = f"Book appointment: {piece}, {first}"[:120]
+    reject = "Nothing happens for the customer yet; the desk asks you what to do next."
+    if booking and options:
+        when = str(options[0].get("label") or options[0].get("start"))[:120]
+        rows["Time"] = when
+        rows["Approve means"] = f"Book {when} on your calendar, invite the customer, and confirm in their email thread."
+        rows["Reject means"] = reject
+        title = f"Book appointment: {piece}, {when}"[:120]
         reasoning = (
-            f"{customer} asked to meet ({asked_text}). These times are free on your calendar inside your "
-            "declared windows. Approve to book Option 1; use Edit Intent to pick another option; reject to book nothing."
+            f"{customer} asked to meet ({asked_text}). That time is free on your calendar inside your "
+            "declared windows. Approve to book it; reject and the desk will ask you what to do."
+        )
+    elif options:
+        for index, slot in enumerate(options[:3], start=1):
+            rows[f"Option {index}"] = str(slot.get("label") or slot.get("start") or "")[:120]
+        rows["Approve means"] = "Email these times to the customer and let them pick one. Nothing is booked yet."
+        rows["Reject means"] = reject
+        title = f"Offer meeting times: {piece}"[:120]
+        why = str(details.get("availability_note") or "").strip()
+        reasoning = (
+            f"{customer} asked to meet ({asked_text}). "
+            + (f"{why[0].upper() + why[1:]}. " if why else "")
+            + "These times are free on your calendar inside your declared windows. Approve to offer them; "
+            "reject and the desk will ask you what to do."
         )
     else:
         reason = str(details.get("availability_note") or "no calendar-checked times were available")[:160]
         rows["Times I can offer"] = f"none ({reason})"
-        rows["Approve means"] = "Offer the customer times by email once you tell the desk which ones; nothing is booked yet."
-        rows["Reject means"] = "Nothing is booked and the customer is not answered by the desk."
+        rows["Approve means"] = "Nothing; the desk needs times from you. Reject, and it will ask."
+        rows["Reject means"] = reject
         title = f"Appointment request: {piece}"[:120]
         reasoning = f"{customer} asked to meet ({asked_text}). {reason}."
     return rows, reasoning, title

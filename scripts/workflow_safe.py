@@ -27,10 +27,12 @@ import gateway_token
 import gmail_classify
 import gmail_route
 import inbox_monitor
+import judge
 import kolo_safe
 import owner_questions
 import cost_components
 import route_ownership
+import slots
 
 
 def read_object(path: Path) -> dict[str, Any]:
@@ -202,9 +204,12 @@ def _appointment_approval_details(
     monitor_root: Path | None = None,
 ) -> dict[str, Any]:
     if not {"requested_times", "calendar_availability"} <= set(intent) or not set(intent) <= {
-        "requested_times", "calendar_availability", "availability_note"
+        "requested_times", "calendar_availability", "availability_note", "mode"
     }:
         raise ValueError("appointment intent contains missing or unsupported fields")
+    mode = intent.get("mode") or "offer"
+    if mode not in {"book", "offer"}:
+        raise ValueError("appointment intent mode must be book or offer")
     requested_times = intent["requested_times"]
     if (
         not isinstance(requested_times, list)
@@ -240,9 +245,13 @@ def _appointment_approval_details(
     if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
         raise ValueError("appointment approval requires a sent estimate")
     route = record["route"]
+    if mode == "book" and len(normalized_slots) != 1:
+        raise ValueError("a booking card carries exactly one time")
+    if mode == "offer" and not normalized_slots:
+        mode = "none"  # nothing free to offer: the card only asks the owner
     details = {
         "schema_version": 1,
-        "action_type": "appointment_booking",
+        "action_type": "appointment_booking" if mode == "book" else "appointment_offer",
         "estimate_id": record["estimate_id"],
         "source_message_id": message_id,
         "customer_email": route["recipient"],
@@ -254,10 +263,12 @@ def _appointment_approval_details(
     if normalized_slots:
         details["proposed_time"] = dict(normalized_slots[0])
     if monitor_root is not None:
-        details["execute"] = execute_line(
-            monitor_root, "book-approved-appointment",
-            estimate_id=record["estimate_id"], message_id=message_id, brief_id="<Brief ID>", option="1",
-        )
+        common = {"estimate_id": record["estimate_id"], "message_id": message_id, "brief_id": "<Brief ID>"}
+        if mode == "book":
+            details["execute"] = execute_line(monitor_root, "book-approved-appointment", **common, option="1")
+        elif mode == "offer":
+            details["execute"] = execute_line(monitor_root, "send-approved-times", **common)
+        details["execute_on_reject"] = execute_line(monitor_root, "appointment-rejected", **common)
     note = intent.get("availability_note")
     if isinstance(note, str) and note.strip():
         details["availability_note"] = note.strip()[:160]
@@ -1133,6 +1144,8 @@ def _claim_still_waiting(p: dict[str, Path], question: dict[str, Any]) -> bool:
     means an earlier attempt reopened the claim and failed before intake.
     Anything else has moved on, and replaying would double the work.
     """
+    if question.get("kind") == "appointment_next":
+        return False
     try:
         state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], question["gmail_message_id"]))
     except (OSError, ValueError, json.JSONDecodeError):
@@ -1233,6 +1246,8 @@ def answer_decision(
             branch=cron_config.worker_branch(intake_result.get("record_status")),
         )
         return result
+    if question["kind"] == "appointment_next":
+        return _answer_appointment_next(args, workspace, p, root, question, outcome)
     # Every other outcome: the owner takes the conversation from here.
     reason = f"owner_decided_{outcome}"
     _close_parked_claim(p, message_id, reason)
@@ -1428,6 +1443,145 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     result = {"outcome": "appointment_booked", "confirmed_start": chosen["start"], "calendar_event_id": event["id"],
               "record_status": booked.get("status")}
     _report_brief(args, result, runner)
+    return result
+
+
+OFFER_NOTE = (
+    "Hello,\n\nHappy to set up a time to go over the design for {piece} together. Here is what is open on "
+    "our side:\n\n{lines}\n\nReply with the one that works and we will lock it in. If none of these fit, "
+    "tell us what does and we will find something.\n\n{shop}\n"
+)
+
+
+def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, options: list[dict[str, Any]],
+                piece: str, runner: Any, label: str) -> dict[str, Any]:
+    profile = read_object(p["shop_profile"])
+    shop = (profile.get("shop") or {}).get("name") or "the shop"
+    lines = "\n".join(f"- {o.get('label') or o['start']}" for o in options)
+    body = OFFER_NOTE.format(piece=piece, lines=lines, shop=shop)
+    customer_content_guard.validate_customer_text(body)
+    work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"
+    work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
+    write_private(payload_path, gmail_reply.build_reply(record["route"], body))
+    delivery = gmail_safe.send_reply_claimed(
+        p["claim_root"], message_id, None, f"times_offered:{record['estimate_id']}:{message_id}:{label}",
+        payload_path, response_path, gateway_token.load_token(), runner=runner, allow_processed_claim=True,
+    )
+    updated = estimate_record.record_times_offered(p["record_root"], record["estimate_id"], message_id, options, delivery)
+    mirror_record(updated, work_dir / "current-record.json")
+    return {"outcome": "times_offered", "options": [o.get("label") or o["start"] for o in options],
+            "provider_message_id": delivery["id"]}
+
+
+def send_approved_times(args: argparse.Namespace) -> dict[str, Any]:
+    """The owner approved the offer: email those times to the customer. One command."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    runner = getattr(args, "runner", subprocess.run)
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+    route_ownership.validate_record(record)
+    approval = read_object(approval_store_path(p["monitor_root"], args.estimate_id, args.message_id))
+    if approval.get("estimate_id") != args.estimate_id or approval.get("source_message_id") != args.message_id:
+        raise ValueError("appointment approval does not match this estimate and message")
+    if approval.get("action_type") != "appointment_offer":
+        raise ValueError("this approval is a booking, not an offer; run book-approved-appointment")
+    source_hash = estimate_record.sha256_text(args.message_id)
+    for existing in record.get("times_offered") or []:
+        if isinstance(existing, dict) and existing.get("source_message_id_sha256") == source_hash:
+            result = {"outcome": "already_offered", "options": [o.get("label") for o in existing.get("options", [])]}
+            _report_brief(args, result, runner)
+            return result
+    options = approval.get("calendar_availability") or []
+    if not options:
+        raise ValueError("this card had no times to offer; reject it and answer the desk's question")
+    result = _send_times(p, record, args.message_id, options, approval.get("piece") or "your piece", runner, "approved")
+    _report_brief(args, result, runner)
+    return result
+
+
+def appointment_rejected(args: argparse.Namespace) -> dict[str, Any]:
+    """The owner rejected an appointment card: ask them what to do for this customer."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    runner = getattr(args, "runner", subprocess.run)
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+    route_ownership.validate_record(record)
+    approval = read_object(approval_store_path(p["monitor_root"], args.estimate_id, args.message_id))
+    customer = kolo_safe._sender_display(record["route"]["recipient"])
+    piece = approval.get("piece") or "their piece"
+    asked = "; ".join(approval.get("requested_times") or []) or "no particular time"
+    what = "booking" if approval.get("action_type") == "appointment_booking" else "offering those times"
+    text = (
+        f"You passed on {what} for {customer} ({piece}; they asked for {asked}). What would you like to do? "
+        "Reply with times to offer them (for example \"Tuesday 2pm or Wednesday at 11\"), "
+        "\"other times\" and I will pick new free ones, or \"handle myself\" and I will leave the thread to you."
+    )
+    root = owner_questions.questions_root(p["monitor_root"])
+    _created, question = owner_questions.create_decision(
+        root, "appointment_next", args.estimate_id, args.message_id, text,
+        {"rejected_action": approval.get("action_type"), "rejected_options": approval.get("calendar_availability") or []},
+    )
+    question = _attach_answer_command(root, p["monitor_root"], question)
+    question = owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
+    brief_id = getattr(args, "brief_id", None)
+    return {"outcome": "owner_asked", "question_id": question["question_id"], "reference": owner_questions.reference(question["question_id"]),
+            "brief_id": brief_id}
+
+
+def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
+                             question: dict[str, Any], outcome: str) -> dict[str, Any]:
+    """Apply the owner's answer after a rejected appointment card."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    runner = getattr(args, "runner", subprocess.run)
+    message_id = question["gmail_message_id"]
+    estimate_id = question["estimate_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "appointment_next", "decision": outcome}
+    if outcome == "handle_myself":
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        result["note"] = "the desk leaves this thread to the owner"
+        return result
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    route_ownership.validate_record(record)
+    profile = read_object(p["shop_profile"])
+    scheduling = profile.get("scheduling") or {}
+    zone_name = scheduling.get("timezone") or "UTC"
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    now = _dt.now(ZoneInfo(zone_name))
+    import pipeline  # local import: pipeline imports this module
+
+    switch = pipeline.settings(workspace / "estimate-desk")
+    judge_runner = getattr(args, "judge_runner", subprocess.run)
+    openclaw = args.openclaw or inbox_watcher.default_openclaw()
+    requested: list[str] = []
+    if outcome == "times_given":
+        judged = judge.resolve_owner_times(args.answer, now.strftime("%A %Y-%m-%d %H:%M"), zone_name,
+                                           switch.get("model"), judge_runner, openclaw)
+        requested = judged.get("resolved_times", [])
+        if not requested:
+            raise ValueError("could not read a specific day and time from that reply; give a day and a clock time")
+    opener = getattr(args, "opener", None)
+    out_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-owner"
+    offered = slots.offer_times(profile, gateway_token.load_token(), out_dir, now=now, opener=opener,
+                                requested=requested, force_offer=True)
+    options = offered["options"]
+    if outcome == "times_given":
+        # Keep the owner's own times; drop only the ones the calendar says are taken.
+        wanted = {r for r in requested}
+        options = [o for o in options if o["start"][:16] in wanted] or options
+    if not options:
+        raise ValueError("none of those times are free inside the declared windows; try others")
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "your piece"
+    sent = _send_times(p, record, message_id, options[:3], piece, runner, "owner")
+    result.update(sent)
     return result
 
 
@@ -1687,6 +1841,16 @@ def main(argv: list[str] | None = None) -> int:
     book.add_argument("--brief-id", default=None)
     book.add_argument("--option", type=int, default=1)
     book.add_argument("--start", default=None)
+    offer = sub.add_parser("send-approved-times")
+    offer.add_argument("--workspace", type=Path, required=True)
+    offer.add_argument("--estimate-id", required=True)
+    offer.add_argument("--message-id", required=True)
+    offer.add_argument("--brief-id", default=None)
+    rejected = sub.add_parser("appointment-rejected")
+    rejected.add_argument("--workspace", type=Path, required=True)
+    rejected.add_argument("--estimate-id", required=True)
+    rejected.add_argument("--message-id", required=True)
+    rejected.add_argument("--brief-id", default=None)
     send_brief = sub.add_parser("send-approved-estimate-brief")
     send_brief.add_argument("--workspace", type=Path, required=True)
     send_brief.add_argument("--estimate-id", required=True)
@@ -1744,6 +1908,10 @@ def main(argv: list[str] | None = None) -> int:
             record = book_approved_appointment(args)
         elif args.command == "send-approved-estimate-brief":
             record = send_approved_estimate_brief(args)
+        elif args.command == "send-approved-times":
+            record = send_approved_times(args)
+        elif args.command == "appointment-rejected":
+            record = appointment_rejected(args)
         elif args.command == "review-thread":
             record = review_thread(args)
         elif args.command == "price":

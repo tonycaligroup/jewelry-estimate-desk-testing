@@ -19,6 +19,8 @@ import validate_profile
 
 
 HASH_DIR_RE = re.compile(r"^[0-9a-f]{64}$")
+# Claim work is keyed by hash; executor work is named by what it did.
+WORK_DIR_RE = re.compile(r"[0-9a-f]{64}|(booking|offer)-[0-9a-f]{16}(-[a-z]+)?|estimate-jed-[0-9a-f]{16}")
 RUN_DIR_RE = re.compile(r"^[0-9a-f]{24}$")
 
 
@@ -89,7 +91,7 @@ def reset(workspace: Path, now_ms: int | None = None) -> dict[str, Any]:
     records = _record_paths(record_root)
     queue_items = _queue_paths(monitor_root)
     claims = _validated_directories(claim_root, HASH_DIR_RE)
-    work_dirs = _validated_directories(work_root, HASH_DIR_RE)
+    work_dirs = _validated_directories(work_root, WORK_DIR_RE)
     run_dirs = _validated_directories(run_root, RUN_DIR_RE)
     mirror_record_ids = [path.stem for path in records]
     effective_now = int(time.time() * 1000) if now_ms is None else now_ms

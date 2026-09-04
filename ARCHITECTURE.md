@@ -381,6 +381,19 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Batch 4: three appointment scenarios (built 4 September 2026).** A
+specific requested time that is free is a booking card, one time, yes or
+no. No time, or a time that is taken, is an offer card: two or three free
+times (near the request when there was one; otherwise up to two on the
+nearest day with room plus one on the next day) that approve emails to the
+customer (`send-approved-times`, recorded under `times_offered`), nothing
+booked. Every rejected appointment card runs `execute_on_reject`
+(`appointment-rejected`), which asks the owner in plain words what to do:
+times they type are resolved by the judge, checked against the calendar,
+and emailed; "other times" picks new free ones; "handle myself" leaves the
+thread to them. Owner-typed times go straight to the customer because the
+owner's words are the approval.
+
 **Batch 3: the command travels with the decision (built 3 September 2026).**
 Three approvals in a row (renderings, a booking, and earlier a price) were
 executed by the main session improvising: raw gateway calls, hand-built

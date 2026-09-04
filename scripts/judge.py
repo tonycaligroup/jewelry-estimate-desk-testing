@@ -430,6 +430,25 @@ def extract_requested_times(
     return ask_json(prompt, check_requested_times, model, runner, openclaw)
 
 
+def resolve_owner_times(
+    text: str,
+    now_local: str,
+    timezone_name: str,
+    model: str | None = None,
+    runner: Runner = subprocess.run,
+    openclaw: str | None = None,
+) -> dict[str, Any]:
+    """Times the owner typed ("Tuesday 2pm or Wednesday at 11") as local date-times."""
+    prompt = (
+        f"Today is {now_local} in the shop's timezone ({timezone_name}). A jewelry shop owner wrote when they "
+        "could meet a customer. Copy each time they named and resolve it to a local date-time in the form "
+        "YYYY-MM-DDTHH:MM; a day without a clock time resolves to nothing. Answer with one JSON object only: "
+        '{"requested_times": [<their words, up to three>], "resolved_times": [<up to three YYYY-MM-DDTHH:MM>]}. '
+        f"Never invent a time.\n\nOWNER WROTE:\n{text[:600]}"
+    )
+    return ask_json(prompt, check_requested_times, model, runner, openclaw)
+
+
 def check_quantities(value: dict[str, Any], fee_catalog: list[str], stone_catalog: list[str], needs_carat: bool) -> dict[str, Any]:
     def positive(name: str, required: bool) -> float | None:
         raw = value.get(name)
