@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 SCHEMA_VERSION = 1
-QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply"}
-DECISION_KINDS = {"same_sender", "unclear_reply"}
+QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next"}
+DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -39,6 +39,11 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "second_piece": ("second piece", "another piece", "new piece", "additional", "second one", "separate piece"),
         "design_change": ("change", "changed", "changes", "modify", "modification", "different design", "update the design", "revise"),
         "accepts": ("accept", "accepts", "accepted", "go ahead", "approved", "wants it", "yes to the estimate", "take it", "they want it"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
+    },
+    "appointment_next": {
+        "times_given": ("offer", "try", "how about", "suggest", "propose", "these", "give them"),
+        "offer_other_times": ("other times", "different times", "new times", "pick again", "something else", "other options"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },
 }
@@ -286,6 +291,14 @@ def create_decision(
     return True, save(root, question)
 
 
+TIME_WORDS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon", "tue",
+              "wed", "thu", "fri", "sat", "sun", "tomorrow", "today", "morning", "afternoon", "noon", "am", "pm")
+
+
+def _mentions_a_time(words: str) -> bool:
+    return any(character.isdigit() for character in words) or any(f" {w} " in words for w in TIME_WORDS)
+
+
 def match_option(question: dict[str, Any], answer: str) -> str:
     """The one fixed outcome the owner's words point to; refuse when unclear."""
     if question.get("kind") not in DECISION_KINDS:
@@ -299,6 +312,9 @@ def match_option(question: dict[str, Any], answer: str) -> str:
         for phrase in phrases:
             if f" {phrase} " in words:
                 hits[key] = hits.get(key, 0) + 1
+    if not hits and question.get("kind") == "appointment_next" and _mentions_a_time(words):
+        # The owner typed times: "Tuesday 2pm or Wednesday at 11".
+        return "times_given"
     if not hits:
         raise ValueError(
             "could not tell which answer was meant; reply with one of: "

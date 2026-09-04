@@ -7750,9 +7750,9 @@ class RequestedTimeFirstTests(unittest.TestCase):
                 {"scheduling": self.scheduling}, "token", Path(directory), now=now, opener=opener,
                 requested=["2026-09-04T13:00"],
             )
-        self.assertEqual(offered["options"][0]["start"], "2026-09-04T13:00:00-07:00")
-        self.assertEqual(len(offered["options"]), 3)
-        self.assertEqual(offered["options"][1]["start"], "2026-09-03T16:30:00-07:00")  # then the earliest free slot
+        # Scenario 1: the customer's time is free, so the card is one time, yes or no.
+        self.assertEqual(offered["mode"], "book")
+        self.assertEqual([o["start"] for o in offered["options"]], ["2026-09-04T13:00:00-07:00"])
 
 
 class CommandTravelsWithTheDecisionTests(unittest.TestCase):
@@ -7788,10 +7788,27 @@ class CommandTravelsWithTheDecisionTests(unittest.TestCase):
                       "original_subject": "Ring", "original_message_id": "<a@b>", "references": []},
             "inbound_timestamp_ms": 1,
         }
+        slot = {"start": "2026-09-04T13:00:00-07:00", "end": "2026-09-04T13:30:00-07:00", "label": "Friday 1 PM"}
         details = workflow_safe._appointment_approval_details(
-            record, "m-2", {"requested_times": [], "calendar_availability": []}, Path("/ws/estimate-desk/inbox-monitor")
+            record, "m-2", {"requested_times": ["Friday 1pm"], "calendar_availability": [slot], "mode": "book"},
+            Path("/ws/estimate-desk/inbox-monitor"),
         )
+        self.assertEqual(details["action_type"], "appointment_booking")
         self.assertIn("book-approved-appointment --workspace /ws --estimate-id jed-0123456789abcdef --message-id m-2", details["execute"])
+        self.assertIn("appointment-rejected --workspace /ws --estimate-id jed-0123456789abcdef --message-id m-2", details["execute_on_reject"])
+        offer = workflow_safe._appointment_approval_details(
+            record, "m-3", {"requested_times": [], "calendar_availability": [slot, dict(slot, start="2026-09-04T14:00:00-07:00", end="2026-09-04T14:30:00-07:00")]},
+            Path("/ws/estimate-desk/inbox-monitor"),
+        )
+        self.assertEqual(offer["action_type"], "appointment_offer")
+        self.assertIn("send-approved-times", offer["execute"])
+        rows, reasoning, title = kolo_safe.appointment_card(details, record["estimate_id"])
+        self.assertTrue(title.startswith("Book appointment:"))
+        self.assertNotIn("Option 1", rows)
+        self.assertIn("asks you what to do next", rows["Reject means"])
+        rows2, _r, title2 = kolo_safe.appointment_card(offer, record["estimate_id"])
+        self.assertTrue(title2.startswith("Offer meeting times:"))
+        self.assertIn("Option 2", rows2)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "records"
             estimate_record.persist_record(root, record)
@@ -7939,6 +7956,144 @@ class OneCommandExecutorTests(unittest.TestCase):
                 ))
 
 
+class AppointmentScenarioTests(unittest.TestCase):
+    """Scenario 1 books yes-or-no; 2 and 3 offer times; every reject asks the owner."""
+
+    def workspace(self, directory: str):
+        helper = OneCommandExecutorTests("test_book_refuses_a_time_that_is_no_longer_free")
+        return helper.workspace(directory)
+
+    def test_busy_request_offers_neighbouring_times(self) -> None:
+        import email.utils
+        sched = {"timezone": "America/Los_Angeles", "calendar": "primary",
+                 "windows": [{"days": ["mon", "tue", "wed", "thu", "fri"], "start": "10:00", "end": "17:00"}],
+                 "durations_minutes": {"consultation": 30}, "meeting_offer_window_days": 7}
+        now = datetime(2026, 9, 3, 23, 0, tzinfo=timezone.utc)  # Thursday 4 PM PT
+        class Response:
+            headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+            def __init__(self, body): self._body = body
+            def read(self): return json.dumps(self._body).encode("utf-8")
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def opener(request, timeout=15):
+            body = json.loads(request.data.decode("utf-8"))
+            return Response({"kind": "calendar#freeBusy", "timeMin": body["timeMin"], "timeMax": body["timeMax"],
+                             "calendars": {"primary": {"busy": [{"start": "2026-09-04T21:00:00Z", "end": "2026-09-04T21:30:00Z"}]}}})
+        with (
+            patch.object(slots.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")),
+            tempfile.TemporaryDirectory() as directory,
+        ):
+            offered = slots.offer_times({"scheduling": sched}, "tok", Path(directory), now=now, opener=opener,
+                                        requested=["2026-09-04T14:00"])  # Friday 2 PM PT is busy
+        self.assertEqual(offered["mode"], "offer")
+        starts = [o["start"] for o in offered["options"]]
+        self.assertEqual(starts, ["2026-09-04T13:30:00-07:00", "2026-09-04T14:30:00-07:00", "2026-09-04T15:00:00-07:00"])
+
+    def seeded_offer(self, directory: str, kind: str = "appointment_offer"):
+        ws, record, _profile = self.workspace(directory)
+        p = inbox_watcher.paths_for(ws)
+        slot1 = {"start": "2026-09-04T13:30:00-07:00", "end": "2026-09-04T14:00:00-07:00", "label": "Friday, September 4 at 1:30 PM PDT"}
+        slot2 = {"start": "2026-09-04T14:30:00-07:00", "end": "2026-09-04T15:00:00-07:00", "label": "Friday, September 4 at 2:30 PM PDT"}
+        intent = {"requested_times": ["tomorrow at 2pm"], "calendar_availability": [slot1, slot2], "mode": "offer"}
+        if kind == "appointment_booking":
+            intent = {"requested_times": ["tomorrow at 1:30"], "calendar_availability": [slot1], "mode": "book"}
+        approval = workflow_safe._appointment_approval_details(record, "m-2", intent, p["monitor_root"])
+        self.assertEqual(approval["action_type"], kind)
+        workflow_safe.write_private(workflow_safe.approval_store_path(p["monitor_root"], record["estimate_id"], "m-2"), approval)
+        estimate_record.record_appointment_approval_requested(p["record_root"], record["estimate_id"], "m-2", approval)
+        return ws, p, record, approval
+
+    def test_send_approved_times_emails_the_options_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, p, record, _approval = self.seeded_offer(directory)
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            with (
+                patch.object(workflow_safe.gateway_token, "load_token", return_value="tok"),
+                patch.object(workflow_safe.gmail_safe, "send_reply_claimed", return_value={"id": "offer-1", "threadId": "thread-1"}) as send,
+                patch.object(workflow_safe, "mirror_record"),
+            ):
+                out = workflow_safe.send_approved_times(argparse.Namespace(
+                    workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id="0123abcd-0000", runner=runner,
+                ))
+                again = workflow_safe.send_approved_times(argparse.Namespace(
+                    workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id="0123abcd-0000", runner=runner,
+                ))
+            self.assertEqual(out["outcome"], "times_offered")
+            self.assertEqual(again["outcome"], "already_offered")
+            self.assertEqual(send.call_count, 1)
+            payload = json.loads(Path(send.call_args.args[4]).read_text(encoding="utf-8"))
+            raw = base64.urlsafe_b64decode(payload["raw"] + "==").decode("utf-8", "replace")
+            self.assertIn("Friday, September 4 at 1:30 PM PDT", raw)
+            self.assertIn("Cali Jewelers", raw)
+            stored = estimate_record.read_object(estimate_record.record_path(p["record_root"], record["estimate_id"]))
+            self.assertEqual(len(stored["times_offered"]), 1)
+            self.assertEqual(stored["status"], "estimate_sent")
+
+    def test_rejected_card_asks_the_owner_and_the_answer_drives_the_next_step(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, p, record, _approval = self.seeded_offer(directory, "appointment_booking")
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            asked = workflow_safe.appointment_rejected(argparse.Namespace(
+                workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id="0123abcd-0000", runner=runner,
+            ))
+            self.assertEqual(asked["outcome"], "owner_asked")
+            notify = runner.call_args.args[0]
+            self.assertEqual(notify[:3], ["kolo", "notify-owner", "-m"])
+            self.assertIn("What would you like to do?", notify[3])
+            self.assertIn("answer-question", notify[3])
+            # "handle myself": nothing goes to the customer.
+            with patch.object(workflow_safe.gmail_safe, "send_reply_claimed") as send:
+                out = workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=asked["reference"], answer="I'll handle it myself", openclaw="openclaw", runner=runner,
+                ))
+            self.assertEqual(out["decision"], "handle_myself")
+            send.assert_not_called()
+
+    def test_owner_typed_times_are_offered_to_the_customer(self) -> None:
+        import email.utils
+        with tempfile.TemporaryDirectory() as directory:
+            ws, p, record, _approval = self.seeded_offer(directory)
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            asked = workflow_safe.appointment_rejected(argparse.Namespace(
+                workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id=None, runner=runner,
+            ))
+            judged = Mock(return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps({"ok": True, "capability": "model.run", "outputs": [{"text": json.dumps(
+                    {"requested_times": ["Tuesday 2pm", "Wednesday at 11"], "resolved_times": ["2026-09-08T14:00", "2026-09-09T11:00"]}
+                )}]}), ""))
+            now = datetime.now(timezone.utc)
+            class Response:
+                headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+                def __init__(self, body): self._body = body
+                def read(self): return json.dumps(self._body).encode("utf-8")
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            def opener(request, timeout=15):
+                body = json.loads(request.data.decode("utf-8"))
+                return Response({"kind": "calendar#freeBusy", "timeMin": body["timeMin"], "timeMax": body["timeMax"],
+                                 "calendars": {"primary": {"busy": []}}})
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            profile["scheduling"]["windows"] = [{"days": ["mon", "tue", "wed", "thu", "fri"], "start": "10:00", "end": "17:00"}]
+            profile["scheduling"]["meeting_offer_window_days"] = 3650
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+            with (
+                patch.object(workflow_safe.gateway_token, "load_token", return_value="tok"),
+                patch.object(workflow_safe.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")),
+                patch.object(slots.appointment_options, "build_options", side_effect=lambda receipt, free, tz, days, now=None: {"options": [dict(s, label=s["start"]) for s in free]}),
+                patch.object(slots.calendar_query, "write_private"),
+                patch.object(workflow_safe.gmail_safe, "send_reply_claimed", return_value={"id": "offer-2", "threadId": "thread-1"}) as send,
+                patch.object(workflow_safe, "mirror_record"),
+            ):
+                out = workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=asked["reference"], answer="Tuesday 2pm or Wednesday at 11",
+                    openclaw="openclaw", runner=runner, judge_runner=judged, opener=opener,
+                ))
+            self.assertEqual(out["decision"], "times_given")
+            self.assertEqual(out["outcome"], "times_offered")
+            self.assertEqual(send.call_count, 1)
+            self.assertEqual(out["options"], ["2026-09-08T14:00:00-07:00", "2026-09-09T11:00:00-07:00"])
+
+
 class PlainTextMailTests(unittest.TestCase):
     def test_markdown_from_the_model_is_stripped_before_the_customer_sees_it(self) -> None:
         body = (
@@ -8048,8 +8203,13 @@ class SlotTests(unittest.TestCase):
             with patch.object(slots.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")):
                 offered = slots.offer_times(profile, "token", Path(directory), now=now, opener=opener)
             labels = [o["label"] for o in offered["options"]]
+            # Scenario 2: no time asked; a spread of free slots, morning first, then the Friday afternoon window.
+            self.assertEqual(offered["mode"], "offer")
+            # Tight spread: two slots on the nearest day with room, one on the next day with any.
             self.assertEqual(len(labels), 3)
             self.assertTrue(labels[0].startswith("Wednesday, September 9 at 10:30 AM"))
+            self.assertTrue(labels[1].startswith("Wednesday, September 9 at 11:00 AM"))
+            self.assertTrue(labels[2].startswith("Friday, September 11 at 2:00 PM"))
             self.assertTrue((Path(directory) / "calendar-options.json").exists())
         self.assertEqual(slots.offer_times({"scheduling": {"timezone": "UTC", "windows": []}}, "t", Path("/tmp"))["options"], [])
 

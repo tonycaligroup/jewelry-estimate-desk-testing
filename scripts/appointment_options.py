@@ -51,8 +51,8 @@ def build_options(
         raise ValueError("calendar receipt response_date is invalid") from exc
     if abs((current - checked.astimezone(zone)).total_seconds()) > 300:
         raise ValueError("calendar availability is older than five minutes")
-    if not isinstance(slots, list) or not 2 <= len(slots) <= 3:
-        raise ValueError("slots must contain two or three live options")
+    if not isinstance(slots, list) or not 1 <= len(slots) <= 3:
+        raise ValueError("slots must contain one to three live options")
     query_start = calendar_query.parse_timestamp(query.get("timeMin"), "query.timeMin")
     query_end = calendar_query.parse_timestamp(query.get("timeMax"), "query.timeMax")
     if (

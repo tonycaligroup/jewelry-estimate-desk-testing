@@ -182,8 +182,11 @@ def appointment_intent(
         intent["calendar_availability"] = [
             {"start": o["start"], "end": o["end"], "label": o["label"]} for o in offered["options"]
         ]
+        intent["mode"] = offered.get("mode", "offer")
         if offered.get("reason"):
             intent["availability_note"] = offered["reason"]
+        elif offered.get("mode") == "offer" and offered.get("requested_slot"):
+            intent["availability_note"] = "the time they asked for is taken; these are free"
     except (OSError, ValueError, KeyError) as exc:
         intent["availability_note"] = f"calendar check failed: {str(exc)[:100]}"
     return intent

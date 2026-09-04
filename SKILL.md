@@ -993,9 +993,12 @@ delivers the decision as approved, copy that line, replace `<Brief ID>` with
 the Brief ID from the delivered decision, run it, and paste its output. That
 one command re-verifies the bound state, sends or books through the desk's
 own helpers, records the receipt, and reports the brief executed. A repeat is
-a no-op. A rejected brief needs no command, except a rejected rendering:
+a no-op. When Kolo delivers a decision as rejected and the payload carries
+`execute_on_reject`, run that line the same way: for appointment cards it
+asks the owner what to do for that customer. A rejected rendering runs
 `workflow_safe.py reject-rendering --workspace '<absolute-workspace>'
---message-id '<gmail_message_id from the payload>'`.
+--message-id '<gmail_message_id from the payload>'`. Other rejected briefs
+need no command.
 
 The execute lines are, for reference:
 
@@ -1008,13 +1011,20 @@ python3 {baseDir}/scripts/workflow_safe.py send-approved-rendering \
 python3 {baseDir}/scripts/workflow_safe.py book-approved-appointment \
   --workspace '<absolute-workspace>' --estimate-id '<jed-id>' \
   --message-id '<gmail_message_id>' --brief-id '<Brief ID>' --option 1
+python3 {baseDir}/scripts/workflow_safe.py send-approved-times \
+  --workspace '<absolute-workspace>' --estimate-id '<jed-id>' \
+  --message-id '<gmail_message_id>' --brief-id '<Brief ID>'
+python3 {baseDir}/scripts/workflow_safe.py appointment-rejected \
+  --workspace '<absolute-workspace>' --estimate-id '<jed-id>' \
+  --message-id '<gmail_message_id>' --brief-id '<Brief ID>'
 python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
   --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
   --review-key '<review_key>' --brief-id '<Brief ID>'
 ```
 
-Edit Intent on an appointment card picks another option: run the same line
-with `--option 2` or `--option 3`. An edited price is not applied by the
+Appointment cards come in two kinds: a booking card names one time and
+approve books it; an offer card lists two or three times and approve emails
+them to the customer, nothing booked. An edited price is not applied by the
 session: reject the brief and tell the owner the desk will re-price.
 
 ### Owner questions: run the command in the question

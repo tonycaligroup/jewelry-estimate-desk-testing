@@ -1381,6 +1381,41 @@ def record_estimate_sent(
         return record
 
 
+def record_times_offered(
+    root: Path,
+    estimate_id: str,
+    source_message_id: str,
+    options: list[dict[str, Any]],
+    provider_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Append one same-thread offer of meeting times to the customer."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    provider_message_id = validate_provider_id(provider_response.get("id"), "provider response id")
+    if not options:
+        raise ValueError("an offer needs at least one time")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
+            raise ValueError("offering times requires a sent estimate")
+        offers = record.setdefault("times_offered", [])
+        if not isinstance(offers, list):
+            raise ValueError("times_offered must be an array")
+        evidence = {
+            "source_message_id_sha256": sha256_text(source_message_id),
+            "provider_message_id": provider_message_id,
+            "options": [{"start": o["start"], "end": o["end"], "label": o.get("label", "")} for o in options],
+        }
+        for existing in offers:
+            if isinstance(existing, dict) and existing.get("provider_message_id") == provider_message_id:
+                return record
+        evidence["offered_at"] = datetime.now(timezone.utc).isoformat()
+        offers.append(evidence)
+        write_object(path, record)
+        return record
+
+
 def record_appointment_approval_requested(
     root: Path,
     estimate_id: str,
@@ -1401,7 +1436,7 @@ def record_appointment_approval_requested(
     }
     # The owner's card also carries the piece, the proposed time, and a note
     # about availability; they are display fields, not binding ones.
-    optional = {"piece", "proposed_time", "availability_note", "execute"}
+    optional = {"piece", "proposed_time", "availability_note", "execute", "execute_on_reject"}
     if (
         not isinstance(approval, dict)
         or not required <= set(approval)
@@ -1410,8 +1445,8 @@ def record_appointment_approval_requested(
         raise ValueError("appointment approval contains missing or unsupported fields")
     if approval.get("schema_version") != 1:
         raise ValueError("unsupported appointment approval schema_version")
-    if approval.get("action_type") != "appointment_booking":
-        raise ValueError("appointment approval action_type must be appointment_booking")
+    if approval.get("action_type") not in {"appointment_booking", "appointment_offer"}:
+        raise ValueError("appointment approval action_type must be appointment_booking or appointment_offer")
     if approval.get("estimate_id") != estimate_id:
         raise ValueError("appointment approval estimate_id does not match")
     if approval.get("source_message_id") != source_message_id:
