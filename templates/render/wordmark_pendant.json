@@ -1,0 +1,28 @@
+{
+  "id": "wordmark_pendant",
+  "label": "wordmark or nameplate pendant",
+  "construction": "A nameplate style pendant: the letters or mark are cut from one sheet of metal and are physically joined to each other by a continuous base bar or by touching letterforms, so the whole pendant is one rigid piece. A small bail at each end of the piece; a fine chain passes through both bails. No letter hangs on its own.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, no text, no people, no props.",
+  "views": [
+    "front view, pendant flat to the camera",
+    "slight three-quarter view showing the thickness of the metal and the bails"
+  ],
+  "checks": [
+    {
+      "id": "joined",
+      "question": "Are all letters or elements of the pendant physically connected to each other as one rigid piece (a base bar or touching letterforms), with none floating separately?"
+    },
+    {
+      "id": "bails_chain",
+      "question": "Are there bails or loops at the ends of the pendant with the chain passing through them, so the piece would hang from the chain?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark was supplied: do the letterforms match it exactly? Answer yes if no reference was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

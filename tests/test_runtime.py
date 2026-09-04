@@ -55,6 +55,7 @@ import appointment_options
 import calendar_query
 import cost_components as pricing_helper
 import pricing_model
+import rendering
 import rendering_materialize
 import rendering_wait
 import spot_price
@@ -8441,6 +8442,71 @@ class CustomerMailTests(unittest.TestCase):
         body, source = customer_mail.draft("confirmation", {"time_labels": ["Monday at 10"]}, self.digest, self.profile,
                                            "FALLBACK", "m", runner, "openclaw")
         self.assertEqual((body, source), ("FALLBACK", "fallback"))
+
+
+class RenderingLabTests(unittest.TestCase):
+    def test_plan_is_validated_against_the_archetype_menu(self) -> None:
+        check = rendering.check_plan(list(rendering.archetypes()))
+        out = check({"archetype": "signet", "mark_source": "artwork", "must_be_exact": ["the KOLO wordmark"], "fine_lettering": True})
+        self.assertEqual(out["archetype"], "signet")
+        self.assertTrue(out["fine_lettering"])
+        with self.assertRaises(ValueError):
+            check({"archetype": "tiara"})
+        with self.assertRaises(ValueError):
+            check({"archetype": "signet", "mark_source": "photo"})
+
+    def test_prompts_come_from_the_archetype_clauses(self) -> None:
+        plan = {"archetype": "wordmark_pendant", "mark_source": "artwork", "must_be_exact": ["KOLO wordmark"], "fine_lettering": False}
+        prompts = rendering.build_prompts(plan, {"metal": "gold", "metal_karat": 14}, has_artwork=True, has_exemplar=False)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("continuous base bar", prompts[0])
+        self.assertIn("Image one is the customer's mark", prompts[0])
+        self.assertIn("Must be exact: KOLO wordmark", prompts[0])
+        self.assertIn("front view", prompts[0])
+        self.assertIn("three-quarter", prompts[1])
+        argv = rendering.image_argv(prompts[0], [Path("/tmp/logo.png")], Path("/tmp/out.png"), "openclaw")
+        self.assertEqual(argv[:6], ["openclaw", "infer", "image", "edit", "--file", "/tmp/logo.png"])
+        self.assertIn("--size", argv)
+        self.assertEqual(rendering.image_argv("p", [], Path("/tmp/o.png"), "openclaw")[3], "generate")
+
+    def test_run_checks_each_view_and_regenerates_a_failing_one_once(self) -> None:
+        calls = []
+        state = {"renders": 0}
+        def runner(argv, **kwargs):
+            calls.append(argv)
+            if argv[:4] == ["openclaw", "infer", "image", "edit"]:
+                state["renders"] += 1
+                out = argv[argv.index("--output") + 1]
+                Path(out).parent.mkdir(parents=True, exist_ok=True)
+                Path(out).write_bytes(b"png")
+                return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "outputs": [{"path": out}]}), "")
+            if argv[:4] == ["openclaw", "infer", "image", "describe"]:
+                image = argv[argv.index("--file") + 1]
+                # First render of view 1 fails the joined check; everything else passes.
+                failing = image.endswith("view-1-try-1.png")
+                answers = {"joined": "no" if failing else "yes", "bails_chain": "yes", "mark_faithful": "yes", "clean_photo": "yes"}
+                body = {"answers": answers, "notes": {"joined": "letters float separately"} if failing else {}}
+                return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "outputs": [{"text": json.dumps(body)}]}), "")
+            raise AssertionError(argv)
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "lab"
+            artwork = Path(directory) / "logo.png"; artwork.write_bytes(b"png")
+            report = rendering.run({"piece_type": "pendant", "metal": "gold"}, out, "openclaw", artwork=artwork,
+                                   archetype="wordmark_pendant", runner=runner)
+        self.assertTrue(report["all_passed"])
+        self.assertEqual([v["attempts"] for v in report["views"]], [2, 1])
+        self.assertEqual(state["renders"], 3)
+        retry_prompt = report["views"][0]["history"][1]["prompt"]
+        self.assertIn("Correct these problems", retry_prompt)
+        self.assertIn("letters float separately", retry_prompt)
+        self.assertEqual(report["views"][0]["history"][0]["check"]["failed"], ["joined"])
+
+    def test_checker_tolerates_a_non_json_answer(self) -> None:
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, "The ring looks fine to me.", "")
+        check = rendering.check_image(Path("/tmp/x.png"), {"archetype": "signet", "mark_source": "none", "must_be_exact": []}, "openclaw", runner)
+        self.assertEqual(check["failed"], [])
+        self.assertEqual(len(check["unsure"]), 4)
 
 
 class CalendarListTests(unittest.TestCase):

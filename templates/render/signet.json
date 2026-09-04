@@ -1,0 +1,28 @@
+{
+  "id": "signet",
+  "label": "signet ring",
+  "construction": "A signet ring: one continuous shank widening into a solid flat face (oval or cushion). The mark sits on the face only, engraved or raised, centered, with a clear margin all round. No loose parts.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the piece fills the frame, no text, no people, no props.",
+  "views": [
+    "front view straight onto the face",
+    "three-quarter view showing the face and the shank"
+  ],
+  "checks": [
+    {
+      "id": "one_piece",
+      "question": "Is the ring a single continuous piece of metal with a solid face joined to the shank?"
+    },
+    {
+      "id": "mark_on_face",
+      "question": "Is the mark placed on the face of the ring only, centered, with a margin around it?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a reference mark was supplied: does the mark on the ring match it letter for letter and shape for shape? Answer yes if no reference was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

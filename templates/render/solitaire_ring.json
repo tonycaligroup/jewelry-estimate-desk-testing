@@ -1,0 +1,28 @@
+{
+  "id": "solitaire_ring",
+  "label": "solitaire ring",
+  "construction": "A solitaire ring: one continuous shank, a single center stone held in a setting with prongs or a bezel that visibly grips the stone, the setting joined to the shank. One stone only unless the specification says otherwise.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the ring fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the stone, the setting, and the shank",
+    "top-down view of the stone and setting"
+  ],
+  "checks": [
+    {
+      "id": "one_stone",
+      "question": "Is there exactly one center stone unless more were specified?"
+    },
+    {
+      "id": "seated",
+      "question": "Is the stone visibly held by prongs or a bezel that is joined to the shank?"
+    },
+    {
+      "id": "shank",
+      "question": "Is the shank a single continuous band?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}

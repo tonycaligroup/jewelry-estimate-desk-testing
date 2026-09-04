@@ -1,0 +1,28 @@
+{
+  "id": "plain_band",
+  "label": "plain band",
+  "construction": "A plain band: one continuous ring of metal of even width and thickness, the specified profile (flat, comfort fit, domed) and finish, no stones unless specified.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the band fills the frame, no text, no people, no props.",
+  "views": [
+    "three-quarter view showing the profile and finish",
+    "standing view showing the width and the inside of the band"
+  ],
+  "checks": [
+    {
+      "id": "continuous",
+      "question": "Is the band one continuous ring of metal with even width?"
+    },
+    {
+      "id": "finish",
+      "question": "Does the surface finish look like the one specified (for example brushed or polished)?"
+    },
+    {
+      "id": "no_extras",
+      "question": "Are there no stones or ornaments beyond what was specified?"
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}
