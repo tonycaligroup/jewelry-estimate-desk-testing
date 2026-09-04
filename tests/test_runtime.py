@@ -7893,6 +7893,70 @@ class OneCommandExecutorTests(unittest.TestCase):
             self.assertEqual(again["outcome"], "already_booked")
             self.assertEqual(len(posted), 2)
 
+    def test_a_second_approved_time_reschedules_and_cancels_the_old_event(self) -> None:
+        import email.utils
+        with tempfile.TemporaryDirectory() as directory:
+            ws, record, _profile = self.workspace(directory)
+            p = inbox_watcher.paths_for(ws)
+            record["appointment_booked"] = {
+                "source_message_id_sha256": estimate_record.sha256_text("m-1"), "calendar_event_id": "evt-old",
+                "confirmed_start": "2026-09-04T14:00:00-07:00", "confirmed_end": "2026-09-04T14:30:00-07:00",
+                "confirmation_message_id": "conf-0", "confirmation_thread_id": "thread-1", "booked_at": "2026-09-04T00:00:00+00:00",
+            }
+            record["status"] = "appointment_booked"
+            estimate_record.persist_record(p["record_root"], record)
+            slot = {"start": "2026-09-07T10:30:00-07:00", "end": "2026-09-07T11:00:00-07:00", "label": "Monday, September 7 at 10:30 AM PDT"}
+            approval = workflow_safe._appointment_approval_details(
+                record, "m-2", {"requested_times": ["Monday at 10:30"], "calendar_availability": [slot], "mode": "book"}, p["monitor_root"]
+            )
+            workflow_safe.write_private(workflow_safe.approval_store_path(p["monitor_root"], record["estimate_id"], "m-2"), approval)
+            estimate_record.record_appointment_approval_requested(p["record_root"], record["estimate_id"], "m-2", approval)
+            now = datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc)
+            class Response:
+                headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+                status = 204
+                def __init__(self, body): self._body = body
+                def read(self): return json.dumps(self._body).encode("utf-8")
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            requests_seen = []
+            def opener(request, timeout=15):
+                requests_seen.append((request.get_method(), request.full_url))
+                if request.get_method() == "DELETE":
+                    return Response({})
+                body = json.loads(request.data.decode("utf-8"))
+                if "freeBusy" in request.full_url:
+                    return Response({"kind": "calendar#freeBusy", "timeMin": body["timeMin"], "timeMax": body["timeMax"],
+                                     "calendars": {"primary": {"busy": []}}})
+                return Response({"kind": "calendar#event", "id": "evt-new"})
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            with (
+                patch.object(workflow_safe.gateway_token, "load_token", return_value="tok"),
+                patch.object(workflow_safe.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")),
+                patch.object(workflow_safe.gmail_safe, "send_reply_claimed", return_value={"id": "conf-1", "threadId": "thread-1"}) as send,
+                patch.object(workflow_safe, "mirror_record"),
+            ):
+                out = workflow_safe.book_approved_appointment(argparse.Namespace(
+                    workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id="0123abcd-0000",
+                    option=1, start=None, runner=runner, opener=opener,
+                ))
+            self.assertEqual(out["outcome"], "appointment_rescheduled")
+            self.assertEqual(out["previous_start"], "2026-09-04T14:00:00-07:00")
+            self.assertTrue(out["previous_event_cancelled"])
+            self.assertIn(("DELETE", "https://gateway.maton.ai/google-calendar/calendar/v3/calendars/primary/events/evt-old?sendUpdates=all"), requests_seen)
+            body = json.loads(Path(send.call_args.args[4]).read_text(encoding="utf-8"))
+            raw = base64.urlsafe_b64decode(body["raw"] + "==").decode("utf-8", "replace")
+            self.assertIn("moved your visit to Monday, September 7 at 10:30 AM PDT", raw)
+            stored = estimate_record.read_object(estimate_record.record_path(p["record_root"], record["estimate_id"]))
+            self.assertEqual(stored["appointment_booked"]["calendar_event_id"], "evt-new")
+            self.assertEqual(stored["appointment_history"][0]["calendar_event_id"], "evt-old")
+            # Same time approved again: nothing happens.
+            again = workflow_safe.book_approved_appointment(argparse.Namespace(
+                workspace=ws, estimate_id=record["estimate_id"], message_id="m-2", brief_id=None,
+                option=1, start=None, runner=runner, opener=opener,
+            ))
+            self.assertEqual(again["outcome"], "already_booked")
+
     def test_book_refuses_a_time_that_is_no_longer_free(self) -> None:
         import email.utils
         with tempfile.TemporaryDirectory() as directory:

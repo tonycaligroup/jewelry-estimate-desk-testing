@@ -1451,6 +1451,12 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+RESCHEDULE_NOTE = (
+    "Hello,\n\nDone, we have moved your visit to {when} at {shop}. The earlier invitation is cancelled and a "
+    "new calendar invitation is on its way to this address.\n\nWe will go over the design for {piece} together. "
+    "If this time stops working for you, reply here and we will find another.\n\n{shop}\n"
+)
+
 CONFIRMATION_NOTE = (
     "Hello,\n\nYou are booked: {when} at {shop}. A calendar invitation is on its way to this address; "
     "please accept it so it lands on your calendar.\n\nWe will go over the design for {piece} together. "
@@ -1466,11 +1472,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     record = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
     route_ownership.validate_record(record)
     runner = getattr(args, "runner", subprocess.run)
-    existing = record.get("appointment_booked")
-    if isinstance(existing, dict):
-        result = {"outcome": "already_booked", "confirmed_start": existing.get("confirmed_start")}
-        _report_brief(args, result, runner)
-        return result
+    existing = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else None
     approval = read_object(approval_store_path(p["monitor_root"], args.estimate_id, args.message_id))
     if approval.get("estimate_id") != args.estimate_id or approval.get("source_message_id") != args.message_id:
         raise ValueError("appointment approval does not match this estimate and message")
@@ -1490,6 +1492,10 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         if not 1 <= index <= len(options):
             raise ValueError(f"option must be between 1 and {len(options)}")
         chosen = options[index - 1]
+    if existing and existing.get("confirmed_start") == chosen["start"]:
+        result = {"outcome": "already_booked", "confirmed_start": existing.get("confirmed_start")}
+        _report_brief(args, result, runner)
+        return result
     profile = read_object(p["shop_profile"])
     scheduling = profile.get("scheduling") or {}
     calendar_id = scheduling.get("calendar")
@@ -1517,7 +1523,14 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     )
     work_dir = p["monitor_root"].resolve().parent / "work" / f"booking-{inbox_claim.claim_key(args.message_id)[:16]}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    body = CONFIRMATION_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+    cancelled_old = None
+    if existing:
+        # Rescheduling: the new event is in; take the old one off the calendar.
+        cancelled_old = calendar_query.delete_event(calendar_id, existing.get("calendar_event_id", ""), token, **kwargs) \
+            if existing.get("calendar_event_id") else False
+        body = RESCHEDULE_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+    else:
+        body = CONFIRMATION_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
     customer_content_guard.validate_customer_text(body)
     payload = gmail_reply.build_reply(record["route"], body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
@@ -1538,8 +1551,11 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     })
     mirror_record(booked, work_dir / "current-record.json")
     _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the time booked")
-    result = {"outcome": "appointment_booked", "confirmed_start": chosen["start"], "calendar_event_id": event["id"],
-              "record_status": booked.get("status")}
+    result = {"outcome": "appointment_rescheduled" if existing else "appointment_booked",
+              "confirmed_start": chosen["start"], "calendar_event_id": event["id"], "record_status": booked.get("status")}
+    if existing:
+        result["previous_start"] = existing.get("confirmed_start")
+        result["previous_event_cancelled"] = bool(cancelled_old)
     _report_brief(args, result, runner)
     return result
 
