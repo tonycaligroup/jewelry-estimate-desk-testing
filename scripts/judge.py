@@ -349,6 +349,10 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("body must not contain template placeholders")
     if "?" not in body:
         raise ValueError("a follow-up must ask the customer at least one question")
+    recap = [line for line in body.splitlines() if re.match(r"\s*[-*\u2022]\s", line) and "?" not in line
+             and re.search(r"\b(I've noted|I have noted|I have you down|noted your|you mentioned)\b", line, re.IGNORECASE)]
+    if recap:
+        raise ValueError("remove bullets that only restate what the customer said; every bullet must ask something")
     return {"body": body}
 
 
@@ -364,11 +368,15 @@ def draft_followup(
     """One friendly, price-free email asking only for what is still missing."""
     prompt = (
         "You write customer emails for a retail custom-jewelry shop. Write the reply body (no subject line, "
-        "no headers) asking the customer only for the missing details listed below, following the tone and "
-        "structure of the template. Confirm what they already told you in a half-sentence instead of asking "
-        "again. Never mention prices, costs, rates, or budgets as requirements; budget and dates may be "
-        "invited but are optional. Do not offer meeting times. Do not use template placeholders; write real "
-        f"text. Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
+        "no headers) asking the customer only for the missing details listed below, in the tone of the "
+        "template. Open with one half-sentence confirming your read of what they asked for; after that, "
+        "every line must ask something. Include a section only when it holds a question; never write a "
+        "bullet or line that merely restates what the customer already said (no \"I've noted\", no "
+        "\"I have you down for\"); never add a timing or budget section unless it asks a question. Keep it "
+        "under 140 words. Use the customer's name if they gave one. Never mention prices, costs, rates, or "
+        "budgets as requirements; budget and dates may be invited but are optional. Do not offer meeting "
+        "times. Do not use template placeholders; write real text. "
+        f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
         f"MISSING DETAILS TO ASK FOR: {', '.join(missing_fields)}\n\n"
         f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"

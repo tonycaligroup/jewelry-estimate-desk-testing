@@ -8626,6 +8626,9 @@ class NothingToAskTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one question"):
             judge.check_body({"body": "Hi Tony, thanks for the details. I have everything I need and will send the estimate shortly. Warmly, the shop"})
         self.assertIn("body", judge.check_body({"body": "Hi Tony, thanks for the details. Could you tell me the ring size you would like? Warmly, the shop"}))
+        recap = "Hi Tony,\n\nA couple of things:\n- Lab-grown or natural?\n- I've noted your choice of 14K yellow gold.\n\nWarmly, the shop"
+        with self.assertRaisesRegex(ValueError, "restate"):
+            judge.check_body({"body": recap})
 
 
 class EmailFlowGuardTests(unittest.TestCase):
