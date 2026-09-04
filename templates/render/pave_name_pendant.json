@@ -1,0 +1,36 @@
+{
+  "id": "pave_name_pendant",
+  "label": "name, word, or initials pendant set with stones (pave)",
+  "construction": "A stone-set name pendant: the letters are cut from one sheet of metal and joined to each other by a continuous base bar or by touching letterforms, so the whole pendant is one rigid piece. The face of every letter carries a single or double row of small round stones set in beads or tiny prongs that are part of the metal; the stones follow the stroke of each letter and stay inside its edges; the letter edges remain a thin visible rim of metal. A small bail at each end of the piece; a fine chain passes through both bails. No stone is loose or outside a letter; no letter hangs on its own.",
+  "photo": "Studio product photograph, soft even lighting, white seamless background, subtle shadow, the pendant centered with the chain visible above it, stones catching light without haze, no text, no people, no props.",
+  "views": [
+    "front view, pendant flat to the camera, stones and letterforms clearly visible",
+    "slight three-quarter view showing the metal rim around the stones, the thickness, and the bails"
+  ],
+  "checks": [
+    {
+      "id": "joined",
+      "question": "Are all letters physically connected to each other as one rigid piece (a base bar or touching letterforms), with none floating separately?"
+    },
+    {
+      "id": "stones_in_letters",
+      "question": "Does every letter carry small round stones set into its face in a row that follows the stroke, held by beads or prongs that are part of the metal?"
+    },
+    {
+      "id": "stones_inside",
+      "question": "Are all stones inside the letter shapes with a visible metal rim at the edges, and none floating or spilling outside the letters?"
+    },
+    {
+      "id": "bails_chain",
+      "question": "Are there bails at the ends of the pendant with the chain passing through them, so the piece would hang from the chain?"
+    },
+    {
+      "id": "mark_faithful",
+      "question": "If a name, word, or reference mark was supplied: does the pendant spell exactly that, in that letter style? Answer yes if none was supplied."
+    },
+    {
+      "id": "clean_photo",
+      "question": "Is this a clean product photograph with a plain background and no extra objects or text?"
+    }
+  ]
+}
