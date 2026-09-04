@@ -381,6 +381,12 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.3.5 (built 5 September 2026): a fresh start forgets everything about
+customers.** The customer-state reset now also removes owner questions,
+appointment approval stores, and the brief registry, and accepts the
+newer work-folder names; the procedure tells the owner to reject any open
+cards, since the desk cannot withdraw a Kolo brief.
+
 **4.3.4 (built 5 September 2026): the customer's own stone, and no
 question twice.** A customer resetting his mother's diamond was asked its
 color and clarity grade, twice, and answered "what does that have to do

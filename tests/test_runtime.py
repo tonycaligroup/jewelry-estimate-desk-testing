@@ -926,6 +926,15 @@ class CustomerStateResetTests(unittest.TestCase):
             "customer data", encoding="utf-8"
         )
         (desk / "work" / "cron-binding.json").write_text("{}", encoding="utf-8")
+        for name, files in (
+            ("questions", ["q-0123456789ab.json"]),
+            ("approvals", ["jed-0123456789abcdef-0123456789abcdef.json", "jed-0123456789abcdef-0123456789abcdef.email.txt"]),
+            ("briefs", ["00000001-0000-4000-8000-000000000000.json", "rejections-watermark.json"]),
+        ):
+            (desk / name).mkdir(exist_ok=True)
+            for file in files:
+                (desk / name / file).write_text("{}", encoding="utf-8")
+        (desk / "work" / "offer-0123456789abcdef-round2").mkdir()
         run_work = desk / "run-work" / ("a" * 24)
         run_work.mkdir(parents=True)
         (run_work / "discovery-batch.json").write_text("[]", encoding="utf-8")
@@ -960,6 +969,12 @@ class CustomerStateResetTests(unittest.TestCase):
             )
             self.assertTrue((desk / "shop-profile.json").exists())
             self.assertTrue((desk / "work" / "activation-binding.json").exists())
+            for name in ("questions", "approvals", "briefs"):
+                self.assertEqual([p for p in (desk / name).iterdir() if not p.name.startswith(".")], [], name)
+            self.assertEqual(result["removed"]["questions"], 1)
+            self.assertEqual(result["removed"]["approvals"], 2)
+            self.assertEqual(result["removed"]["briefs"], 2)
+            self.assertFalse((desk / "work" / "offer-0123456789abcdef-round2").exists())
             self.assertTrue((desk / "work" / "cron-binding.json").exists())
             self.assertEqual(
                 inbox_monitor.load_monitor_state(desk / "inbox-monitor")[

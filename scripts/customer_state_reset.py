@@ -20,7 +20,7 @@ import validate_profile
 
 HASH_DIR_RE = re.compile(r"^[0-9a-f]{64}$")
 # Claim work is keyed by hash; executor work is named by what it did.
-WORK_DIR_RE = re.compile(r"[0-9a-f]{64}|(booking|offer)-[0-9a-f]{16}(-[a-z]+)?|estimate-jed-[0-9a-f]{16}")
+WORK_DIR_RE = re.compile(r"[0-9a-f]{64}|(booking|offer)-[0-9a-f]{16}(-[a-z0-9]+)?|estimate-jed-[0-9a-f]{16}")
 RUN_DIR_RE = re.compile(r"^[0-9a-f]{24}$")
 
 
@@ -42,6 +42,26 @@ def _validated_directories(root: Path, pattern: re.Pattern[str]) -> list[Path]:
             raise ValueError(f"unexpected reset target: {path}")
         result.append(path)
     return sorted(result)
+
+
+def _flat_files(root: Path, label: str, pattern: re.Pattern[str]) -> list[Path]:
+    """Every file in a flat private directory whose name the pattern allows; anything else refuses."""
+    if not root.exists():
+        return []
+    _private_directory(root, label)
+    paths: list[Path] = []
+    for path in sorted(root.iterdir()):
+        if path.name.startswith("."):
+            continue
+        if path.is_symlink() or not path.is_file() or not pattern.fullmatch(path.name):
+            raise ValueError(f"unexpected reset target: {path}")
+        paths.append(path)
+    return paths
+
+
+QUESTION_FILE_RE = re.compile(r"q-[0-9a-f]{12}\.json")
+APPROVAL_FILE_RE = re.compile(r"jed-[0-9a-f]{16}-[0-9a-f]{16}(\.email\.txt|\.json)")
+BRIEF_FILE_RE = re.compile(r"([0-9a-fA-F-]{8,64}|rejections-watermark)\.json")
 
 
 def _record_paths(root: Path) -> list[Path]:
@@ -89,6 +109,12 @@ def reset(workspace: Path, now_ms: int | None = None) -> dict[str, Any]:
         raise ValueError("inbox monitor must have active durable state")
 
     records = _record_paths(record_root)
+    # Owner questions, durable appointment approvals, and the brief registry
+    # all point at customers; a fresh start must forget them too, or an old
+    # dormant question would catch the owner's next answer.
+    questions = _flat_files(desk / "questions", "questions", QUESTION_FILE_RE)
+    approvals = _flat_files(desk / "approvals", "approvals", APPROVAL_FILE_RE)
+    briefs = _flat_files(desk / "briefs", "briefs", BRIEF_FILE_RE)
     queue_items = _queue_paths(monitor_root)
     claims = _validated_directories(claim_root, HASH_DIR_RE)
     work_dirs = _validated_directories(work_root, WORK_DIR_RE)
@@ -113,12 +139,17 @@ def reset(workspace: Path, now_ms: int | None = None) -> dict[str, Any]:
 
         for path in claims + work_dirs + run_dirs:
             shutil.rmtree(path)
+        for path in questions + approvals + briefs:
+            path.unlink()
 
     return {
         "customer_state_cleared": True,
         "discovery_watermark_ms": state["discovery_watermark_ms"],
         "removed": {
+            "approvals": len(approvals),
+            "briefs": len(briefs),
             "claims": len(claims),
+            "questions": len(questions),
             "queue_items": len(queue_items),
             "records": len(records),
             "run_work_directories": len(run_dirs),

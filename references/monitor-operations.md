@@ -215,7 +215,8 @@ Only when the activating Kolo user explicitly requests a clean test reset:
    It validates the shop profile, activation binding, and active monitor state;
    advances the Gmail discovery watermark to the reset time; and removes local
    estimate records, claims, queue/manual-review items, customer work artifacts,
-   and abandoned run directories. It preserves the complete shop profile and
+   abandoned run directories, owner questions, appointment approval stores,
+   and the brief registry. It preserves the complete shop profile and
    pricing data, activation binding, monitor activation/binding state, cron job,
    schedule, and non-customer configuration. It refuses unknown directory
    shapes rather than deleting them.
@@ -237,7 +238,10 @@ Only when the activating Kolo user explicitly requests a clean test reset:
    and irreversible; never run it without the explicit clean-reset request.
    Kolo action/audit logs are append-only, non-PII historical traces and are not
    deleted; they do not own or route active customer work.
-4. Leave the cron disabled until the user says the next test may begin.
+4. Ask the owner to reject every open Jewelry Estimate Desk card in their
+   Approval Required list; the desk cannot withdraw a Kolo brief, and a card
+   approved after the reset would fail because its claim is gone.
+5. Leave the cron disabled until the user says the next test may begin.
 
 ## Resetting business setup from scratch
 
