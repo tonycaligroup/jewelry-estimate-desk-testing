@@ -617,6 +617,8 @@ def stones_in_words(specification: Any) -> bool:
         str(specification.get(key) or "").lower()
         for key in ("piece_type", "accent_stones", "setting_style", "notes", "stone_color", "stone_shape")
     )
+    if any(word in text for word in ("no stones", "without stones", "no diamonds", "no gems", "plain band")):
+        return False
     return any(word in text for word in STONE_WORDS_IN_TEXT)
 
 

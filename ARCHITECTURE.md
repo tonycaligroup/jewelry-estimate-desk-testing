@@ -381,6 +381,20 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.3.0 (built 4 September 2026): the pieces made to fit.** Customer
+emails are drafted when the card is filed (estimate at `request-approval`,
+rendering note at `request-rendering-approval`, confirmation or offer at
+`request-appointment-approval`) and stored beside the work
+(`work/estimate-<id>-<msgkey>/customer-reply.txt`, the claim's
+`customer-reply.txt`, `approvals/<id>-<msgkey>.email.txt`); executors read
+and send in seconds. A built mail payload is kept and reused on a retry so
+the journal binding matches, and a journaled action whose provider call
+never ran may be retried. Stones are detected from the customer's words;
+the origin is asked when the profile says so; a rate key never carries an
+origin the customer did not state; once the origin is known, a missing
+per-carat rate for small stones is asked of the owner. Pave pieces need no
+carat or cut; a follow-up must ask something and may not recap.
+
 **4.2.0 (built 4 September 2026).** Renderings go through `rendering.py`:
 a planning call picks a construction archetype from `templates/render/`
 (32 of them), code assembles the prompts from the archetype's clauses, the

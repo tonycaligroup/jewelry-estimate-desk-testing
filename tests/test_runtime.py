@@ -8679,6 +8679,50 @@ class RetrySafetyTests(unittest.TestCase):
                 inbox_claim.acquire_external_action(root, "m-1", token, "approved_estimate:x", "customer_delivery", "sha256:" + "b" * 64)
 
 
+class IntegrationGuardTests(unittest.TestCase):
+    """The pieces changed this week, checked against each other."""
+
+    def test_accent_rates_are_asked_for_once_the_origin_is_known(self) -> None:
+        spec = {"piece_type": "tennis bracelet", "metal": "white gold", "metal_karat": 14, "metal_color": "white",
+                "dimensions": "7 inch", "stone_origin": "lab-grown", "stone_type": "diamond", "setting_style": "tennis",
+                "stone_clarity": "jeweler's choice", "stone_color": "jeweler's choice"}
+        pricing = {"bench_labor_per_hour": 42, "metal_per_gram": {"14k_white_gold": 82.95},
+                   "stones_per_carat": {"natural_diamond_melee": 500}, "fees": {}, "spot_metal": {"enabled": False}}
+        needs = cost_components_module.missing_accent_rates(spec, pricing)
+        self.assertEqual([n["suggested_key"] for n in needs], ["lab_grown_diamond_melee"])
+        pricing["stones_per_carat"]["lab_grown_diamond_melee"] = 180
+        self.assertEqual(cost_components_module.missing_accent_rates(spec, pricing), [])
+        # No origin yet: the customer is asked, not the owner.
+        self.assertEqual(cost_components_module.missing_accent_rates(dict(spec, stone_origin=""), pricing), [])
+
+    def test_band_width_in_millimetres_is_not_a_small_stone(self) -> None:
+        solitaire = {"piece_type": "engagement ring", "stone_type": "diamond", "notes": "thin 2mm band, round center stone, size 6"}
+        self.assertTrue(cost_components_module.has_center_stone(solitaire))
+        pave = {"piece_type": "band", "stone_type": "diamond", "notes": "small 1mm diamonds set all around"}
+        self.assertFalse(cost_components_module.has_center_stone(pave))
+        plain = {"piece_type": "band", "metal": "gold", "notes": "plain band, no stones, 4mm wide"}
+        self.assertFalse(estimate_record.stones_in_words(plain))
+
+    def test_estimate_email_is_prepared_at_filing_and_reused_at_send(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            desk = ws / "estimate-desk"
+            (desk / "inbox-monitor").mkdir(parents=True)
+            (desk / "shop-profile.json").write_text(json.dumps({"shop": {"name": "Shop"}, "terms": {"quote_valid_days": 7}}), encoding="utf-8")
+            record = {"estimate_id": "jed-0123456789abcdef", "proposed_price": 100.0, "specification": {"piece_type": "band"}, "route": {"recipient": "c@example.net"}}
+            target = workflow_safe.estimate_work_dir(desk / "inbox-monitor", record["estimate_id"], "m-1") / "customer-reply.txt"
+            self.assertIn("estimate-jed-0123456789abcdef-", str(target.parent))
+            facts, fixed = workflow_safe.estimate_email_facts(record, json.loads((desk / "shop-profile.json").read_text()))
+            failing = Mock(return_value=subprocess.CompletedProcess([], 1, "", "down"))
+            source = workflow_safe._prepare_email({"monitor_root": desk / "inbox-monitor", "shop_profile": desk / "shop-profile.json"},
+                                                  record, "m-1", "estimate", facts, fixed, target, None, failing)
+            self.assertEqual(source, "fallback")
+            self.assertIn("$100.00", target.read_text(encoding="utf-8"))
+            # A different approval source message gets its own folder: no stale mail reused after a re-price.
+            other = workflow_safe.estimate_work_dir(desk / "inbox-monitor", record["estimate_id"], "m-2")
+            self.assertNotEqual(other, target.parent)
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:

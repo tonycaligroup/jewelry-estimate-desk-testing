@@ -173,9 +173,18 @@ def has_center_stone(specification: Any) -> bool:
     )
     if any(word in words for word in PAVE_WORDS):
         return False
-    if re.search(r"\b(?:0?\.\d+|1(?:\.\d+)?|2(?:\.\d+)?)\s*mm\b", words) and "center" not in words:
-        return False
+    # Small millimetre sizes count only when they describe the stones, not a
+    # band or shank ("stones about 1mm" yes; "2mm band" no).
+    for match in re.finditer(r"\b(?:0?\.\d+|1(?:\.\d+)?|2(?:\.\d+)?)\s*mm\b", words):
+        window = words[max(0, match.start() - 40): match.end() + 40]
+        if any(w in window for w in ("stone", "diamond", "sapphire", "ruby", "emerald", "gem")) and not any(
+            w in window for w in ("band", "shank", "wide", "width", "thick")
+        ) and "center" not in words:
+            return False
     return True
+
+
+NO_STONE_WORDS = ("no stones", "without stones", "no diamonds", "no gems", "plain band", "no gemstones")
 
 
 def extract_center_stone(specification: Any) -> dict[str, Any]:
@@ -313,6 +322,58 @@ def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[
                 "suggested_key": "_".join([*origin, stone["stone_type"]]),
                 "description": " ".join(w for w in (words, stone["stone_type"]) if w),
                 "candidates": candidates,
+            })
+    else:
+        missing.extend(missing_accent_rates(specification, pricing))
+    return missing
+
+
+def accent_stone_needs(specification: dict[str, Any]) -> list[tuple[str, str]]:
+    """(origin word, stone word) pairs for small stones the piece carries, from the customer's words."""
+    text = " ".join(
+        str(specification.get(key) or "").lower()
+        for key in ("stone_type", "accent_stones", "setting_style", "notes", "piece_type", "stone_color")
+    )
+    if any(word in text for word in NO_STONE_WORDS) and not str(specification.get("stone_type") or "").strip():
+        return []
+    origin_raw = str(specification.get("stone_origin") or "").lower().replace("_", "-").replace(" ", "-")
+    origin = "lab-grown" if origin_raw.startswith("lab") else ("natural" if origin_raw == "natural" else "")
+    stones = [w for w in STONE_WORDS if re.search(rf"\b{w}s?\b", text)]
+    if not stones and any(w in text for w in ("tennis", "pave", "pavé", "melee", "eternity", "halo")):
+        stones = ["diamond"]
+    return [(origin, stone) for stone in stones]
+
+
+def missing_accent_rates(specification: dict[str, Any], pricing: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-carat rates the card lacks for small stones (pave, melee, tennis rows).
+
+    Asked only once the origin is known; before that the customer is asked,
+    not the owner. A key on the card counts when it names the stone and the
+    origin, or the stone and 'melee' or 'accent' with no other origin word.
+    """
+    card = pricing.get("stones_per_carat")
+    if not isinstance(card, dict):
+        card = {}
+    missing: list[dict[str, Any]] = []
+    for origin, stone in accent_stone_needs(specification):
+        if not origin:
+            continue
+        origin_token = "lab" if origin == "lab-grown" else "natural"
+        other = "natural" if origin_token == "lab" else "lab"
+        found = False
+        for key in card:
+            tokens = set(re.split(r"[^a-z0-9]+", str(key).lower()))
+            if stone in tokens and (origin_token in tokens or ("lab" in tokens and origin_token == "lab")) and other not in tokens:
+                if any(t in tokens for t in ("melee", "accent", "pave", "small")) or "center" not in tokens:
+                    found = True
+                    break
+        if not found:
+            missing.append({
+                "rate_kind": "stones_per_carat",
+                "line": "stone_lines[accent]",
+                "suggested_key": f"{origin_token}_grown_{stone}_melee" if origin_token == "lab" else f"natural_{stone}_melee",
+                "description": f"{origin} {stone} melee (small accent or pave stones, per carat)",
+                "candidates": [k for k in card if stone in str(k).lower()],
             })
     return missing
 
@@ -455,6 +516,10 @@ def prepare(
             fill["stone_lines[0].quantity"] = "center stone carat weight"
         stone_lines.append(stone_line)
 
+    if stone["stone_type"] is None:
+        for need in missing_accent_rates(specification, pricing):
+            unresolved.append({"line": need["line"], "reason": f"no stones_per_carat rate for {need['description']}",
+                               "candidates": need.get("candidates", [])})
     labor_line = {"task": "bench labor", "hours": None, "rate": float(bench)}
     fill["labor_lines[0].hours"] = "bench hours for this piece, estimated high"
 

@@ -242,6 +242,19 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
     )
     _register_brief(args.monitor_root, "price", kolo_safe.approval_title(approval, args.estimate_id),
                     args.estimate_id, args.message_id, getattr(args, "runner", None))
+    # Draft the estimate email now, while the thread is at hand and the tick
+    # has time; the approval executor then only sends.
+    try:
+        profile = read_object(args.shop_profile)
+        paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
+        facts, fixed = estimate_email_facts(record, profile)
+        _prepare_email(
+            {"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id, "estimate",
+            facts, fixed, estimate_work_dir(args.monitor_root, args.estimate_id, args.message_id) / "customer-reply.txt",
+            _digest_from_work(paths, args.message_id, profile), getattr(args, "judge_runner", subprocess.run),
+        )
+    except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
+        pass
     mirror_record(record, args.record_output)
     finish_processed(
         args.monitor_root, args.claim_root, args.record_root, args.message_id
@@ -346,7 +359,29 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         write_private(args.appointment_approval, approval)
     # The claim's work directory is cleaned once the claim closes; the executor
     # needs the options the owner saw, so keep a durable private copy.
-    write_private(approval_store_path(args.monitor_root, args.estimate_id, args.message_id), approval)
+    store = approval_store_path(args.monitor_root, args.estimate_id, args.message_id)
+    write_private(store, approval)
+    try:
+        profile = read_object(args.shop_profile) if getattr(args, "shop_profile", None) else {}
+        shop = (profile.get("shop") or {}).get("name") or "the shop"
+        piece = approval.get("piece") or "your piece"
+        options = approval.get("calendar_availability") or []
+        paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
+        digest = _digest_from_work(paths, args.message_id, profile)
+        if approval.get("action_type") == "appointment_booking" and options:
+            when = options[0]["label"]
+            _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
+                           "confirmation", {"piece": piece, "time_labels": [when], "shop name": shop},
+                           CONFIRMATION_NOTE.format(when=when, shop=shop, piece=piece), prepared_email_path(store), digest,
+                           getattr(args, "runner", subprocess.run))
+        elif options:
+            labels = [o.get("label") or o["start"] for o in options]
+            _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
+                           "offer", {"piece": piece, "time_labels": labels, "shop name": shop},
+                           OFFER_NOTE.format(piece=piece, lines="\n".join(f"- {l}" for l in labels), shop=shop),
+                           prepared_email_path(store), digest, getattr(args, "runner", subprocess.run))
+    except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
+        pass
     # The reject row names a code; a reply with that code and a plan reaches
     # this question. Kolo delivers approvals to the session but not rejections.
     qroot = owner_questions.questions_root(args.monitor_root)
@@ -1468,6 +1503,15 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
     write_private(approval_path, details)
     runner = getattr(args, "runner", subprocess.run)
     customer = kolo_safe._sender_display(record["route"]["recipient"])
+    try:
+        profile = read_object(args.shop_profile) if getattr(args, "shop_profile", None) else {}
+        _prepare_email(
+            {"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id, "rendering",
+            {"piece": piece, "shop name": (profile.get("shop") or {}).get("name") or "the shop"}, RENDERING_NOTE,
+            Path(paths["customer_reply"]), _digest_from_work(paths, args.message_id, profile), runner,
+        )
+    except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
+        pass
     for index, image in enumerate(images, start=1):
         kolo_safe.send_owner_preview(
             args.monitor_root,
@@ -1502,13 +1546,16 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
     if len(images) != len(expected) or any(_sha256_file(img) != expected.get(i) for i, img in enumerate(images, start=1)):
         raise ValueError("rendering images changed since the owner approved them")
     body = Path(paths["customer_reply"])
-    record_now = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
-    text, body_source = _draft_customer_email(
-        p, record_now, args.message_id, "rendering",
-        {"piece": approval.get("piece") or "the piece", "shop name": (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"},
-        RENDERING_NOTE, args,
-    )
-    body.write_text(text, encoding="utf-8")
+    if body.exists() and body.read_text(encoding="utf-8").strip():
+        body_source = "prepared"
+    else:
+        record_now = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+        text, body_source = _draft_customer_email(
+            p, record_now, args.message_id, "rendering",
+            {"piece": approval.get("piece") or "the piece", "shop name": (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"},
+            RENDERING_NOTE, args,
+        )
+        body.write_text(text, encoding="utf-8")
     record = send_rendering(argparse.Namespace(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         message_id=args.message_id, estimate_id=args.estimate_id, body=body, images=images,
@@ -1606,10 +1653,14 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     else:
         fixed = CONFIRMATION_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
         kind = "confirmation"
-    body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
-        "piece": piece, "time_labels": [chosen["label"]], "shop name": shop,
-        "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
-    }, fixed, args)
+    prepared = prepared_email_path(approval_store_path(p["monitor_root"], args.estimate_id, args.message_id))
+    if kind == "confirmation" and prepared.exists() and chosen["label"] in prepared.read_text(encoding="utf-8"):
+        body, body_source = prepared.read_text(encoding="utf-8"), "prepared"
+    else:
+        body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
+            "piece": piece, "time_labels": [chosen["label"]], "shop name": shop,
+            "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
+        }, fixed, args)
     customer_content_guard.validate_customer_text(body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
     _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body))
@@ -1653,10 +1704,14 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     labels = [o.get("label") or o["start"] for o in options]
     lines = "\n".join(f"- {l}" for l in labels)
     fixed = OFFER_NOTE.format(piece=piece, lines=lines, shop=shop)
-    body, body_source = _draft_customer_email(
-        p, record, message_id, "offer", {"piece": piece, "time_labels": labels, "shop name": shop}, fixed,
-        args or argparse.Namespace(),
-    )
+    prepared = prepared_email_path(approval_store_path(p["monitor_root"], record["estimate_id"], message_id))
+    if prepared.exists() and all(l in prepared.read_text(encoding="utf-8") for l in labels):
+        body, body_source = prepared.read_text(encoding="utf-8"), "prepared"
+    else:
+        body, body_source = _draft_customer_email(
+            p, record, message_id, "offer", {"piece": piece, "time_labels": labels, "shop name": shop}, fixed,
+            args or argparse.Namespace(),
+        )
     customer_content_guard.validate_customer_text(body)
     work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1855,6 +1910,47 @@ def _draft_customer_email(p: dict[str, Path], record: dict[str, Any], message_id
         return fallback, "fallback"
 
 
+def estimate_work_dir(monitor_root: Path, estimate_id: str, message_id: str | None) -> Path:
+    """One folder per (estimate, approval source message): a re-price later never reuses old mail."""
+    key = inbox_claim.claim_key(message_id)[:16] if message_id else "none"
+    return monitor_root.resolve().parent / "work" / f"estimate-{estimate_id}-{key}"
+
+
+def prepared_email_path(store: Path) -> Path:
+    return store.with_name(store.name.replace(".json", "") + ".email.txt")
+
+
+def _prepare_email(p: dict[str, Path], record: dict[str, Any], message_id: str, kind: str, facts: dict[str, Any],
+                   fallback: str, target: Path, digest: dict[str, Any] | None, runner: Any) -> str:
+    """Write the customer email at filing time so approval only sends (seconds, not a draft)."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+    import pipeline  # local import: pipeline imports this module
+
+    try:
+        profile = read_object(p["shop_profile"])
+        switch = pipeline.settings(p["monitor_root"].resolve().parent.parent / "estimate-desk")
+        body, source = customer_mail.draft(
+            kind, facts, digest or {"messages": []}, profile, fallback, switch.get("model"), runner,
+            inbox_watcher.default_openclaw(),
+        )
+    except Exception:  # noqa: BLE001 - the fixed text is always available
+        body, source = fallback, "fallback"
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target.write_text(body, encoding="utf-8")
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+    return source
+
+
+def _digest_from_work(paths: dict[str, str], message_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+    thread_path = Path(paths["gmail_thread"]) if paths.get("gmail_thread") else None
+    if thread_path and thread_path.exists():
+        return gmail_text.thread_digest(read_object(thread_path), message_id, (profile.get("shop") or {}).get("outbound_mailbox"))
+    return {"messages": []}
+
+
 def _reuse_or_build_payload(path: Path, build: Any) -> dict[str, Any]:
     """A retry must send the very payload it journaled: same bytes, same binding.
 
@@ -1892,6 +1988,35 @@ ESTIMATE_NOTE = (
 )
 
 
+def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """The facts an estimate email must carry, and the fixed fallback text."""
+    from datetime import date, timedelta
+
+    price = float(record["proposed_price"])
+    shop = (profile.get("shop") or {}).get("name") or "the shop"
+    terms = profile.get("terms") or {}
+    valid_days = int(terms.get("quote_valid_days") or 7)
+    lead = terms.get("lead_time_business_days")
+    lead_time = f"Estimated lead time: about {lead} business days from design approval, not a guarantee. " if lead else ""
+    valid_through = (date.today() + timedelta(days=valid_days)).strftime("%B %-d, %Y")
+    spec = record.get("specification") or {}
+    spec_lines = "\n".join(
+        f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
+        if value not in (None, "", []) and key != "notes"
+    )
+    fixed = ESTIMATE_NOTE.format(
+        piece=owner_questions.summary_of_piece(spec), spec_lines=spec_lines, price=f"{price:,.2f}",
+        lead_time=lead_time, valid_through=valid_through, shop=shop,
+    )
+    facts = {
+        "piece": owner_questions.summary_of_piece(spec), "price": f"${price:,.2f}",
+        "specification": ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in spec.items() if v not in (None, "", []) and k != "notes"),
+        "lead time": (f"about {lead} business days from design approval, an estimate not a guarantee" if lead else ""),
+        "valid_through": valid_through, "shop name": shop,
+    }
+    return facts, fixed
+
+
 def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
     """The owner approved the price: write the customer email and send it. One command."""
     import inbox_watcher  # local import: inbox_watcher imports this module
@@ -1916,32 +2041,16 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         "binding_hash": record["approval_binding_hash"],
     }
     profile = read_object(p["shop_profile"])
-    shop = (profile.get("shop") or {}).get("name") or "the shop"
-    terms = profile.get("terms") or {}
-    valid_days = int(terms.get("quote_valid_days") or 7)
-    lead = terms.get("lead_time_business_days")
-    lead_time = f"Estimated lead time: about {lead} business days from design approval, not a guarantee. " if lead else ""
-    from datetime import date, timedelta
-
-    valid_through = (date.today() + timedelta(days=valid_days)).strftime("%B %-d, %Y")
-    spec = record.get("specification") or {}
-    spec_lines = "\n".join(
-        f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
-        if value not in (None, "", []) and key != "notes"
-    )
-    fixed = ESTIMATE_NOTE.format(
-        piece=owner_questions.summary_of_piece(spec), spec_lines=spec_lines, price=f"{price:,.2f}",
-        lead_time=lead_time, valid_through=valid_through, shop=shop,
-    )
-    body, body_source = _draft_customer_email(p, record, record.get("approval_source_message_id") or "", "estimate", {
-        "piece": owner_questions.summary_of_piece(spec), "price": f"${price:,.2f}",
-        "specification": ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in spec.items() if v not in (None, "", []) and k != "notes"),
-        "lead time": (f"about {lead} business days from design approval, an estimate not a guarantee" if lead else ""),
-        "valid_through": valid_through, "shop name": shop,
-    }, fixed, args)
-    work_dir = p["monitor_root"].resolve().parent / "work" / f"estimate-{args.estimate_id}"
+    source_message = record.get("approval_source_message_id") or ""
+    work_dir = estimate_work_dir(p["monitor_root"], args.estimate_id, source_message)
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    (work_dir / "customer-reply.txt").write_text(body, encoding="utf-8")
+    prepared = work_dir / "customer-reply.txt"
+    if prepared.exists() and prepared.read_text(encoding="utf-8").strip():
+        body, body_source = prepared.read_text(encoding="utf-8"), "prepared"
+    else:
+        facts, fixed = estimate_email_facts(record, profile)
+        body, body_source = _draft_customer_email(p, record, source_message, "estimate", facts, fixed, args)
+        prepared.write_text(body, encoding="utf-8")
     write_private(work_dir / "approved.json", approved)
     sent = send_approved_estimate(argparse.Namespace(
         claim_root=p["claim_root"], record_root=p["record_root"], estimate_id=args.estimate_id,
