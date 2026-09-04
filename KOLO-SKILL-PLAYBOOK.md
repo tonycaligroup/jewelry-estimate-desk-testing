@@ -34,6 +34,13 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   session ran scripts from the stale copy once (the invented record on 3
   Sep). Publish over the old slug and remove hand checkouts before a test.
   **verified 4 Sep 2026**
+- Publishing from chat: Kolo runs `clawhub skill publish <skill dir> --slug
+  <slug> --name "<Name>" --version <x.y.z> --changelog "<text>" --tags
+  "<a,b>"`. The first call can time out on the client while the server has
+  already accepted the version (`--dry-run --json` then shows
+  `latestVersion`), and a retry of the same version hangs. Right after
+  publishing, the pod's skill directory is replaced by the packaged archive
+  (a git checkout loses its `.git`). **verified 4 Sep 2026**
 - Marketplace skills are updated at boot (`openclaw skills update <name>`) and
   updates force-overwrite local edits. Never hand-edit a marketplace skill's
   directory. **reported (kolo-product-docs SKILL.md)**
