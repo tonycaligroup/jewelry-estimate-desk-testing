@@ -80,6 +80,16 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
         except Exception as exc:  # noqa: BLE001 - a readiness check reports, never crashes
             add("inline judgment", "FAIL", f"model {model}: {exc}")
 
+    # Gmail gateway (the watcher's first call every tick)
+    try:
+        import gateway_token
+        import gmail_fetch
+
+        listing = gmail_fetch.fetch_json("messages", {"maxResults": 1}, gateway_token.load_token())
+        add("gmail gateway", "PASS", f"inbox reachable, {listing.get('resultSizeEstimate', '?')} message(s) visible")
+    except Exception as exc:  # noqa: BLE001 - a readiness check reports, never crashes
+        add("gmail gateway", "FAIL", str(exc))
+
     # Audit trail (rejections are read from it)
     proc = _run(["kolo", "audit-query", "--page-size", "1"], runner)
     ok = proc.returncode == 0 and '"status": "ok"' in proc.stdout.replace("\n", "")

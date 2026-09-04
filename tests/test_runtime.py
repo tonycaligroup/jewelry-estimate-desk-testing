@@ -8361,6 +8361,7 @@ class ReadinessTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 1, "", "unexpected")
             rows = readiness.checks(ws, ROOT, "openclaw", runner=runner)
             status = {r["check"]: r["status"] for r in rows}
+            self.assertIn(status["gmail gateway"], {"PASS", "FAIL"})  # depends on the token in the environment
             self.assertEqual(status["inline judgment"], "PASS")
             self.assertEqual(status["audit trail access"], "PASS")
             self.assertEqual(status["kolo backend"], "PASS")
@@ -8368,6 +8369,16 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(status["shop profile"], "FAIL")
             self.assertEqual(status["activation binding"], "FAIL")
             self.assertEqual(status["calendar and windows"], "FAIL")
+
+
+class GatewayErrorTests(unittest.TestCase):
+    def test_gmail_gateway_errors_carry_the_providers_words(self) -> None:
+        from urllib.error import HTTPError
+        import io
+        def opener(request, timeout=30):
+            raise HTTPError(request.full_url, 400, "Bad Request", {}, io.BytesIO(b'{"error":"Gmail integration is not connected"}'))
+        with self.assertRaisesRegex(ValueError, "HTTP 400: .*not connected"):
+            gmail_fetch.fetch_json("messages", {"maxResults": 1}, "tok", opener=opener)
 
 
 class CalendarListTests(unittest.TestCase):

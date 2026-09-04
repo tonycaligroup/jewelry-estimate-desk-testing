@@ -49,7 +49,13 @@ def fetch_json(
         with opener(request, timeout=30) as response:
             value = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise ValueError(f"Gmail gateway returned HTTP {exc.code}") from exc
+        # The gateway's own words are what an operator needs: "integration
+        # not connected", "invalid query", and so on. Never the token.
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:200].replace("\n", " ")
+        except (OSError, ValueError):
+            detail = ""
+        raise ValueError(f"Gmail gateway returned HTTP {exc.code}" + (f": {detail}" if detail else "")) from exc
     except URLError as exc:
         raise ValueError("Gmail gateway request failed") from exc
     except json.JSONDecodeError as exc:
