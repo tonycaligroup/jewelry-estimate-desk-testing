@@ -78,8 +78,15 @@ def missing_required_fields(spec: dict[str, Any], shop_profile: dict[str, Any] |
         elif any(word in piece for word in DIMENSION_PIECES) and not present(spec.get("dimensions")):
             missing.add("dimensions")
     if has_stones(spec):
+        import cost_components  # local import: cost_components does not import this module
+
+        center = cost_components.has_center_stone(spec)
         for key in STONE_KEYS:
             if key == "stone_cut" and present(spec.get("stone_shape")):
+                continue
+            if key in ("stone_carat", "stone_cut") and not center:
+                # Pave, melee, and accent stones: the carat weight follows from
+                # the design and the stones are round; nothing to ask.
                 continue
             if not present(spec.get(key)):
                 missing.add(key)

@@ -8611,6 +8611,23 @@ class StoneOriginTests(unittest.TestCase):
         self.assertEqual(judge.check_quantities(neutral, [], catalog, False, "")["accents"][0]["key"], "black_diamond")
 
 
+class NothingToAskTests(unittest.TestCase):
+    def test_pave_pieces_do_not_wait_on_a_carat_weight(self) -> None:
+        profile = {"defaults": {"stone_origin": "ask_always"}, "pricing": {}}
+        spec = {"piece_type": "signet ring", "metal": "gold", "metal_karat": 14, "metal_color": "yellow", "finger_size": 10,
+                "stone_type": "diamond", "stone_origin": "lab-grown", "stone_clarity": "VS1 or better", "stone_color": "jeweler's choice",
+                "setting_style": "pave", "notes": "logo on the face, small stones about 1mm, carat weight from the logo"}
+        self.assertEqual(spec_gate.missing_required_fields(spec, profile), [])
+        solitaire = {"piece_type": "engagement ring", "metal": "gold", "metal_karat": 14, "metal_color": "yellow", "finger_size": 6,
+                     "stone_type": "diamond", "stone_origin": "lab-grown", "stone_clarity": "VS1", "stone_color": "G", "setting_style": "solitaire"}
+        self.assertIn("stone_carat", spec_gate.missing_required_fields(solitaire, profile))
+
+    def test_a_follow_up_that_asks_nothing_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one question"):
+            judge.check_body({"body": "Hi Tony, thanks for the details. I have everything I need and will send the estimate shortly. Warmly, the shop"})
+        self.assertIn("body", judge.check_body({"body": "Hi Tony, thanks for the details. Could you tell me the ring size you would like? Warmly, the shop"}))
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:

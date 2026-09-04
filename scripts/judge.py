@@ -268,7 +268,8 @@ def extract_specification(
         "dimensions is length or size for a chain, bracelet, or pendant. "
         "setting_style is the customer's own design wording (classic band, solitaire, bezel, channel-set, halo) or "
         "\"jeweler's choice\" when they explicitly leave it to you; never invent one. "
-        "When the customer explicitly leaves color, clarity, cut, or finish to the jeweler, write \"jeweler's choice\" for that key. "
+        "When the customer explicitly leaves color, clarity, cut, finish, or the carat weight or stone size to the jeweler "
+        "(\"whatever you think\", \"work it out from the logo\", \"your call\"), write \"jeweler's choice\" for that key. "
         "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
         "Never include prices, costs, or anything the SHOP messages said. "
         "A photo mention can go in reference_images but never fills another key.\n\n"
@@ -346,6 +347,8 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("body must not contain a price, rate, or amount")
     if "{{" in body or "}}" in body:
         raise ValueError("body must not contain template placeholders")
+    if "?" not in body:
+        raise ValueError("a follow-up must ask the customer at least one question")
     return {"body": body}
 
 
