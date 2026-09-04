@@ -406,8 +406,7 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
     customer_content_guard.validate_approved_price(
         body, approved["owner_approved_price"]
     )
-    payload = gmail_reply.build_reply(route, body)
-    write_private(args.gmail_payload, payload)
+    payload = _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body))
     receipt = gmail_safe.send_reply_claimed(
         args.claim_root,
         message_id,
@@ -447,8 +446,7 @@ def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("estimate record route must be an object")
     body = args.body.read_text(encoding="utf-8")
     customer_content_guard.validate_customer_text(body)
-    payload = gmail_reply.build_reply(route, body, args.images)
-    write_private(args.gmail_payload, payload)
+    payload = _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body, args.images))
     receipt = gmail_safe.send_reply_claimed(
         args.claim_root,
         args.message_id,
@@ -1613,9 +1611,8 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
     }, fixed, args)
     customer_content_guard.validate_customer_text(body)
-    payload = gmail_reply.build_reply(record["route"], body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
-    write_private(payload_path, payload)
+    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body))
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], args.message_id, None,
         f"appointment_confirmation:{args.estimate_id}:{args.message_id}",
@@ -1664,7 +1661,7 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
-    write_private(payload_path, gmail_reply.build_reply(record["route"], body))
+    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body))
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], message_id, None, f"times_offered:{record['estimate_id']}:{message_id}:{label}",
         payload_path, response_path, gateway_token.load_token(), runner=runner, allow_processed_claim=True,
@@ -1856,6 +1853,25 @@ def _draft_customer_email(p: dict[str, Path], record: dict[str, Any], message_id
         return customer_mail.draft(kind, facts, digest, profile, fallback, switch.get("model"), judge_runner, openclaw)
     except Exception:  # noqa: BLE001 - the fixed text always goes out
         return fallback, "fallback"
+
+
+def _reuse_or_build_payload(path: Path, build: Any) -> dict[str, Any]:
+    """A retry must send the very payload it journaled: same bytes, same binding.
+
+    A reply payload carries a fresh Date and Message-ID each time it is built,
+    so a second run after a crash would bind differently and be refused.
+    The first build is kept beside the work and reused.
+    """
+    try:
+        if path.exists():
+            existing = read_object(path)
+            if isinstance(existing, dict) and existing.get("raw"):
+                return existing
+    except (OSError, ValueError):
+        pass
+    payload = build()
+    write_private(path, payload)
+    return payload
 
 
 def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any) -> None:

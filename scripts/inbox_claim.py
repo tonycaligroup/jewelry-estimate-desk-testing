@@ -606,6 +606,10 @@ def acquire_external_action(
                 and prior.get("attempts") == 1
             ):
                 attempts = 2
+            elif prior.get("status") == "pending" and int(prior.get("attempts") or 1) < 3:
+                # Journaled but the provider call never ran (the run died in
+                # between). Same payload, so a retry cannot double-send.
+                attempts = int(prior.get("attempts") or 1) + 1
             elif prior.get("status") in {"pending", "sent", "uncertain"}:
                 return False, state
             else:

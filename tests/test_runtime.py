@@ -8650,6 +8650,35 @@ class EmailFlowGuardTests(unittest.TestCase):
         self.assertNotIn("**", body)
 
 
+class RetrySafetyTests(unittest.TestCase):
+    def test_a_built_payload_is_reused_so_a_retry_binds_identically(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gmail-send.json"
+            calls = []
+            def build():
+                calls.append(1)
+                return {"raw": "first", "threadId": "t"}
+            first = workflow_safe._reuse_or_build_payload(path, build)
+            second = workflow_safe._reuse_or_build_payload(path, lambda: {"raw": "second", "threadId": "t"})
+            self.assertEqual(first, second)
+            self.assertEqual(calls, [1])
+
+    def test_a_pending_action_with_the_same_binding_can_be_retried(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "claims"
+            _, claim = inbox_claim.acquire(root, "m-1")
+            token = claim["claim_token"]
+            binding = "sha256:" + "a" * 64
+            acquired, _state = inbox_claim.acquire_external_action(root, "m-1", token, "approved_estimate:x", "customer_delivery", binding)
+            self.assertTrue(acquired)
+            # The run died before the provider call: the action is still pending.
+            acquired, state = inbox_claim.acquire_external_action(root, "m-1", token, "approved_estimate:x", "customer_delivery", binding)
+            self.assertTrue(acquired)
+            self.assertEqual(state["external_actions"]["approved_estimate:x"]["attempts"], 2)
+            with self.assertRaisesRegex(ValueError, "binding changed"):
+                inbox_claim.acquire_external_action(root, "m-1", token, "approved_estimate:x", "customer_delivery", "sha256:" + "b" * 64)
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:
