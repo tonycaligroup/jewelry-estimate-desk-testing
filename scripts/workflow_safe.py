@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import approval_guard
+import brief_registry
 import activation_binding
 import calendar_query
 import customer_content_guard
@@ -90,6 +91,54 @@ def execute_line(monitor_root: Path, subcommand: str, **flags: str) -> str:
 def approval_store_path(monitor_root: Path, estimate_id: str, message_id: str) -> Path:
     """Durable private copy of one appointment approval, outside claim work."""
     return workspace_of(monitor_root) / "estimate-desk" / "approvals" / f"{estimate_id}-{inbox_claim.claim_key(message_id)[:16]}.json"
+
+
+def _register_brief(monitor_root: Path, kind: str, title: str, estimate_id: str, message_id: str, runner: Any) -> None:
+    """Best effort: the card is already filed; a missing id only disables the rejection poll for it."""
+    try:
+        brief_registry.register(monitor_root, kind, title, estimate_id, message_id, runner=runner or subprocess.run)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        pass
+
+
+def handle_rejected_briefs(workspace: Path, runner: Any = subprocess.run) -> list[dict[str, Any]]:
+    """Every tick: cards the owner rejected since the last poll, acted on.
+
+    Appointment: wake the dormant question so the owner is asked what to do.
+    Rendering: close the parked claim, nothing sent, one notice. Price: one
+    notice; the estimate stays pending until the owner says more in chat.
+    """
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(workspace)
+    handled: list[dict[str, Any]] = []
+    for entry in brief_registry.rejected_since_last_poll(p["monitor_root"], runner=runner):
+        kind, estimate_id, message_id = entry["kind"], entry["estimate_id"], entry["message_id"]
+        channel = kolo_safe.owner_channel_args(p["monitor_root"])
+        try:
+            if kind == "appointment":
+                root = owner_questions.questions_root(p["monitor_root"])
+                qid = owner_questions.question_id(estimate_id, "appointment_next", message_id)
+                question = owner_questions.load(root, qid)
+                if question["status"] == "open":
+                    question["dormant"] = False
+                    owner_questions.save(root, question)
+                    question = _attach_answer_command(root, p["monitor_root"], question)
+                    owner_questions.deliver(root, question, runner=runner, extra_args=channel)
+            elif kind == "rendering":
+                _close_parked_claim(p, message_id, "owner_rejected_rendering")
+                kolo_safe.run_command(["kolo", "notify-owner", "-m",
+                    f"Renderings for estimate {estimate_id.upper()} are held back; nothing was sent. "
+                    "Tell me what to change if you want new views.", *channel], runner=runner)
+            elif kind == "price":
+                kolo_safe.run_command(["kolo", "notify-owner", "-m",
+                    f"You passed on the price for estimate {estimate_id.upper()}; nothing was sent. "
+                    "Tell me the price you want and I will re-file it, or say \"handle myself\".", *channel], runner=runner)
+            brief_registry.mark(p["monitor_root"], entry["brief_id"], "rejected", entry.get("note"))
+            handled.append({"brief_id": entry["brief_id"], "kind": kind, "estimate_id": estimate_id})
+        except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+            handled.append({"brief_id": entry["brief_id"], "kind": kind, "error": str(exc)[:160]})
+    return handled
 
 
 def _attach_answer_command(root: Path, monitor_root: Path, question: dict[str, Any]) -> dict[str, Any]:
@@ -190,6 +239,8 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
     record = estimate_record.record_approval_requested(
         args.record_root, args.estimate_id, args.message_id, approval
     )
+    _register_brief(args.monitor_root, "price", kolo_safe.approval_title(approval, args.estimate_id),
+                    args.estimate_id, args.message_id, getattr(args, "runner", None))
     mirror_record(record, args.record_output)
     finish_processed(
         args.monitor_root, args.claim_root, args.record_root, args.message_id
@@ -324,6 +375,8 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     record = estimate_record.record_appointment_approval_requested(
         args.record_root, args.estimate_id, args.message_id, approval
     )
+    _rows, _reasoning, title = kolo_safe.appointment_card(approval, args.estimate_id)
+    _register_brief(args.monitor_root, "appointment", title, args.estimate_id, args.message_id, getattr(args, "runner", None))
     mirror_record(record, args.record_output)
     if not args.defer_finalize_for_rendering:
         finish_processed(
@@ -1362,6 +1415,7 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
         args.estimate_id, approval_path, approver["session_key"], runner=runner,
     )
     inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "rendering_approval")
+    _register_brief(args.monitor_root, "rendering", f"Send renderings: {piece}"[:120], args.estimate_id, args.message_id, runner)
     return {"outcome": "rendering_approval_requested", "images": len(images), "next": "done"}
 
 
@@ -1674,6 +1728,8 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
         kolo_safe.build_request_appointment_approval(estimate_id, approval_path, approver["session_key"]),
         runner=runner,
     )
+    _rows, _reasoning, title = kolo_safe.appointment_card(approval, estimate_id)
+    _register_brief(p["monitor_root"], "appointment", title, estimate_id, message_id, runner)
     result.update({"outcome": "offer_card_filed", "options": [o["label"] for o in options[:3]], "piece": piece})
     return result
 

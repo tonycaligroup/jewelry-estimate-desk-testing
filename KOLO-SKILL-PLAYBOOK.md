@@ -300,6 +300,16 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   be polled either. A skill cannot react to a rejection by itself; the owner
   has to say something in chat. Rejecting WITH a note typed in the notes box
   is silent too (card for Wed 9 Sep noon, 4 Sep 2026 ~01:30 UTC). **verified 4 Sep 2026**
+- The audit trail is the way to see brief decisions. `kolo audit-query
+  [--event-type brief.submitted|brief.approved|brief.rejected|brief.executed]
+  [--category brief_lifecycle] [--brief-id <uuid>] [--from-date <ISO>]
+  [--page-size N]` prints `{"status":"ok","events":[...]}` newest first;
+  each event has `brief_id`, `brief_number`, `title` ("Strategic Brief #113
+  rejected"), `description` (the card's --action), `details` (`note` on a
+  rejection, "Rejected by user" when the box was empty), `actor_type`,
+  `created_at`. `brief.submitted` appears within seconds of
+  `request-approval`, so a skill can learn its brief id by matching the
+  description. **verified 4 Sep 2026**
 - `kolo request-approval --help` and `kolo notify-owner --help` print nothing
   (2m46s, empty output), so flags have to be learned from docs or trial; no
   attachment flag is known for approval cards. **observed 3 Sep 2026**

@@ -381,6 +381,19 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Batch 6: rejections read from the audit trail (built 4 September 2026).**
+`kolo audit-query` returns `brief_lifecycle` events: `brief.submitted` when
+the desk files a card (with the brief id and number), `brief.rejected` when
+the owner rejects it (with any note). `brief_registry.py` records each
+card's brief id at filing (matched by the card title in the newest submitted
+events) under `estimate-desk/briefs/`, and every watcher tick polls for
+rejections of pending cards: an appointment rejection wakes the card's
+dormant question so the owner is asked what to do; a rendering rejection
+closes the parked claim with one notice; a price rejection is one notice.
+Owner answers after a rejection file a new offer card (no direct send), and
+no code is typed: with no `--question`, the words go to the customer whose
+card was filed last or the customer named.
+
 **Batch 5: silent rejections and a clean chat (built 4 September 2026).**
 Kolo delivers approvals into the session but not rejections (observed 4
 September; no CLI to poll a brief). So every appointment card files a
