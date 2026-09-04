@@ -299,7 +299,7 @@ class InstructionCoherenceTests(unittest.TestCase):
         self.assertIn("Approved briefs: run the payload's `execute` line", skill)
         self.assertIn("book-approved-appointment", skill)
         self.assertIn("send-approved-estimate-brief", skill)
-        self.assertIn("Owner questions: run the command in the question", skill)
+        self.assertIn("Owner questions: the `desk-answer` tag", skill)
 
 
 class ApprovalTests(unittest.TestCase):
@@ -7767,10 +7767,11 @@ class CommandTravelsWithTheDecisionTests(unittest.TestCase):
             )
             q = workflow_safe._attach_answer_command(root, monitor_root, q)
             text = owner_questions.question_text(q)
-            self.assertIn("answer-question", text)
-            self.assertIn(f"--question {owner_questions.reference(q['question_id'])}", text)
-            self.assertIn(f"--workspace {Path(directory).resolve()}", text)
+            # The owner sees one short tag; SKILL.md maps it to the command.
+            self.assertTrue(text.endswith(f"desk-answer {owner_questions.reference(q['question_id'])}"))
+            self.assertNotIn("--workspace", text)
             self.assertIn("Same piece or new?", text)
+            self.assertIn("answer-question", q["answer_command"])
             self.assertTrue(owner_questions.question_text(q, reminder=True).startswith("Reminder"))
 
     def test_execute_line_names_the_skill_and_workspace(self) -> None:
@@ -8040,7 +8041,7 @@ class AppointmentScenarioTests(unittest.TestCase):
             notify = runner.call_args.args[0]
             self.assertEqual(notify[:3], ["kolo", "notify-owner", "-m"])
             self.assertIn("What would you like to do?", notify[3])
-            self.assertIn("answer-question", notify[3])
+            self.assertTrue(notify[3].rstrip().endswith(f"desk-answer {asked['reference']}"))
             # "handle myself": nothing goes to the customer.
             with patch.object(workflow_safe.gmail_safe, "send_reply_claimed") as send:
                 out = workflow_safe.answer_question(argparse.Namespace(
@@ -8048,6 +8049,46 @@ class AppointmentScenarioTests(unittest.TestCase):
                 ))
             self.assertEqual(out["decision"], "handle_myself")
             send.assert_not_called()
+
+    def test_card_carries_a_reject_code_and_approval_supersedes_the_dormant_question(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = WorkflowApprovalTransactionTests("test_rendering_and_appointment_commands_require_the_bound_intent")
+            args, record = helper.post_estimate_args(root, intents=["appointment_request"])
+            slot = {"start": "2026-09-04T13:00:00-07:00", "end": "2026-09-04T13:30:00-07:00", "label": "Friday, September 4 at 1:00 PM PDT"}
+            args.appointment_intent = root / "appointment-intent.json"
+            args.appointment_intent.write_text(json.dumps({"requested_times": ["Friday 1pm"], "calendar_availability": [slot], "mode": "book"}), encoding="utf-8")
+            args.appointment_approval = root / "appointment-approval.json"
+            args.defer_finalize_for_rendering = False
+            with (
+                patch.object(workflow_safe, "mirror_record"),
+                patch.object(workflow_safe.kolo_safe, "request_appointment_approval_claimed") as card,
+                patch.object(workflow_safe.activation_binding, "load", return_value={"session_key": "agent:main:kolo:direct:c"}),
+                patch.object(workflow_safe, "finish_processed"),
+            ):
+                workflow_safe.request_appointment_approval(args)
+            approval = json.loads(args.appointment_approval.read_text(encoding="utf-8"))
+            code = approval["reject_code"]
+            self.assertRegex(code, r"[0-9A-F]{6}")
+            rows, _reasoning, _title = kolo_safe.appointment_card(approval, record["estimate_id"])
+            self.assertIn(f'"{code}"', rows["Reject means"])
+            qroot = owner_questions.questions_root(args.monitor_root)
+            dormant = owner_questions.find(qroot, code)
+            self.assertTrue(dormant["dormant"])
+            self.assertEqual(dormant["status"], "open")
+            # Dormant questions are not "the open question" and get no reminder.
+            with self.assertRaises(ValueError):
+                owner_questions.only_open(qroot)
+            runner = Mock()
+            owner_questions.deliver(qroot, dormant, runner=runner, reminder=True,
+                                    now=datetime.now(timezone.utc) + timedelta(days=3))
+            runner.assert_not_called()
+            # Approving the card closes it as superseded.
+            ws = args.monitor_root.resolve().parent.parent
+            workflow_safe._supersede_reject_question(
+                {"monitor_root": args.monitor_root}, record["estimate_id"], args.message_id, "approved"
+            )
+            self.assertEqual(owner_questions.find(qroot, code)["answer"]["outcome"], "superseded")
 
     def test_owner_typed_times_are_offered_to_the_customer(self) -> None:
         import email.utils

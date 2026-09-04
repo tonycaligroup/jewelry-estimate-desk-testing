@@ -169,8 +169,12 @@ def find(root: Path, ref_or_id: str) -> dict[str, Any]:
 
 
 def only_open(root: Path) -> dict[str, Any]:
-    """The one open question, when there is exactly one; otherwise refuse."""
-    open_questions = list_questions(root, "open")
+    """The one open question, when there is exactly one; otherwise refuse.
+
+    A dormant question (filed with an approval card, answered only if the
+    owner rejects and replies with its code) does not count as open here.
+    """
+    open_questions = [q for q in list_questions(root, "open") if not q.get("dormant")]
     if len(open_questions) != 1:
         raise ValueError(
             f"{len(open_questions)} question(s) are open; name the one being answered"
@@ -264,8 +268,13 @@ def create_decision(
     text: str,
     context: dict[str, Any] | None = None,
     now: datetime | None = None,
+    dormant: bool = False,
 ) -> tuple[bool, dict[str, Any]]:
-    """File a fixed-outcome question once; a repeat returns the existing one."""
+    """File a fixed-outcome question once; a repeat returns the existing one.
+
+    Dormant: filed alongside an approval card, never delivered on its own; the
+    owner reaches it by replying with its code after rejecting the card.
+    """
     if kind not in DECISION_KINDS:
         raise ValueError("unsupported decision kind")
     if not isinstance(text, str) or not text.strip():
@@ -287,6 +296,7 @@ def create_decision(
         "delivery": {"status": "pending"},
         "reminder": None,
         "text": text.strip() + f" (Question {reference(qid)})",
+        "dormant": bool(dormant),
     }
     return True, save(root, question)
 
@@ -362,10 +372,10 @@ def with_answer_command(question: dict[str, Any], text: str) -> str:
     message, so the command travels with the question and nothing is left to
     guess (WORKFLOW.md 6.10).
     """
-    command = question.get("answer_command")
-    if not isinstance(command, str) or not command.strip():
+    if not question.get("answer_command"):
         return text
-    return f"{text}\n\nDesk: apply the owner's reply with exactly this command, their words verbatim in --answer:\n{command}"
+    # One short tag; SKILL.md maps it to the answer-question command.
+    return f"{text}\n\ndesk-answer {reference(question['question_id'])}"
 
 
 def answer_command(base_dir: Path, workspace: Path, question_id: str) -> str:
@@ -395,7 +405,7 @@ def deliver(
     """
     current = _now(now).isoformat()
     if reminder:
-        if question["status"] != "open" or question.get("reminder"):
+        if question["status"] != "open" or question.get("reminder") or question.get("dormant"):
             return question
         text = question_text(question, reminder=True)
         question["reminder"] = {"status": "pending", "attempted_at": current}
@@ -528,3 +538,13 @@ def answer_provenance(question: dict[str, Any]) -> dict[str, Any]:
         "answered_at": answer.get("answered_at"),
         "answer_text": answer.get("text"),
     }
+
+
+def supersede(root: Path, question: dict[str, Any], why: str) -> dict[str, Any]:
+    """Close a dormant question that the owner never needed (the card was approved)."""
+    if question["status"] != "open":
+        return question
+    question["status"] = "answered"
+    question["answer"] = {"text": why[:400], "outcome": "superseded", "answered_at": _now(None).isoformat(),
+                          "answered_by": "desk"}
+    return save(root, question)

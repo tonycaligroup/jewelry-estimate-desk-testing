@@ -295,6 +295,20 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     # The claim's work directory is cleaned once the claim closes; the executor
     # needs the options the owner saw, so keep a durable private copy.
     write_private(approval_store_path(args.monitor_root, args.estimate_id, args.message_id), approval)
+    # The reject row names a code; a reply with that code and a plan reaches
+    # this question. Kolo delivers approvals to the session but not rejections.
+    qroot = owner_questions.questions_root(args.monitor_root)
+    _created, dormant = owner_questions.create_decision(
+        qroot, "appointment_next", args.estimate_id, args.message_id,
+        _appointment_next_text(record, approval),
+        {"rejected_action": approval.get("action_type"), "rejected_options": approval.get("calendar_availability") or []},
+        dormant=True,
+    )
+    _attach_answer_command(qroot, args.monitor_root, dormant)
+    if approval.get("reject_code") != owner_questions.reference(dormant["question_id"]):
+        approval["reject_code"] = owner_questions.reference(dormant["question_id"])
+        write_private(args.appointment_approval, approval)
+        write_private(approval_store_path(args.monitor_root, args.estimate_id, args.message_id), approval)
     approver = activation_binding.load(
         activation_binding.binding_path(args.monitor_root)
     )
@@ -1440,6 +1454,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         "confirmation_thread_id": delivery["threadId"],
     })
     mirror_record(booked, work_dir / "current-record.json")
+    _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the time booked")
     result = {"outcome": "appointment_booked", "confirmed_start": chosen["start"], "calendar_event_id": event["id"],
               "record_status": booked.get("status")}
     _report_brief(args, result, runner)
@@ -1497,12 +1512,39 @@ def send_approved_times(args: argparse.Namespace) -> dict[str, Any]:
     if not options:
         raise ValueError("this card had no times to offer; reject it and answer the desk's question")
     result = _send_times(p, record, args.message_id, options, approval.get("piece") or "your piece", runner, "approved")
+    _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the times offered")
     _report_brief(args, result, runner)
     return result
 
 
+def _appointment_next_text(record: dict[str, Any], approval: dict[str, Any]) -> str:
+    customer = kolo_safe._sender_display(record["route"]["recipient"])
+    piece = approval.get("piece") or "their piece"
+    asked = "; ".join(approval.get("requested_times") or []) or "no particular time"
+    what = "booking" if approval.get("action_type") == "appointment_booking" else "offering those times"
+    return (
+        f"You passed on {what} for {customer} ({piece}; they asked for {asked}). What would you like to do? "
+        "Reply with times to offer them (for example \"Tuesday 2pm or Wednesday at 11\"), "
+        "\"other times\" and I will pick new free ones, or \"handle myself\" and I will leave the thread to you."
+    )
+
+
+def _supersede_reject_question(p: dict[str, Path], estimate_id: str, message_id: str, why: str) -> None:
+    root = owner_questions.questions_root(p["monitor_root"])
+    qid = owner_questions.question_id(estimate_id, "appointment_next", message_id)
+    try:
+        question = owner_questions.load(root, qid)
+    except (OSError, ValueError):
+        return
+    owner_questions.supersede(root, question, why)
+
+
 def appointment_rejected(args: argparse.Namespace) -> dict[str, Any]:
-    """The owner rejected an appointment card: ask them what to do for this customer."""
+    """The owner rejected an appointment card: ask them what to do for this customer.
+
+    Only reachable if Kolo delivers the rejection; otherwise the owner replies
+    with the code from the card and the same dormant question answers.
+    """
     import inbox_watcher  # local import: inbox_watcher imports this module
 
     p = inbox_watcher.paths_for(args.workspace.resolve())
@@ -1510,20 +1552,13 @@ def appointment_rejected(args: argparse.Namespace) -> dict[str, Any]:
     record = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
     route_ownership.validate_record(record)
     approval = read_object(approval_store_path(p["monitor_root"], args.estimate_id, args.message_id))
-    customer = kolo_safe._sender_display(record["route"]["recipient"])
-    piece = approval.get("piece") or "their piece"
-    asked = "; ".join(approval.get("requested_times") or []) or "no particular time"
-    what = "booking" if approval.get("action_type") == "appointment_booking" else "offering those times"
-    text = (
-        f"You passed on {what} for {customer} ({piece}; they asked for {asked}). What would you like to do? "
-        "Reply with times to offer them (for example \"Tuesday 2pm or Wednesday at 11\"), "
-        "\"other times\" and I will pick new free ones, or \"handle myself\" and I will leave the thread to you."
-    )
     root = owner_questions.questions_root(p["monitor_root"])
     _created, question = owner_questions.create_decision(
-        root, "appointment_next", args.estimate_id, args.message_id, text,
+        root, "appointment_next", args.estimate_id, args.message_id, _appointment_next_text(record, approval),
         {"rejected_action": approval.get("action_type"), "rejected_options": approval.get("calendar_availability") or []},
     )
+    question["dormant"] = False
+    owner_questions.save(root, question)
     question = _attach_answer_command(root, p["monitor_root"], question)
     question = owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
     brief_id = getattr(args, "brief_id", None)

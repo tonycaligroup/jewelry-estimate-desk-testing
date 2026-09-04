@@ -1436,7 +1436,7 @@ def record_appointment_approval_requested(
     }
     # The owner's card also carries the piece, the proposed time, and a note
     # about availability; they are display fields, not binding ones.
-    optional = {"piece", "proposed_time", "availability_note", "execute", "execute_on_reject"}
+    optional = {"piece", "proposed_time", "availability_note", "execute", "execute_on_reject", "reject_code"}
     if (
         not isinstance(approval, dict)
         or not required <= set(approval)

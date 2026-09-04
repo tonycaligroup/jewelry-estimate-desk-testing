@@ -234,7 +234,12 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
         "Customer asked for": asked_text,
         "Estimate": estimate_id,
     }
-    reject = "Nothing happens for the customer yet; the desk asks you what to do next."
+    code = str(details.get("reject_code") or "").strip()
+    reject = (
+        f"Nothing happens for the customer. Then reply here with \"{code}\" and what you want: times to offer, "
+        "\"other times\", or \"handle myself\"."
+        if code else "Nothing happens for the customer yet; the desk asks you what to do next."
+    )
     if booking and options:
         when = str(options[0].get("label") or options[0].get("start"))[:120]
         rows["Time"] = when
@@ -243,7 +248,7 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
         title = f"Book appointment: {piece}, {when}"[:120]
         reasoning = (
             f"{customer} asked to meet ({asked_text}). That time is free on your calendar inside your "
-            "declared windows. Approve to book it; reject and the desk will ask you what to do."
+            "declared windows. Approve to book it; reject and tell the desk what to do with the code below."
         )
     elif options:
         for index, slot in enumerate(options[:3], start=1):
@@ -256,7 +261,7 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
             f"{customer} asked to meet ({asked_text}). "
             + (f"{why[0].upper() + why[1:]}. " if why else "")
             + "These times are free on your calendar inside your declared windows. Approve to offer them; "
-            "reject and the desk will ask you what to do."
+            "reject and tell the desk what to do with the code below."
         )
     else:
         reason = str(details.get("availability_note") or "no calendar-checked times were available")[:160]

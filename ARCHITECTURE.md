@@ -381,6 +381,16 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Batch 5: silent rejections and a clean chat (built 4 September 2026).**
+Kolo delivers approvals into the session but not rejections (observed 4
+September; no CLI to poll a brief). So every appointment card files a
+dormant `appointment_next` question and names its code in the reject row;
+an owner who rejects and then replies with the code and a plan answers that
+question through the same `answer-question` path. Approving the card closes
+the dormant question as superseded. Owner-visible question messages end with
+one line, `desk-answer <CODE>`, instead of the full command; SKILL.md maps
+the tag to the command.
+
 **Batch 4: three appointment scenarios (built 4 September 2026).** A
 specific requested time that is free is a booking card, one time, yes or
 no. No time, or a time that is taken, is an offer card: two or three free
