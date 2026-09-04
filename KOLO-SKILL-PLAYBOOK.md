@@ -145,6 +145,12 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   `litellm/claude-haiku-4-5`, `litellm-openai/gemini-3.1-flash-lite-preview`.
   Rate limits and per-token cost are the same whether a model is called from
   a script or an agent turn. **reported**
+- gpt-image-2 through litellm takes reference images: `infer image edit
+  --file <png>` returned a 1024x1024 PNG (`capability: image.edit`) in about
+  a minute; the provider reports `maxInputImages: 5`, `maxCount: 4`,
+  `supportsSize: true`, and it ignores the `quality` hint
+  (`ignoredOverrides`). Reference logo, then a pendant edit conditioned on
+  it, both produced. **verified 4 Sep 2026**
 - Image CLI on a pod (OpenClaw 2026.6.11): `openclaw infer image generate
   --prompt <text> [--count N] [--size 1024x1024] [--quality low|medium|high|auto]
   [--resolution 1K|2K|4K] [--aspect-ratio 1:1] [--background transparent|opaque]
