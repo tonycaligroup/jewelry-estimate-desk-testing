@@ -272,6 +272,9 @@ def extract_specification(
         "(\"whatever you think\", \"work it out from the logo\", \"your call\"), write \"jeweler's choice\" for that key. "
         "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
         "Never include prices, costs, or anything the SHOP messages said. "
+        "customer_supplied_materials names anything the customer already owns and wants used (\"my mother's "
+        "diamond\", \"reset my stone\", \"my own gold\"); when the stone is theirs, still fill stone_type and any "
+        "shape or size they gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "
         "A photo mention can go in reference_images but never fills another key.\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )

@@ -194,6 +194,9 @@ NO_STONE_WORDS = ("no stones", "without stones", "no diamonds", "no gems", "plai
 
 def extract_center_stone(specification: Any) -> dict[str, Any]:
     """Find the center stone's type, origin, and carat in a specification."""
+    if estimate_record.customer_supplies_stone(specification):
+        # The customer's own stone costs the shop nothing.
+        return {"stone_type": None, "origin": None, "carat": None, "description": None}
     if not has_center_stone(specification):
         return {"stone_type": None, "origin": None, "carat": None, "description": None}
     flat = _flatten(specification)
@@ -521,7 +524,9 @@ def prepare(
             fill["stone_lines[0].quantity"] = "center stone carat weight"
         stone_lines.append(stone_line)
 
-    if stone["stone_type"] is None:
+    if stone["stone_type"] is None and not (
+        estimate_record.customer_supplies_stone(specification) and not specification.get("accent_stones")
+    ):
         for need in missing_accent_rates(specification, pricing):
             unresolved.append({"line": need["line"], "reason": f"no stones_per_carat rate for {need['description']}",
                                "candidates": need.get("candidates", [])})

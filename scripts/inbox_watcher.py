@@ -331,9 +331,14 @@ def tick(
         notes.append(
             f"{len(deferred)} claim(s) could not be judged this tick ({deferred[0].get('error', '')[:120]}); will retry."
         )
-    if notes:
-        note = "\n".join(notes)
-        summary["message"] = note if report["message"] == "NO_REPLY" else report["message"] + "\n" + note
+    # Claims this tick deferred are in flight, not stuck: the reconciler and
+    # the next tick own them. The owner hears about a claim only when it
+    # becomes a card or a question; the notes stay in the run log.
+    summary["notes"] = notes
+    if report["message"] != "NO_REPLY" and not report.get("settled"):
+        unleased = report["counts"]["processing"] - report.get("delegated", 0)
+        if unleased <= len(deferred) and len(report["message"].splitlines()) == 1:
+            summary["message"] = "NO_REPLY"
     return summary
 
 

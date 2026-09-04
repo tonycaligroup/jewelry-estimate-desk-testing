@@ -468,10 +468,10 @@ class GoldenPathTests(unittest.TestCase):
         return json.loads(printed)
 
     def answer(self, ws: Path, text: str) -> dict:
-        with patch("sys.stdout", io.StringIO()) as stdout:
+        with patch("sys.stdout", io.StringIO()) as stdout, patch("sys.stderr", io.StringIO()) as stderr:
             code = workflow_safe.main(["answer-question", "--workspace", str(ws), "--base-dir", str(ROOT), "--answer", text])
         printed = stdout.getvalue()
-        self.assertEqual(code, 0, printed)
+        self.assertEqual(code, 0, printed + stderr.getvalue())
         return json.loads(printed)
 
     def record(self, ws: Path, estimate_id: str) -> dict:
@@ -1007,4 +1007,122 @@ class WindowGateTests(SideBranchTests):
             self.assertIn("outside the declared consultation windows", err.getvalue())
             self.assertEqual(world.calendar_events, {}, "nothing booked")
             self.assertEqual(len(world.sent), 1, "no confirmation email")
+        self.run_branch(branch)
+
+
+class OwnStoneAndStallTests(SideBranchTests):
+    """A customer's own stone is never graded, and the same question is never sent twice."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def _pendant(self, ws: Path, world: World) -> str:
+        profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+        profile["pricing"]["metal_per_gram"]["18k_yellow_gold"] = 90.0
+        profile["pricing"]["typical_finished_weights"]["pendant"] = 4.0
+        (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+        world.spec = {
+            "piece_type": "pendant", "metal": "yellow gold", "metal_karat": "18k", "stone_type": "diamond",
+            "setting_style": "bezel", "customer_supplied_materials": "her mother's diamond",
+            "notes": "reset my mother's diamond in a bezel on a thin dainty chain", "dimensions": "18 inch chain",
+        }
+        world.customer_message("d1", "thread-pendant", (
+            "I would like my mother's diamond reset in an 18k yellow gold bezel on a thin dainty chain, 18 inches.\n\nDavid"
+        ))
+        return "thread-pendant"
+
+    def test_own_stone_is_asked_for_shape_and_size_never_grade(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._pendant(ws, world)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["missing_required_fields"], ["stone_carat", "stone_shape"])
+            for grade in ("stone_color", "stone_clarity", "stone_origin", "stone_cut"):
+                self.assertNotIn(grade, record["missing_required_fields"])
+            # The customer gives the stone's shape and size; no stone cost, no rate question, a price card.
+            world.spec.update({"stone_shape": "round", "stone_carat": "about 1 carat"})
+            world.customer_message("d2", "thread-pendant", "It is round, about a carat.\n\nDavid")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "no rate question for a stone the shop does not buy")
+            card = world.cards[-1]
+            self.assertNotRegex(card["title"], r"(?i)/ct|per carat|natural|lab-grown|lab grown|melee|diamond")
+            self.assertRegex(card["title"], r"(?i)cost")
+        self.run_branch(branch)
+
+    def test_second_unanswered_ask_goes_to_the_owner_not_the_customer(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = self._pendant(ws, world)
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), 1)
+            # The customer pushes back instead of answering; the spec does not move.
+            world.customer_message("d2", thread, "What does the shape or size have to do with this??? This is super confusing.\n\nDavid")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
+            self.assertEqual(len(world.sent), 1, "the same question is never sent twice")
+            self.assertEqual(summary["message"], "NO_REPLY")
+            asked = [n for n in world.notices if not n["file"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertIn("desk-answer", asked[0]["text"])
+            self.assertRegex(asked[0]["text"], r"(?i)super confusing")
+            self.assertRegex(asked[0]["text"], r"(?i)skip")
+            self.assertEqual(self.claim(ws, "d2")["status"], "awaiting_owner")
+            estimate_id = self.only_estimate(ws)
+            # "skip": the details become the jeweler's call and the price card follows.
+            answered = self.answer(ws, "skip it, price it as you see fit")
+            self.assertEqual(answered["decision"], "skip", answered)
+            self.assertEqual(answered.get("pipeline"), "approval_requested", answered)
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["status"], "pending_approval")
+            self.assertEqual(record["specification"]["stone_shape"], "jeweler's choice")
+            self.assertEqual(len(world.sent), 1)
+            self.assertTrue(world.cards, "a price card was filed")
+        self.run_branch(branch)
+
+    def test_ask_again_sends_the_question_once_more(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = self._pendant(ws, world)
+            self.tick(ws, world)
+            world.customer_message("d2", thread, "Why do you need that?\n\nDavid")
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), 1)
+            answered = self.answer(ws, "ask again please")
+            self.assertEqual(answered["decision"], "ask_again", answered)
+            self.assertEqual(answered.get("pipeline"), "followup_sent", answered)
+            self.assertEqual(len(world.sent), 2)
+            self.assertIn("?", world.sent[1]["body"])
+            self.assertEqual(self.claim(ws, "d2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_handle_myself_leaves_the_thread_alone(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = self._pendant(ws, world)
+            self.tick(ws, world)
+            world.customer_message("d2", thread, "Why do you need that?\n\nDavid")
+            self.tick(ws, world)
+            answered = self.answer(ws, "I'll handle it")
+            self.assertEqual(answered["decision"], "handle_myself", answered)
+            self.assertEqual(len(world.sent), 1)
+            self.assertEqual(world.cards, [])
+            self.assertIn(self.claim(ws, "d2")["status"], ("manual_review", "processed"))
+            self.assertEqual(self.tick(ws, world)["claimed"], 0)
         self.run_branch(branch)

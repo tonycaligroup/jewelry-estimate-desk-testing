@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.3.3
+version: 4.3.4
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -689,6 +689,15 @@ the original channel and keep surprise-related subjects detail-free.
 
 ## Phase 1.5: retail specification gate
 
+Two rules the gate applies on its own. A stone the customer already owns
+(their mother's diamond, a stone to reset or remount, anything under
+`customer_supplied_materials`) is never graded: the desk asks only its
+shape and its carat weight or millimetre size so the setting fits, never
+its color, clarity, cut, or origin, and the price carries no stone line for
+it. And the desk never sends the same follow-up twice: when a reply leaves
+the same fields open that were already asked for, the owner gets a question
+instead (skip and price it, ask again, or handle myself).
+
 Before sending a retail estimate, require all applicable fields:
 
 - Stone type, lab/natural origin, carat, color, clarity, and cut/shape.
@@ -1006,6 +1015,13 @@ or `request-approval`, and never continues an inquiry in chat. Every decision
 the desk needs from the owner arrives with the exact command to run, and the
 session runs that command and nothing else. If unsure, ask and wait.
 
+While a desk question is open (the last desk message ended with
+`desk-answer <CODE>`), the owner's next reply is the answer to it: run
+`answer-question` with their words first, and only if that command refuses
+treat the reply as anything else. Never ask the owner a question of your
+own while a desk question is open, and never read their reply to the desk
+as consent for something you proposed.
+
 ### Approved briefs: run the payload's `execute` line
 
 Every approval the desk files (price, renderings, appointment, manual
@@ -1053,9 +1069,11 @@ session: reject the brief and tell the owner the desk will re-price.
 The desk asks the owner questions in plain words and parks the claim: which
 rate to use, whether a new thread from a known customer is the same piece or
 a new one, what an unclear reply meant, what to do after a rejected
-appointment card, and what to do when a customer asks to meet but the
-calendar offers no free time (or could not be read); that last case gets a
-question straight away, never a card with nothing on it. Every such message
+appointment card, what to do when a customer asks to meet but the
+calendar offers no free time (or could not be read), and what to do when a
+customer was asked for details once and replied without giving them; those
+last two get a question straight away, never a card with nothing on it and
+never the same email twice. Every such message
 ends with one line, `desk-answer <CODE>`. When the owner replies to it, run exactly this, their words
 verbatim:
 

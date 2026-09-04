@@ -381,6 +381,21 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.3.4 (built 5 September 2026): the customer's own stone, and no
+question twice.** A customer resetting his mother's diamond was asked its
+color and clarity grade, twice, and answered "what does that have to do
+with this?". Now a customer-supplied stone (`customer_supplied_materials`,
+or words like "my mother's diamond", "reset", "heirloom") needs only its
+shape and size, carries no stone cost, and skips the ask-always origin rule.
+A reply that leaves the same fields open that were already asked for never
+gets the same email again: the owner is asked (`followup_stalled`: skip
+and price with those fields as the jeweler's choice, ask again, or handle
+myself), the claim parks, and the answer prices, resends, or closes. A
+reply on a thread that already has a record is never re-triaged as junk
+(that refusal was retrying every tick), and the tick's own bookkeeping
+("could not be judged", "did not settle", "could not be started") stays in
+the run summary instead of the owner's chat.
+
 **4.3.3 (built 4 September 2026): windows are a gate, not a hint.** The
 same worker path put a Sunday on a booking card: its prompt let the agent
 write the availability list. `request-appointment-approval` now refuses any

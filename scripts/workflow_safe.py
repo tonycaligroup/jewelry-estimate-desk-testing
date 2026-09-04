@@ -1089,6 +1089,50 @@ def ask_unclear_reply(args: argparse.Namespace, record: dict[str, Any], outcome:
     }
 
 
+def _reply_snippet(args: argparse.Namespace) -> str:
+    try:
+        paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
+        message = read_object(Path(paths["gmail_message"]))
+        return " ".join(gmail_text.body_text(message, limit=600).split())[:240]
+    except (OSError, ValueError, json.JSONDecodeError):
+        return ""
+
+
+def ask_followup_stalled(args: argparse.Namespace, record: dict[str, Any], repeated: list[str]) -> dict[str, Any]:
+    """The customer was asked for these details once and did not give them: the owner decides.
+
+    Sending the same question twice is what a broken machine does; a customer
+    who asks why the shop needs a stone's color grade deserves a person's
+    answer. Options: price it without the details (they become the jeweler's
+    choice), ask once more, or the owner takes the thread.
+    """
+    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    who = _customer_name(args.monitor_root, args.claim_root, args.message_id)
+    snippet = _reply_snippet(args)
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their piece"
+    fields = ", ".join(f.replace("_", " ") for f in repeated)
+    text = (
+        f"{who} replied about {piece}"
+        + (f': "{snippet}"' if snippet else "")
+        + f". I already asked once for {fields} and did not get it, so I did not ask again. "
+        "Reply \"skip\" to price it without those details (they become your call), "
+        "\"ask again\" to send the question once more, or \"handle myself\"."
+    )
+    root = owner_questions.questions_root(args.monitor_root)
+    _created, question = owner_questions.create_decision(
+        root, "followup_stalled", args.estimate_id, args.message_id, text, {"repeated": list(repeated)},
+    )
+    question = _attach_answer_command(root, args.monitor_root, question)
+    if _created:
+        question = owner_questions.deliver(
+            root, question, runner=getattr(args, "runner", subprocess.run),
+            extra_args=kolo_safe.owner_channel_args(args.monitor_root),
+        )
+    inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "followup_stalled_question")
+    return {"outcome": "awaiting_owner", "question_id": question["question_id"],
+            "reference": owner_questions.reference(question["question_id"]), "next_action": "done"}
+
+
 def ask_missing_rate(args: argparse.Namespace) -> dict[str, Any]:
     """Ask the owner for the one rate pricing lacks, and park this claim.
 
@@ -1503,6 +1547,36 @@ def answer_decision(
         return result
     if question["kind"] == "appointment_next":
         return _answer_appointment_next(args, workspace, p, root, question, outcome)
+    if question["kind"] == "followup_stalled" and outcome in {"skip", "ask_again"}:
+        import pipeline  # local import: pipeline imports this module
+
+        estimate_id = question["estimate_id"]
+        switch = pipeline.settings(workspace / "estimate-desk")
+        openclaw = args.openclaw or inbox_watcher.default_openclaw()
+        reopened = _resume_parked_claim(p, message_id)
+        if not Path(reopened["work_paths"]["gmail_message"]).exists():
+            import gmail_fetch  # local import; only needed when the work file was cleaned up
+
+            gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        if outcome == "skip":
+            estimate_record.mark_jewelers_choice(p["record_root"], estimate_id, message_id, list(question.get("context", {}).get("repeated") or []))
+            done = pipeline.price_from_record(
+                workspace, message_id, estimate_id, model=switch.get("model"),
+                judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
+                openclaw=openclaw,
+            )
+        else:
+            done = pipeline.resend_followup(
+                workspace, args.base_dir.resolve(), message_id, estimate_id, model=switch.get("model"),
+                judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
+                openclaw=openclaw,
+            )
+        result["pipeline"] = done.get("outcome")
+        if done.get("proposed_price") is not None:
+            result["proposed_price"] = done["proposed_price"]
+        return result
     # Every other outcome: the owner takes the conversation from here.
     reason = f"owner_decided_{outcome}"
     _close_parked_claim(p, message_id, reason)

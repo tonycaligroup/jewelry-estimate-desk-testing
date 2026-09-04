@@ -77,7 +77,14 @@ def missing_required_fields(spec: dict[str, Any], shop_profile: dict[str, Any] |
                 missing.add("finger_size")
         elif any(word in piece for word in DIMENSION_PIECES) and not present(spec.get("dimensions")):
             missing.add("dimensions")
-    if has_stones(spec):
+    if has_stones(spec) and estimate_record.customer_supplies_stone(spec):
+        # The customer's own stone: the bench needs its shape and size to
+        # build the setting; grade and origin are theirs, not the shop's.
+        if not (present(spec.get("stone_shape")) or present(spec.get("stone_cut"))):
+            missing.add("stone_shape")
+        if not present(spec.get("stone_carat")):
+            missing.add("stone_carat")
+    elif has_stones(spec):
         import cost_components  # local import: cost_components does not import this module
 
         center = cost_components.has_center_stone(spec)

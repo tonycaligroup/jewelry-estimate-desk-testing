@@ -385,6 +385,64 @@ def record_followup_sent(
         return record
 
 
+def followup_stalled(record: dict[str, Any], source_message_id: str, missing: list[str]) -> list[str]:
+    """The fields an earlier follow-up already asked for that this reply still leaves open.
+
+    Empty when this is the first ask or the customer gave something new. The
+    desk never sends the same question twice; the owner decides instead.
+    """
+    if not missing or record.get("status") != "awaiting_specs":
+        return []
+    source_hash = sha256_text(source_message_id)
+    asked_before: set[str] = set()
+    for review in record.get("thread_reviews", []):
+        if not isinstance(review, dict) or review.get("source_message_id_sha256") == source_hash:
+            continue
+        if review.get("outcome") != "awaiting_specs":
+            continue
+        earlier = review.get("missing_required_fields") or []
+        if not isinstance(earlier, list):
+            continue
+        asked_before.update(str(field) for field in earlier)
+    if not asked_before or not (record.get("spec_gate_reply") or record.get("followup_replies")):
+        return []
+    repeated = sorted(set(missing) & asked_before)
+    return repeated if set(missing) <= asked_before else []
+
+
+def mark_jewelers_choice(root: Path, estimate_id: str, source_message_id: str, fields: list[str]) -> dict[str, Any]:
+    """The owner chose to price without these details: they become the jeweler's call.
+
+    The review that decided to ask the customer for them is rewritten to say
+    the specification is complete, so the held-back follow-up is withdrawn
+    and pricing proceeds from the same message.
+    """
+    path = record_path(root, estimate_id)
+    source_hash = sha256_text(source_message_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") != "awaiting_specs":
+            raise ValueError("only an estimate still awaiting specifications can skip details")
+        specification = dict(record.get("specification") or {})
+        for field in fields:
+            specification[str(field)] = "jeweler's choice"
+        record["specification"] = specification
+        record["missing_required_fields"] = sorted(
+            f for f in (record.get("missing_required_fields") or []) if f not in set(fields)
+        )
+        for review in record.get("thread_reviews", []):
+            if isinstance(review, dict) and review.get("source_message_id_sha256") == source_hash \
+                    and review.get("outcome") == "awaiting_specs":
+                review["missing_required_fields"] = [f for f in review.get("missing_required_fields", []) if f not in set(fields)]
+                if not review["missing_required_fields"]:
+                    review["outcome"] = "specs_complete"
+                review["specification_sha256"] = canonical_sha256(specification)
+                review["owner_skipped_fields"] = sorted(str(f) for f in fields)
+        write_object(path, record)
+        return record
+
+
 def followup_sent(record: dict[str, Any], source_message_id: str) -> bool:
     """True when the specification question for this message reached the customer."""
     if record["route"]["gmail_message_id"] == source_message_id:
@@ -622,6 +680,38 @@ def stones_in_words(specification: Any) -> bool:
     return any(word in text for word in STONE_WORDS_IN_TEXT)
 
 
+SUPPLIED_STONE_WORDS = (
+    "my stone", "my diamond", "my own", "our own", "her stone", "her diamond", "his stone", "his diamond",
+    "mother's", "mothers", "father's", "fathers", "grandmother's", "grandmothers", "grandma's", "grandpa's",
+    "family stone", "family diamond", "heirloom", "existing stone", "existing diamond", "the stone i have",
+    "i have a", "i have the", "i already have", "reset", "re-set", "remount", "re-mount", "reuse", "re-use",
+    "customer supplied", "customer-supplied", "supplied by the customer", "their own stone", "own stone",
+)
+
+
+def customer_supplies_stone(specification: Any) -> bool:
+    """The stone is the customer's own: nothing to grade, nothing to buy.
+
+    A mother's diamond going into a new bezel needs its shape and size so the
+    setting fits; its color and clarity change nothing the shop does or
+    charges, and asking for them reads as nonsense to the customer.
+    """
+    if not isinstance(specification, dict):
+        return False
+    supplied = specification.get("customer_supplied_materials")
+    supplied_text = " ".join(str(s) for s in supplied).lower() if isinstance(supplied, list) else str(supplied or "").lower()
+    if supplied_text and supplied_text not in {"none", "no", "n/a", "false"}:
+        if any(word in supplied_text for word in STONE_WORDS_IN_TEXT + ("stone", "gem")):
+            return True
+    text = " ".join(
+        str(specification.get(key) or "").lower()
+        for key in ("stone_type", "notes", "setting_style", "piece_type", "accent_stones")
+    )
+    return any(word in text for word in SUPPLIED_STONE_WORDS) and any(
+        word in text for word in STONE_WORDS_IN_TEXT + ("stone", "gem")
+    )
+
+
 def enforce_specification_policies(
     specification: dict[str, Any],
     missing: list[str],
@@ -707,7 +797,7 @@ def enforce_specification_policies(
             "laboratory-grown",
             "laboratory-created",
         }
-        if has_stones and normalized not in explicit_origins:
+        if has_stones and normalized not in explicit_origins and not customer_supplies_stone(specification):
             result.add("stone_origin")
     return sorted(result)
 

@@ -348,7 +348,11 @@ def process_claim(
             digest=digest, model=model, judge_runner=judge_runner,
         )
 
-    triage = judge.triage(digest, model, judge_runner, openclaw)
+    initiating = (record.get("route") or {}).get("gmail_message_id") == message_id
+    # A reply on a thread that already has a record is the same conversation
+    # continuing; only the message that opened the record is triaged. A
+    # customer asking "what does this have to do with it?" is not junk mail.
+    triage = judge.triage(digest, model, judge_runner, openclaw) if initiating else {"kind": "estimate_request", "note": "reply on an open estimate"}
     if triage["kind"] in NOT_AN_INQUIRY:
         workflow_safe.not_an_inquiry(_namespace(
             p, message_id, estimate_id, reason=triage["kind"], record_output=Path(paths["current_record"]),
@@ -368,6 +372,16 @@ def process_claim(
     if nxt == "done":
         return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
     if nxt == "send_spec_followup":
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        repeated = estimate_record.followup_stalled(record, message_id, reviewed["missing_required_fields"])
+        if repeated and not reviewed["initiating"]:
+            # The customer was already asked for exactly this and did not
+            # answer it. Asking twice reads as a broken record; the owner
+            # decides what happens next.
+            asked = workflow_safe.ask_followup_stalled(
+                _namespace(p, message_id, estimate_id, runner=command_runner), record, repeated,
+            )
+            return {"outcome": "awaiting_owner", "question_id": asked.get("question_id"), "next": "done"}
         return _send_followup(
             p, base_dir, message_id, estimate_id, digest, reviewed["missing_required_fields"],
             reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner,
@@ -375,6 +389,32 @@ def process_claim(
     if nxt == "price":
         return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")
+
+
+def resend_followup(
+    workspace: Path, base_dir: Path, message_id: str, estimate_id: str,
+    model: str | None = None, judge_runner: Runner = subprocess.run, command_runner: Runner = subprocess.run,
+    openclaw: str | None = None,
+) -> dict[str, Any]:
+    """The owner said ask again: send the follow-up the stall check held back."""
+    desk = workspace / "estimate-desk"
+    p = {"monitor_root": desk / "inbox-monitor", "claim_root": desk / "inbox-claims", "record_root": desk / "records",
+         "shop_profile": desk / "shop-profile.json"}
+    paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+    if not Path(paths["gmail_thread"]).exists():
+        import gateway_token  # local import; only needed on a replay
+        import gmail_fetch
+
+        gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
+    profile = workflow_safe.read_object(p["shop_profile"])
+    thread = workflow_safe.read_object(Path(paths["gmail_thread"]))
+    digest = gmail_text.thread_digest(thread, message_id, (profile.get("shop") or {}).get("outbound_mailbox"))
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    missing = list(record.get("missing_required_fields") or [])
+    if not missing:
+        raise ValueError("nothing is missing any more; the estimate can be priced")
+    return _send_followup(p, base_dir, message_id, estimate_id, digest, missing, False, paths, profile,
+                          model, judge_runner, openclaw, command_runner)
 
 
 def _price_after_review(

@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 SCHEMA_VERSION = 1
-QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next"}
-DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next"}
+QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled"}
+DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -40,6 +40,11 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "design_change": ("change", "changed", "changes", "modify", "modification", "different design", "update the design", "revise"),
         "accepts": ("accept", "accepts", "accepted", "go ahead", "approved", "wants it", "yes to the estimate", "take it", "they want it"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
+    },
+    "followup_stalled": {
+        "skip": ("skip", "price it", "go ahead", "without", "don't need", "do not need", "not needed", "jeweler's choice", "your call", "proceed"),
+        "ask_again": ("ask again", "ask them again", "try again", "resend", "send it again", "ask once more"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it"),
     },
     "appointment_next": {
         "times_given": ("offer", "try", "how about", "suggest", "propose", "these", "give them"),
