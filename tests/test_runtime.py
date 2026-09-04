@@ -9037,7 +9037,10 @@ class OwnerQuestionTests(unittest.TestCase):
                 state["finished_at"] = "2026-09-04T19:46:53+00:00"
                 inbox_claim.write_state(state_path, state)
             inbox_monitor.sync_claim(args.monitor_root, "inquiry-1", {"acquired": False, **state})
-            with patch.object(__import__("pipeline"), "price_from_record", return_value={"outcome": "approval_requested", "proposed_price": 1234.5}):
+            # The review cleaned the work folder; the replay must fetch the thread again before pricing.
+            with (
+                patch.object(__import__("pipeline"), "price_from_record", return_value={"outcome": "approval_requested", "proposed_price": 1234.5}),
+            ):
                 again = workflow_safe.answer_question(argparse.Namespace(
                     workspace=ws, base_dir=ROOT, question=owner_questions.reference(q["question_id"]), answer="Use $1500",
                     openclaw="openclaw", runner=Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),

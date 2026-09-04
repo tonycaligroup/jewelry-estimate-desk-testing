@@ -355,6 +355,12 @@ def price_from_record(
     p = {"monitor_root": desk / "inbox-monitor", "claim_root": desk / "inbox-claims", "record_root": desk / "records",
          "shop_profile": desk / "shop-profile.json"}
     paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+    if not Path(paths["gmail_thread"]).exists():
+        # A review that parked this claim cleaned its work folder; fetch again.
+        import gateway_token  # local import; only needed on a replay
+        import gmail_fetch
+
+        gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
     record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
     specification = record.get("specification") or {}
     if not specification:
