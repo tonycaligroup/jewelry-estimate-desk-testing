@@ -283,6 +283,15 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   thread that activated the skill (the response names the chat id), which is
   the same thread where `request-approval` cards appear. So the activation
   binding's key is the right default owner channel. **verified 3 Sep 2026**
+- The main session does not reliably follow a multi-step runbook for an
+  approved brief: on 3 Sep it guessed a subcommand, then called the Gmail and
+  calendar gateways with curl and edited records by hand, three briefs in a
+  row. What works is one exact command line inside the execution payload
+  (`execute`) and inside each owner question. **observed 3 Sep 2026**
+- Calendar writes go through the same gateway as free/busy:
+  `POST https://gateway.maton.ai/google-calendar/calendar/v3/calendars/<id>/events?sendUpdates=all`
+  with a Bearer MATON_API_KEY; the response is a `calendar#event` with `id`.
+  Gmail sends: `POST .../google-mail/gmail/v1/users/me/messages/send`. **verified 3 Sep 2026 (session curl)**
 - `kolo request-approval --help` and `kolo notify-owner --help` print nothing
   (2m46s, empty output), so flags have to be learned from docs or trial; no
   attachment flag is known for approval cards. **observed 3 Sep 2026**

@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import sys
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -20,6 +21,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 FREEBUSY_URL = "https://gateway.maton.ai/google-calendar/calendar/v3/freeBusy"
+EVENTS_URL = "https://gateway.maton.ai/google-calendar/calendar/v3/calendars/{calendar}/events?sendUpdates=all"
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
@@ -148,6 +150,48 @@ def query_freebusy(
         "response_body_sha256": canonical_hash(body),
         "response_body": body,
     }
+
+
+def create_event(
+    calendar_id: str,
+    start: str,
+    end: str,
+    timezone_name: str,
+    summary: str,
+    description: str,
+    attendee_email: str,
+    token: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, Any]:
+    """Insert one event with the customer invited; returns the provider's event."""
+    if parse_timestamp(end, "end") <= parse_timestamp(start, "start"):
+        raise ValueError("end must be after start")
+    if not isinstance(calendar_id, str) or not calendar_id or len(calendar_id) > 255:
+        raise ValueError("calendar_id must contain 1-255 characters")
+    if not token or any(character in token for character in "\r\n"):
+        raise ValueError("MATON_API_KEY is missing or invalid")
+    body = {
+        "summary": summary[:200],
+        "description": description[:2000],
+        "start": {"dateTime": start, "timeZone": timezone_name},
+        "end": {"dateTime": end, "timeZone": timezone_name},
+        "attendees": [{"email": attendee_email}],
+    }
+    request = urllib.request.Request(
+        EVENTS_URL.format(calendar=urllib.parse.quote(calendar_id, safe="")),
+        data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with opener(request, timeout=20) as response:
+        event = json.loads(response.read().decode("utf-8"))
+    if not isinstance(event, dict) or event.get("kind") != "calendar#event" or not event.get("id"):
+        raise ValueError("calendar provider returned an invalid event")
+    return event
 
 
 def main(argv: list[str] | None = None) -> int:

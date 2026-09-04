@@ -381,6 +381,23 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Batch 3: the command travels with the decision (built 3 September 2026).**
+Three approvals in a row (renderings, a booking, and earlier a price) were
+executed by the main session improvising: raw gateway calls, hand-built
+mail, hand-edited records. Now every approval payload carries an `execute`
+field with the one command to run, and every owner question ends with the
+`answer-question` line. Two new one-command executors:
+`send-approved-estimate-brief` (plain-text estimate email from the record and
+profile terms, sent through `send-approved-estimate`) and
+`book-approved-appointment` (re-checks free/busy for the chosen option,
+inserts the event through the calendar gateway with the customer invited,
+sends the confirmation through `gmail_safe`, records the booking receipt,
+reports the brief). Appointment approvals are kept under
+`estimate-desk/approvals/` because claim work is cleaned when the claim
+closes. The judge also resolves a customer's specific request to a local
+date-time and `slots.offer_times` puts it first when it is inside the windows
+and free.
+
 **Answer replay (built 3 September 2026).** `answer-question` leases the
 parked claim before it records the answer, so a failure leaves nothing half
 done; run again, it continues from a claim an earlier attempt already

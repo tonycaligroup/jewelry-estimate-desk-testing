@@ -977,122 +977,59 @@ times based on the desired delivery date.
 
 ### The main Kolo session: hard rules
 
-The main session is the owner's chat, not a worker. It runs only the exact
-commands in the three sections below. It never writes a record, the shop
-profile, a rate, a price, or any file under `estimate-desk/` by hand, never
-runs `cost_components.py`, `pricing_model.py`, `spot_price.py`, or
-`request-approval` itself, and never continues an inquiry in chat: pricing
-happens only in a worker job. A number after a desk question is that
-question's answer. If unsure, ask and wait.
+The main session is the owner's chat, not a worker. It never writes a record,
+the shop profile, a rate, a price, or any file under `estimate-desk/` by hand,
+never calls the Gmail or calendar gateway itself, never runs
+`cost_components.py`, `pricing_model.py`, `spot_price.py`, `gmail_reply.py`,
+or `request-approval`, and never continues an inquiry in chat. Every decision
+the desk needs from the owner arrives with the exact command to run, and the
+session runs that command and nothing else. If unsure, ask and wait.
 
-### Handling approved manual-review briefs in the main Kolo session
+### Approved briefs: run the payload's `execute` line
 
-A manual-review item is also a Kolo approval brief (payload `action_type:
-manual_review` with a `review_key`). On an approved payload of that kind, run
-exactly one command:
+Every approval the desk files (price, renderings, appointment, manual
+review) carries an `execute` field in its execution payload. When Kolo
+delivers the decision as approved, copy that line, replace `<Brief ID>` with
+the Brief ID from the delivered decision, run it, and paste its output. That
+one command re-verifies the bound state, sends or books through the desk's
+own helpers, records the receipt, and reports the brief executed. A repeat is
+a no-op. A rejected brief needs no command, except a rejected rendering:
+`workflow_safe.py reject-rendering --workspace '<absolute-workspace>'
+--message-id '<gmail_message_id from the payload>'`.
+
+The execute lines are, for reference:
 
 ```bash
+python3 {baseDir}/scripts/workflow_safe.py send-approved-estimate-brief \
+  --workspace '<absolute-workspace>' --estimate-id '<jed-id>' --brief-id '<Brief ID>'
+python3 {baseDir}/scripts/workflow_safe.py send-approved-rendering \
+  --workspace '<absolute-workspace>' --estimate-id '<jed-id>' \
+  --message-id '<gmail_message_id>' --brief-id '<Brief ID>'
+python3 {baseDir}/scripts/workflow_safe.py book-approved-appointment \
+  --workspace '<absolute-workspace>' --estimate-id '<jed-id>' \
+  --message-id '<gmail_message_id>' --brief-id '<Brief ID>' --option 1
 python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
   --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-  --review-key '<review_key from the payload>' \
-  --brief-id '<Brief ID from the delivered decision>'
+  --review-key '<review_key>' --brief-id '<Brief ID>'
 ```
 
-It closes the review (a repeat is a no-op) and reports the brief executed. A
-rejected brief needs no action. Never read the customer's mail into the chat,
-and never resolve a review the owner did not approve.
+Edit Intent on an appointment card picks another option: run the same line
+with `--option 2` or `--option 3`. An edited price is not applied by the
+session: reject the brief and tell the owner the desk will re-price.
 
-### Handling the owner's answer to a desk question in the main Kolo session
+### Owner questions: run the command in the question
 
 The desk asks the owner questions in plain words with a six-character code
 and parks the claim: which rate to use, whether a new thread from a known
-customer is the same piece or a new one, what an unclear reply after an
-estimate meant. When the owner answers, run exactly one command, words
-verbatim, whatever the question was:
-
-```bash
-python3 {baseDir}/scripts/workflow_safe.py answer-question \
-  --workspace '<absolute-workspace>' --base-dir '{baseDir}' \
-  --question '<question code, when the owner quoted one>' \
-  --answer '<the owner's reply, verbatim>'
-```
-
-Omit `--question` when exactly one question is open. It applies the answer
-(saves the rate and prices; quotes a new piece; or closes the thread to the
-owner) and reports what it did. If it refuses (no number, an unclear answer,
-several open questions, an invalid record), tell the owner what it said and
-wait; never pick an answer or re-run with a different one. If it fails part
-way (a traceback), run the same command again: it carries on from where it
-stopped and replays a recorded answer whose inquiry never moved.
-
-### Handling approved appointment requests in the main Kolo session
-
-When Kolo delivers an approved execution payload whose `action_type` is
-`appointment_booking`, the main session must continue the existing estimate,
-not create a new inquiry:
-
-1. Load the local record named by `estimate_id`. Verify its customer email and
-   Gmail thread against the execution payload with the existing
-   email-identity and route-ownership rules. The local record remains
-   authoritative; stop if any value differs.
-2. Query Google Calendar again with `calendar_query.py`. Approval does not make
-   stale availability current. Use the same routed calendar integration
-   configured during activation for the event write, and include the
-   authoritative customer email as an attendee.
-3. If one approved time remains unambiguous and free, create the event through
-   that calendar integration. Only after the provider returns a successful
-   event ID may the record advance to `appointment_booked` and the customer be
-   told that the appointment is confirmed.
-4. If no single time was approved or the approved time is no longer free, use
-   `appointment_options.py` to create two or three fresh near-term options.
-   Send those options through the same authenticated Gmail reply route used by
-   the estimate, in the authoritative original thread. Do not write an event
-   or claim a booking yet.
-5. Before a new calendar write, stop if the authoritative record already has an
-   `appointment_booked` receipt; do not create another event or send another
-   confirmation. After a successful calendar write and confirmation in the
-   authoritative Gmail thread, write a private JSON receipt containing exactly
-   `estimate_id`, `source_message_id`, `calendar_event_id`, `confirmed_start`,
-   `confirmed_end`, `confirmation_message_id`, and `confirmation_thread_id`,
-   then run:
-
-   ```bash
-   python3 {baseDir}/scripts/workflow_safe.py record-appointment-booked \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --estimate-id '<jed-id>' --receipt '<private-receipt-json>' \
-     --record-output '<private-current-record-json>'
-   ```
-
-   The helper matches the source-message hash to the durable appointment
-   approval, validates the original Gmail thread, atomically stores the event
-   and confirmation receipt, and mirrors the `appointment_booked` record.
-   Identical retries are no-ops and conflicting receipts fail closed. Never
-   expose the approval payload or internal estimate data to the customer. This
-   narrow receipt fix does not close the provider-action crash window before
-   receipt persistence; treat such an unverified retry as manual work rather
-   than risking a duplicate booking or confirmation.
-
-### Handling approved renderings in the main Kolo session
-
-Renderings are approval-gated at every stage. After a customer asks to see
-the design, the desk generates two views, shows them to the owner in chat,
-files an approval whose execution payload has `action_type: send_rendering`,
-and parks the claim. When Kolo delivers that payload approved, run exactly
-one command and nothing else:
-
-```bash
-python3 {baseDir}/scripts/workflow_safe.py send-approved-rendering \
-  --workspace '<absolute-workspace>' \
-  --estimate-id '<estimate_id from the payload>' \
-  --message-id '<gmail_message_id from the payload>' \
-  --brief-id '<Brief ID from the delivered decision>'
-```
-
-It verifies the images are exactly the ones the owner saw, emails them in the
-customer's thread with the fixed note, and reports the brief executed. When
-the owner rejects, run `workflow_safe.py reject-rendering --workspace
-'<absolute-workspace>' --message-id '<gmail_message_id>'`: nothing is sent.
-Never generate, attach, or send renderings from this session.
+customer is the same piece or a new one, what an unclear reply meant. Each
+question message ends with the exact `answer-question` command; when the owner
+replies, run it with their words verbatim in `--answer` and paste the output.
+It applies the answer (saves the rate and prices; quotes a new piece; or
+closes the thread to the owner). If it refuses, tell the owner what it said
+and wait; never pick an answer or re-run with a different one. If it fails
+part way (a traceback), run the same command again: it carries on from where
+it stopped. Without a code, `--question` may be omitted when exactly one
+question is open.
 
 ## Phase 5: records, follow-up, and cleanup
 

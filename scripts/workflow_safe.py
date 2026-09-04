@@ -15,6 +15,7 @@ from typing import Any
 
 import approval_guard
 import activation_binding
+import calendar_query
 import customer_content_guard
 import estimate_record
 import gmail_reply
@@ -66,6 +67,36 @@ def mirror_record(record: dict[str, Any], path: Path) -> None:
         text=True,
         shell=False,
     )
+
+
+def skill_dir() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def workspace_of(monitor_root: Path) -> Path:
+    return monitor_root.resolve().parent.parent
+
+
+def execute_line(monitor_root: Path, subcommand: str, **flags: str) -> str:
+    """The one command the main session runs when a brief is approved."""
+    parts = [f"python3 {skill_dir()}/scripts/workflow_safe.py {subcommand}", f"--workspace {workspace_of(monitor_root)}"]
+    for key, value in flags.items():
+        parts.append(f"--{key.replace('_', '-')} {value}")
+    return " ".join(parts)
+
+
+def approval_store_path(monitor_root: Path, estimate_id: str, message_id: str) -> Path:
+    """Durable private copy of one appointment approval, outside claim work."""
+    return workspace_of(monitor_root) / "estimate-desk" / "approvals" / f"{estimate_id}-{inbox_claim.claim_key(message_id)[:16]}.json"
+
+
+def _attach_answer_command(root: Path, monitor_root: Path, question: dict[str, Any]) -> dict[str, Any]:
+    if not question.get("answer_command"):
+        question["answer_command"] = owner_questions.answer_command(
+            skill_dir(), workspace_of(monitor_root), question["question_id"]
+        )
+        owner_questions.save(root, question)
+    return question
 
 
 def finish_processed(
@@ -130,6 +161,10 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
         approval = read_object(args.approval_request)
     else:
         approval = approval_guard.build_request(current)
+        approval["execute"] = execute_line(
+            args.monitor_root, "send-approved-estimate-brief",
+            estimate_id=args.estimate_id, brief_id="<Brief ID>",
+        )
         estimate_record.validate_approval_request(
             args.record_root, args.estimate_id, args.message_id, approval
         )
@@ -164,6 +199,7 @@ def _appointment_approval_details(
     record: dict[str, Any],
     message_id: str,
     intent: dict[str, Any],
+    monitor_root: Path | None = None,
 ) -> dict[str, Any]:
     if not {"requested_times", "calendar_availability"} <= set(intent) or not set(intent) <= {
         "requested_times", "calendar_availability", "availability_note"
@@ -217,6 +253,11 @@ def _appointment_approval_details(
     }
     if normalized_slots:
         details["proposed_time"] = dict(normalized_slots[0])
+    if monitor_root is not None:
+        details["execute"] = execute_line(
+            monitor_root, "book-approved-appointment",
+            estimate_id=record["estimate_id"], message_id=message_id, brief_id="<Brief ID>", option="1",
+        )
     note = intent.get("availability_note")
     if isinstance(note, str) and note.strip():
         details["availability_note"] = note.strip()[:160]
@@ -234,12 +275,15 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     intent = read_object(args.appointment_intent)
     if args.appointment_approval.exists():
         approval = read_object(args.appointment_approval)
-        expected = _appointment_approval_details(record, args.message_id, intent)
+        expected = _appointment_approval_details(record, args.message_id, intent, args.monitor_root)
         if approval != expected:
             raise ValueError("existing appointment approval binding changed")
     else:
-        approval = _appointment_approval_details(record, args.message_id, intent)
+        approval = _appointment_approval_details(record, args.message_id, intent, args.monitor_root)
         write_private(args.appointment_approval, approval)
+    # The claim's work directory is cleaned once the claim closes; the executor
+    # needs the options the owner saw, so keep a durable private copy.
+    write_private(approval_store_path(args.monitor_root, args.estimate_id, args.message_id), approval)
     approver = activation_binding.load(
         activation_binding.binding_path(args.monitor_root)
     )
@@ -827,6 +871,7 @@ def ask_same_sender(
         root, "same_sender", existing_estimate_id or "jed-0000000000000000", args.message_id, text,
         {"existing_estimate_id": existing_estimate_id, "new_subject": new_subject},
     )
+    question = _attach_answer_command(root, args.monitor_root, question)
     question = owner_questions.deliver(
         root, question, runner=getattr(args, "runner", subprocess.run),
         extra_args=kolo_safe.owner_channel_args(args.monitor_root),
@@ -866,6 +911,7 @@ def ask_unclear_reply(args: argparse.Namespace, record: dict[str, Any], outcome:
     _created, question = owner_questions.create_decision(
         root, "unclear_reply", args.estimate_id, args.message_id, text, {"outcome": outcome},
     )
+    question = _attach_answer_command(root, args.monitor_root, question)
     question = owner_questions.deliver(
         root, question, runner=getattr(args, "runner", subprocess.run),
         extra_args=kolo_safe.owner_channel_args(args.monitor_root),
@@ -912,6 +958,7 @@ def ask_missing_rate(args: argparse.Namespace) -> dict[str, Any]:
         customer,
         owner_questions.summary_of_piece(record.get("specification")),
     )
+    question = _attach_answer_command(root, args.monitor_root, question)
     question = owner_questions.deliver(
         root, question, runner=getattr(args, "runner", subprocess.run),
         extra_args=kolo_safe.owner_channel_args(args.monitor_root),
@@ -1232,6 +1279,10 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
         "customer_email": record["route"]["recipient"],
         "piece": piece,
         "images": [{"slot": index, "sha256": _sha256_file(image)} for index, image in enumerate(images, start=1)],
+        "execute": execute_line(
+            args.monitor_root, "send-approved-rendering",
+            estimate_id=args.estimate_id, message_id=args.message_id, brief_id="<Brief ID>",
+        ),
     }
     approval_path = Path(paths["work_dir"]) / "rendering-approval.json"
     if approval_path.exists() and read_object(approval_path) != details:
@@ -1285,6 +1336,172 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
             kolo_safe.build_update_brief(args.brief_id, "executed", result),
             runner=getattr(args, "runner", subprocess.run),
         )
+    return result
+
+
+CONFIRMATION_NOTE = (
+    "Hello,\n\nYou are booked: {when} at {shop}. A calendar invitation is on its way to this address; "
+    "please accept it so it lands on your calendar.\n\nWe will go over the design for {piece} together. "
+    "If the time stops working for you, reply here and we will find another.\n\n{shop}\n"
+)
+
+
+def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
+    """The owner approved a time: re-check it, book it, confirm it, record it. One command."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+    route_ownership.validate_record(record)
+    runner = getattr(args, "runner", subprocess.run)
+    existing = record.get("appointment_booked")
+    if isinstance(existing, dict):
+        result = {"outcome": "already_booked", "confirmed_start": existing.get("confirmed_start")}
+        _report_brief(args, result, runner)
+        return result
+    approval = read_object(approval_store_path(p["monitor_root"], args.estimate_id, args.message_id))
+    if approval.get("estimate_id") != args.estimate_id or approval.get("source_message_id") != args.message_id:
+        raise ValueError("appointment approval does not match this estimate and message")
+    source_hash = estimate_record.sha256_text(args.message_id)
+    if not any(
+        isinstance(item, dict) and item.get("source_message_id_sha256") == source_hash
+        for item in record.get("appointment_approval_requests", [])
+    ):
+        raise ValueError("record has no approval request for this message")
+    options = approval.get("calendar_availability") or []
+    if getattr(args, "start", None):
+        chosen = next((o for o in options if o["start"] == args.start), None)
+        if chosen is None:
+            raise ValueError("--start must be one of the options the owner saw")
+    else:
+        index = int(getattr(args, "option", 1) or 1)
+        if not 1 <= index <= len(options):
+            raise ValueError(f"option must be between 1 and {len(options)}")
+        chosen = options[index - 1]
+    profile = read_object(p["shop_profile"])
+    scheduling = profile.get("scheduling") or {}
+    calendar_id = scheduling.get("calendar")
+    if not calendar_id:
+        raise ValueError("no calendar configured in the shop profile")
+    import gateway_token  # local import: only needed here
+
+    token = gateway_token.load_token()
+    opener = getattr(args, "opener", None)
+    kwargs = {"opener": opener} if opener else {}
+    # Approval does not make stale availability current.
+    receipt = calendar_query.query_freebusy(
+        chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC", calendar_id, token, **kwargs
+    )
+    busy = receipt["response_body"]["calendars"][calendar_id].get("busy", [])
+    if busy:
+        raise ValueError("the approved time is no longer free; ask the desk for new options")
+    shop = (profile.get("shop") or {}).get("name") or "the shop"
+    piece = approval.get("piece") or "your piece"
+    event = calendar_query.create_event(
+        calendar_id, chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC",
+        f"{shop}: design consultation, {piece}"[:200],
+        f"Design consultation for {piece}. Estimate {args.estimate_id.upper()}.",
+        record["route"]["recipient"], token, **kwargs,
+    )
+    work_dir = p["monitor_root"].resolve().parent / "work" / f"booking-{inbox_claim.claim_key(args.message_id)[:16]}"
+    work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    body = CONFIRMATION_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+    customer_content_guard.validate_customer_text(body)
+    payload = gmail_reply.build_reply(record["route"], body)
+    payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
+    write_private(payload_path, payload)
+    delivery = gmail_safe.send_reply_claimed(
+        p["claim_root"], args.message_id, None,
+        f"appointment_confirmation:{args.estimate_id}:{args.message_id}",
+        payload_path, response_path, token, runner=runner, allow_processed_claim=True,
+    )
+    booked = estimate_record.record_appointment_booked(p["record_root"], args.estimate_id, {
+        "estimate_id": args.estimate_id,
+        "source_message_id": args.message_id,
+        "calendar_event_id": event["id"],
+        "confirmed_start": chosen["start"],
+        "confirmed_end": chosen["end"],
+        "confirmation_message_id": delivery["id"],
+        "confirmation_thread_id": delivery["threadId"],
+    })
+    mirror_record(booked, work_dir / "current-record.json")
+    result = {"outcome": "appointment_booked", "confirmed_start": chosen["start"], "calendar_event_id": event["id"],
+              "record_status": booked.get("status")}
+    _report_brief(args, result, runner)
+    return result
+
+
+def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any) -> None:
+    brief_id = getattr(args, "brief_id", None)
+    if brief_id and brief_id != "<Brief ID>":
+        kolo_safe.run_command(kolo_safe.build_update_brief(brief_id, "executed", result), runner=runner)
+
+
+ESTIMATE_NOTE = (
+    "Hello,\n\nThank you for the details on {piece}. Here is where the estimate lands:\n\n"
+    "{spec_lines}\n\nEstimate: ${price}\n\n"
+    "Just so you know how to read this: we estimate on the high end on purpose. This figure is pending "
+    "final design approval, and once your design is finalized the final price is often a little lower. "
+    "If it comes in under, we pass that straight along to you. Nothing is locked in until you have seen "
+    "and approved the final design.\n\n{lead_time}This estimate is good through {valid_through}.\n\n"
+    "If you would like to move forward, reply here and we will set up a time to go over the design "
+    "together.\n\n{shop}\n"
+)
+
+
+def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
+    """The owner approved the price: write the customer email and send it. One command."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    runner = getattr(args, "runner", subprocess.run)
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+    route_ownership.validate_record(record)
+    if record.get("status") == "estimate_sent":
+        result = {"outcome": "already_sent", "price": record.get("proposed_price")}
+        _report_brief(args, result, runner)
+        return result
+    if record.get("status") != "pending_approval":
+        raise ValueError(f"estimate is {record.get('status')}, not pending_approval")
+    price = float(getattr(args, "approved_price", None) or record["proposed_price"])
+    if abs(price - float(record["proposed_price"])) > 0.005:
+        raise ValueError("an edited price needs a fresh brief; reject this one and ask the desk to re-price")
+    approved = {
+        "approval_status": "approved",
+        "estimate_id": args.estimate_id,
+        "owner_approved_price": price,
+        "binding_hash": record["approval_binding_hash"],
+    }
+    profile = read_object(p["shop_profile"])
+    shop = (profile.get("shop") or {}).get("name") or "the shop"
+    terms = profile.get("terms") or {}
+    valid_days = int(terms.get("quote_valid_days") or 7)
+    lead = terms.get("lead_time_business_days")
+    lead_time = f"Estimated lead time: about {lead} business days from design approval, not a guarantee. " if lead else ""
+    from datetime import date, timedelta
+
+    valid_through = (date.today() + timedelta(days=valid_days)).strftime("%B %-d, %Y")
+    spec = record.get("specification") or {}
+    spec_lines = "\n".join(
+        f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
+        if value not in (None, "", []) and key != "notes"
+    )
+    body = ESTIMATE_NOTE.format(
+        piece=owner_questions.summary_of_piece(spec), spec_lines=spec_lines, price=f"{price:,.2f}",
+        lead_time=lead_time, valid_through=valid_through, shop=shop,
+    )
+    work_dir = p["monitor_root"].resolve().parent / "work" / f"estimate-{args.estimate_id}"
+    work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (work_dir / "customer-reply.txt").write_text(body, encoding="utf-8")
+    write_private(work_dir / "approved.json", approved)
+    sent = send_approved_estimate(argparse.Namespace(
+        claim_root=p["claim_root"], record_root=p["record_root"], estimate_id=args.estimate_id,
+        approved=work_dir / "approved.json", body=work_dir / "customer-reply.txt",
+        gmail_payload=work_dir / "gmail-send.json", provider_response=work_dir / "gmail-provider-response.json",
+        record_output=work_dir / "current-record.json", message_id=None, current_state=None,
+    ))
+    result = {"outcome": "estimate_sent", "price": price, "record_status": sent.get("status")}
+    _report_brief(args, result, runner)
     return result
 
 
@@ -1463,6 +1680,18 @@ def main(argv: list[str] | None = None) -> int:
     render_ok.add_argument("--estimate-id", required=True)
     render_ok.add_argument("--message-id", required=True)
     render_ok.add_argument("--brief-id", default=None)
+    book = sub.add_parser("book-approved-appointment")
+    book.add_argument("--workspace", type=Path, required=True)
+    book.add_argument("--estimate-id", required=True)
+    book.add_argument("--message-id", required=True)
+    book.add_argument("--brief-id", default=None)
+    book.add_argument("--option", type=int, default=1)
+    book.add_argument("--start", default=None)
+    send_brief = sub.add_parser("send-approved-estimate-brief")
+    send_brief.add_argument("--workspace", type=Path, required=True)
+    send_brief.add_argument("--estimate-id", required=True)
+    send_brief.add_argument("--brief-id", default=None)
+    send_brief.add_argument("--approved-price", type=float, default=None)
     render_no = sub.add_parser("reject-rendering")
     render_no.add_argument("--workspace", type=Path, required=True)
     render_no.add_argument("--message-id", required=True)
@@ -1511,6 +1740,10 @@ def main(argv: list[str] | None = None) -> int:
             record = send_approved_rendering(args)
         elif args.command == "reject-rendering":
             record = reject_rendering(args)
+        elif args.command == "book-approved-appointment":
+            record = book_approved_appointment(args)
+        elif args.command == "send-approved-estimate-brief":
+            record = send_approved_estimate_brief(args)
         elif args.command == "review-thread":
             record = review_thread(args)
         elif args.command == "price":
