@@ -1591,7 +1591,7 @@ class SafeCliTests(unittest.TestCase):
             self.assertNotIn("owner_notification", stored)
             message = runner.call_args.args[0][-1]
             self.assertIn("stepped back from one customer email", message)
-            self.assertIn("Ask Kolo", message)
+            self.assertIn("show desk reviews", message)
             self.assertNotIn("@", message)
 
     def test_duplicate_claimed_monitor_notification_is_noop(self) -> None:
@@ -6186,10 +6186,6 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(mirror.call_args.args[0]["estimate_id"], result["estimate_id"])
             self.assertEqual(Path(mirror.call_args.args[1]), Path(paths["inquiry_record"]))
             notify.assert_not_called()  # no 'customer replied' ping since 4 Sep 2026
-            self.assertEqual(
-                notify.call_args.args[3], f"customer_replied:{result['estimate_id']}:inquiry-1"
-            )
-            self.assertEqual(notify.call_args.args[5], "customer-replied")
             state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
             self.assertEqual(state["processing_phase"], "ownership_confirmed")
             self.assertEqual(state["status"], "processing")
