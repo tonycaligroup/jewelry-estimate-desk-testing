@@ -8390,6 +8390,21 @@ class MonitoringHoursTests(unittest.TestCase):
             cron_config.schedule_expr("Funday 9-17")
 
 
+class BriefTitleTests(unittest.TestCase):
+    def test_price_brief_title_carries_cost_and_profit_for_sms(self) -> None:
+        details = {
+            "specification": {"piece_type": "engagement ring", "metal": "platinum", "stone_type": "lab-grown diamond", "center_carat": 1.75},
+            "proposed_price": 3945.6,
+            "owner_review": {"customer_price": 3945.6, "hard_cost_total": 2100.0, "estimated_gross_profit": 1845.6},
+        }
+        title = kolo_safe.approval_title(details, "jed-0123456789abcdef")
+        self.assertTrue(title.startswith("Price approval: an engagement ring"))
+        self.assertIn("quote $3,945.60, cost $2,100.00, profit $1,845.60 (47%)", title)
+        self.assertLessEqual(len(title), 120)
+        # Without a review the title still names the price.
+        self.assertTrue(kolo_safe.approval_title({"specification": {"piece_type": "band"}, "proposed_price": 900.0}, "jed-0123456789abcdef").endswith(", $900.00"))
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:

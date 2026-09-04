@@ -159,6 +159,10 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   <JSON> --session-key <key>` files a brief in the owner's Approval Required
   queue. Details render as labeled rows; nested objects render as
   `[object Object]`, so keep them flat strings. **verified**
+- When the owner's channel is SMS, a brief arrives as one text: "Approval
+  needed (Brief #N): <action title> Reply APPROVE or REJECT". Nothing else
+  from the card reaches the phone, so everything the owner needs to decide
+  must be in the title (under 120 characters). **verified 4 Sep 2026 (screenshot)**
 - The card shows the action title, the details rows (order not controllable),
   the reasoning, and three buttons: Reject (reason chips plus notes), Edit
   Intent, Approve. **verified on the card; buttons per portal docs**

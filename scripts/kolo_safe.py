@@ -128,7 +128,17 @@ def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     price = review.get("customer_price", details.get("proposed_price"))
     piece = _piece_words(details.get("specification"))
     money = _money(price) if isinstance(price, (int, float)) and not isinstance(price, bool) else "price pending"
-    return f"Price approval: {piece}, {money}"[:120]
+    # The title is all an SMS delivery shows ("Approval needed (Brief #N):
+    # <title> Reply APPROVE or REJECT"), so the owner-only cost and profit
+    # ride in it. Only the owner receives it.
+    tail = f", {money}"
+    hard = review.get("hard_cost_total")
+    profit = review.get("estimated_gross_profit")
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (price, hard, profit)):
+        pct = f" ({profit / price * 100:.0f}%)" if price else ""
+        tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}"
+    room = 120 - len("Price approval: ") - len(tail)
+    return f"Price approval: {piece[:max(room, 12)]}{tail}"
 
 
 def approval_details(details: dict[str, Any], estimate_id: str) -> dict[str, str]:
