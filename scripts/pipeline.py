@@ -148,9 +148,25 @@ def render_and_send(
     ))
 
 
+def _last_offered_times(p: dict[str, Path], estimate_id: str | None) -> list[dict[str, Any]]:
+    """The options in the shop's most recent offer to this customer, if any."""
+    if not estimate_id:
+        return []
+    try:
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    except (OSError, ValueError):
+        return []
+    offers = record.get("times_offered") or []
+    if not isinstance(offers, list) or not offers:
+        return []
+    last = offers[-1]
+    return list(last.get("options") or []) if isinstance(last, dict) else []
+
+
 def appointment_intent(
     p: dict[str, Path], digest: dict[str, Any], paths: dict[str, str],
     model: str | None, judge_runner: Runner, openclaw: str | None, token: str | None = None,
+    estimate_id: str | None = None,
 ) -> dict[str, Any]:
     """What the customer asked for, plus live-checked times from the windows."""
     profile = workflow_safe.read_object(p["shop_profile"])
@@ -162,9 +178,11 @@ def appointment_intent(
         now_local = datetime.now(ZoneInfo(zone_name)).strftime("%A %Y-%m-%d %H:%M")
     except (KeyError, ValueError, OSError):
         now_local = None
+    offered_before = _last_offered_times(p, estimate_id)
     try:
         judged = judge.extract_requested_times(
             digest, model, judge_runner, openclaw, now_local=now_local, timezone_name=zone_name,
+            offered=offered_before,
         )
         asked, resolved = judged["requested_times"], judged.get("resolved_times", [])
     except judge.JudgmentError:
@@ -203,7 +221,7 @@ def post_estimate_actions(
     if wants_appointment:
         intent_path = Path(paths["appointment_intent"])
         workflow_safe.write_private(
-            intent_path, appointment_intent(p, digest or {"messages": []}, paths, model, judge_runner, openclaw)
+            intent_path, appointment_intent(p, digest or {"messages": []}, paths, model, judge_runner, openclaw, estimate_id=estimate_id)
         )
         workflow_safe.request_appointment_approval(argparse.Namespace(
             monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],

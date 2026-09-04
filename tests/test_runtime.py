@@ -8242,6 +8242,31 @@ class RejectionPollTests(unittest.TestCase):
             self.assertEqual(calls, [])
 
 
+class AcceptedOfferTests(unittest.TestCase):
+    def test_judge_prompt_carries_the_offered_times_and_pipeline_reads_the_last_offer(self) -> None:
+        offered = [{"start": "2026-09-07T10:30:00-07:00", "end": "2026-09-07T11:00:00-07:00", "label": "Monday, September 7 at 10:30 AM PDT"}]
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            [], 0, json.dumps({"ok": True, "capability": "model.run", "outputs": [{"text": json.dumps(
+                {"requested_times": ["that's good"], "resolved_times": ["2026-09-07T10:30"]})}]}), ""))
+        out = judge.extract_requested_times({"messages": [{"claimed": True, "body": "that's good", "sent_by": "customer"}]},
+                                            "m", runner, "openclaw", now_local="Thursday 2026-09-03 19:00",
+                                            timezone_name="America/Los_Angeles", offered=offered)
+        prompt = runner.call_args.args[0][runner.call_args.args[0].index("--prompt") + 1]
+        self.assertIn("last email offered these times", prompt)
+        self.assertIn("Monday, September 7 at 10:30 AM PDT = 2026-09-07T10:30", prompt)
+        self.assertEqual(out["resolved_times"], ["2026-09-07T10:30"])
+        with tempfile.TemporaryDirectory() as directory:
+            record_root = Path(directory) / "records"
+            record = {"schema_version": 1, "estimate_id": "jed-0123456789abcdef", "status": "estimate_sent",
+                      "route": {"channel": "gmail", "thread_id": "t", "gmail_message_id": "m0", "recipient": "c@example.net",
+                                "identity_key": gmail_route.email_identity_key("c@example.net"), "mailbox": "shop@example.com",
+                                "original_subject": "Ring", "original_message_id": "<a@b>", "references": []},
+                      "inbound_timestamp_ms": 1, "times_offered": [{"options": offered, "provider_message_id": "x"}]}
+            estimate_record.persist_record(record_root, record)
+            self.assertEqual(pipeline._last_offered_times({"record_root": record_root}, "jed-0123456789abcdef"), offered)
+            self.assertEqual(pipeline._last_offered_times({"record_root": record_root}, None), [])
+
+
 class PlainTextMailTests(unittest.TestCase):
     def test_markdown_from_the_model_is_stripped_before_the_customer_sees_it(self) -> None:
         body = (

@@ -405,22 +405,34 @@ def extract_requested_times(
     openclaw: str | None = None,
     now_local: str | None = None,
     timezone_name: str | None = None,
+    offered: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The customer's own words about when they want to meet, nothing invented.
 
     When the words name a specific day and clock time ("tomorrow at 1pm",
     "Tuesday at 10:30"), the model also resolves them to local date-times so
     the calendar can offer that exact slot first. Vague words ("next week",
-    "afternoons") resolve to nothing.
+    "afternoons") resolve to nothing. When the shop has just offered times,
+    a customer picking or accepting one ("that's good", "the second one",
+    "Monday works") resolves to that offered slot.
     """
     today = (
         f"Today is {now_local} in the shop's timezone ({timezone_name}). "
         if now_local and timezone_name else ""
     )
+    offered_text = ""
+    if offered:
+        lines = "; ".join(f"{o.get('label') or o.get('start')} = {str(o.get('start'))[:16]}" for o in offered[:3])
+        offered_text = (
+            f"The shop's last email offered these times: {lines}. If the newest customer message accepts or "
+            "picks one of them (\"that works\", \"the second one\", \"Monday is fine\"), resolve it to that "
+            "offered time exactly as given after the equals sign; if they accept without naming one and only "
+            "one was offered, use that one. "
+        )
     prompt = (
         "A customer of a jewelry shop asked to meet. From ONLY the newest customer message (marked as the one "
         "being handled), copy the customer's own words about timing, for example \"early next week\", "
-        "\"Tuesday afternoon\", \"noon on the 9th\". " + today +
+        "\"Tuesday afternoon\", \"noon on the 9th\". " + today + offered_text +
         "When a quote names a specific day AND a clock time, also resolve it to a local date-time in the "
         "form YYYY-MM-DDTHH:MM; leave out anything vague. Answer with one JSON object only: "
         '{"requested_times": [<up to three short quotes>], "resolved_times": [<zero to three YYYY-MM-DDTHH:MM>]}. '
