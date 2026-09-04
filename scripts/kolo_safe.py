@@ -19,17 +19,20 @@ import inbox_monitor
 
 
 ESTIMATE_ID_RE = re.compile(r"^jed-[0-9a-f]{16}$")
-OWNER_NOTIFICATION_MESSAGES = {
+# Owner pings are reserved for decisions and final outcomes; progress
+# messages ("customer replied", "ready for approval") were removed on
+# 4 September 2026 because the card or the question already says it.
+OWNER_NOTIFICATION_MESSAGES = {  # kept for the CLI and its journaling; the desk itself sends neither
     "approval-ready": "Estimate {estimate_id} is ready for approval. Open the brief in Kolo.",
     "customer-replied": "Customer replied on estimate {estimate_id}. Open Kolo to review.",
 }
 MONITOR_NOTIFICATION_MESSAGES = {
     "manual-review": (
-        "Jewelry Estimate Desk has an unresolved manual-review item. "
-        "Ask Kolo to show unresolved Jewelry Estimate Desk reviews."
+        "The desk stepped back from one customer email it could not finish; nothing was sent to the "
+        "customer. Reply \"show desk reviews\" to see which one."
     ),
-    "system-actionable": "Jewelry Estimate Desk inbox monitor needs attention. Open Kolo to review.",
-    "state-error": "Jewelry Estimate Desk inbox monitor state needs attention. Open Kolo to review.",
+    "system-actionable": "The desk's inbox watcher needs attention; it is not reading email until this is fixed.",
+    "state-error": "The desk's inbox watcher found its own records inconsistent and stopped; it needs a repair.",
 }
 
 

@@ -708,14 +708,8 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
         return result
     inbox_claim.advance_phase(args.claim_root, args.message_id, token, "ownership_confirmed")
     estimate_id = record["estimate_id"]
-    kolo_safe.notify_owner_claimed(
-        args.claim_root,
-        args.message_id,
-        token,
-        f"customer_replied:{estimate_id}:{args.message_id}",
-        estimate_id,
-        "customer-replied",
-    )
+    # No "customer replied" ping: the owner hears from the desk only when a
+    # decision is needed or something final happened (WORKFLOW.md 6.10).
     result.update({
         "outcome": "ownership_confirmed",
         "estimate_id": estimate_id,

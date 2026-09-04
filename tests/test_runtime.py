@@ -1590,7 +1590,7 @@ class SafeCliTests(unittest.TestCase):
             )
             self.assertNotIn("owner_notification", stored)
             message = runner.call_args.args[0][-1]
-            self.assertIn("unresolved manual-review item", message)
+            self.assertIn("stepped back from one customer email", message)
             self.assertIn("Ask Kolo", message)
             self.assertNotIn("@", message)
 
@@ -6185,7 +6185,7 @@ class IntakeTests(unittest.TestCase):
             mirror.assert_called_once()
             self.assertEqual(mirror.call_args.args[0]["estimate_id"], result["estimate_id"])
             self.assertEqual(Path(mirror.call_args.args[1]), Path(paths["inquiry_record"]))
-            notify.assert_called_once()
+            notify.assert_not_called()  # no 'customer replied' ping since 4 Sep 2026
             self.assertEqual(
                 notify.call_args.args[3], f"customer_replied:{result['estimate_id']}:inquiry-1"
             )
@@ -6228,7 +6228,7 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(result["thread_message_count"], 2)
             self.assertEqual(result["next_action"], "review_thread")
             mirror.assert_not_called()
-            notify.assert_called_once()
+            notify.assert_not_called()  # no 'customer replied' ping since 4 Sep 2026
 
     def test_auto_reply_is_completed_without_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
