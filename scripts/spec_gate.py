@@ -49,7 +49,7 @@ def has_stones(spec: dict[str, Any]) -> bool:
     count = spec.get("stone_count")
     if isinstance(count, (int, float)) and not isinstance(count, bool) and count > 0:
         return True
-    return present(spec.get("accent_stones"))
+    return present(spec.get("accent_stones")) or estimate_record.stones_in_words(spec)
 
 
 def missing_required_fields(spec: dict[str, Any], shop_profile: dict[str, Any] | None) -> list[str]:

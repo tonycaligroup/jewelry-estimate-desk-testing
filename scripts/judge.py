@@ -463,7 +463,19 @@ def resolve_owner_times(
     return ask_json(prompt, check_requested_times, model, runner, openclaw)
 
 
-def check_quantities(value: dict[str, Any], fee_catalog: list[str], stone_catalog: list[str], needs_carat: bool) -> dict[str, Any]:
+ORIGIN_WORDS = {"natural": "natural", "lab": "lab-grown", "labgrown": "lab-grown", "moissanite": "lab-grown"}
+
+
+def key_origin(key: str) -> str | None:
+    text = key.lower().replace("_", " ").replace("-", " ")
+    for word, origin in ORIGIN_WORDS.items():
+        if re.search(rf"\b{word}\b", text):
+            return origin
+    return None
+
+
+def check_quantities(value: dict[str, Any], fee_catalog: list[str], stone_catalog: list[str], needs_carat: bool,
+                     stone_origin: str | None = None) -> dict[str, Any]:
     def positive(name: str, required: bool) -> float | None:
         raw = value.get(name)
         if raw is None:
@@ -498,6 +510,14 @@ def check_quantities(value: dict[str, Any], fee_catalog: list[str], stone_catalo
         carats = item.get("carats")
         if key not in stone_catalog:
             raise ValueError(f"accent '{key}' is not in the catalog {stone_catalog}")
+        origin = key_origin(key)
+        if origin is not None:
+            stated = (stone_origin or "").lower().replace("_", "-").replace(" ", "-")
+            stated = "lab-grown" if stated.startswith("lab") else ("natural" if stated == "natural" else "")
+            if not stated:
+                raise ValueError(f"accent '{key}' names a stone origin but the customer never said natural or lab-grown; the origin must be asked, not assumed")
+            if stated != origin:
+                raise ValueError(f"accent '{key}' is {origin} but the customer said {stated}")
         if isinstance(carats, bool) or not isinstance(carats, (int, float)) or carats <= 0:
             raise ValueError("accent carats must be a positive number")
         accents.append({"key": key, "carats": float(carats)})
@@ -538,6 +558,6 @@ def choose_quantities(
     )
     return ask_json(
         prompt,
-        lambda value: check_quantities(value, fee_catalog, stone_catalog, needs_carat),
+        lambda value: check_quantities(value, fee_catalog, stone_catalog, needs_carat, str(specification.get("stone_origin") or "")),
         model, runner, openclaw,
     )

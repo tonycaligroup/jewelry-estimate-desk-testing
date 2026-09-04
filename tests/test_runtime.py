@@ -8586,6 +8586,31 @@ class ArtworkTests(unittest.TestCase):
             self.assertEqual(saved[0].read_bytes(), b"imagebytes")
 
 
+class StoneOriginTests(unittest.TestCase):
+    profile = {"defaults": {"stone_origin": "ask_always"}, "pricing": {}}
+
+    def test_a_tennis_bracelet_without_an_origin_is_asked_before_pricing(self) -> None:
+        spec = {"piece_type": "tennis bracelet", "metal": "white gold", "metal_karat": 14, "metal_color": "white",
+                "dimensions": "7 inch", "notes": "3ctw, stones perhaps 2.5mm, open to suggestions"}
+        missing = spec_gate.missing_required_fields(spec, self.profile)
+        self.assertIn("stone_origin", missing)
+        with_origin = dict(spec, stone_origin="lab-grown", stone_type="diamond", stone_carat=3, stone_color="jeweler's choice",
+                           stone_clarity="jeweler's choice", stone_cut="round", setting_style="tennis")
+        self.assertNotIn("stone_origin", spec_gate.missing_required_fields(with_origin, self.profile))
+
+    def test_quantities_never_assume_a_stone_origin(self) -> None:
+        catalog = ["natural_diamond_melee", "lab_grown_diamond_melee", "black_diamond"]
+        good = {"finished_grams": 24.5, "bench_hours": 8.5, "fees": [], "accents": [{"key": "natural_diamond_melee", "carats": 3}]}
+        with self.assertRaisesRegex(ValueError, "must be asked, not assumed"):
+            judge.check_quantities(good, [], catalog, False, "")
+        with self.assertRaisesRegex(ValueError, "customer said lab-grown"):
+            judge.check_quantities(good, [], catalog, False, "lab-grown")
+        out = judge.check_quantities(good, [], catalog, False, "natural")
+        self.assertEqual(out["accents"][0]["key"], "natural_diamond_melee")
+        neutral = {"finished_grams": 24.5, "bench_hours": 8.5, "fees": [], "accents": [{"key": "black_diamond", "carats": 0.2}]}
+        self.assertEqual(judge.check_quantities(neutral, [], catalog, False, "")["accents"][0]["key"], "black_diamond")
+
+
 class CalendarListTests(unittest.TestCase):
     def test_primary_calendar_is_listed_first_and_never_asked_for(self) -> None:
         class Response:

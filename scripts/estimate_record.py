@@ -597,6 +597,29 @@ def record_thread_review(
         return record
 
 
+STONE_WORDS_IN_TEXT = (
+    "diamond", "sapphire", "ruby", "emerald", "moissanite", "aquamarine", "morganite", "tanzanite", "amethyst",
+    "topaz", "garnet", "opal", "pearl", "tourmaline", "spinel", "peridot", "citrine", "pave", "pavé", "melee",
+    "tennis", "eternity", "halo", "gemstone", "stones",
+)
+
+
+def stones_in_words(specification: Any) -> bool:
+    """Stones named anywhere the customer's words were kept, not only in stone_type.
+
+    A tennis bracelet, a pave signet, or "small white diamonds" in the notes
+    are stones the shop must price and, when the profile says ask-always,
+    ask the origin of.
+    """
+    if not isinstance(specification, dict):
+        return False
+    text = " ".join(
+        str(specification.get(key) or "").lower()
+        for key in ("piece_type", "accent_stones", "setting_style", "notes", "stone_color", "stone_shape")
+    )
+    return any(word in text for word in STONE_WORDS_IN_TEXT)
+
+
 def enforce_specification_policies(
     specification: dict[str, Any],
     missing: list[str],
@@ -649,6 +672,7 @@ def enforce_specification_policies(
             and not isinstance(specification.get("stone_count"), bool)
             and specification["stone_count"] > 0
         )
+        or stones_in_words(specification)
     )
     style_values = [
         specification.get(key)
