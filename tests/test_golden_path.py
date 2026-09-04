@@ -871,3 +871,49 @@ class SideBranchTests(GoldenPathTests):
             self.tick(ws, world)
             self.assertEqual(len([n for n in world.notices if not n["file"]]), 1, "said once")
         self.run_branch(branch)
+
+
+class RenderingGateTests(GoldenPathTests):
+    """No rendering reaches a customer without the owner's card, whichever path rendered it."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:  # inherited; runs once in the parent
+        pass
+
+    def test_send_rendering_refuses_without_an_approved_card(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, world = self.workspace(directory)
+            body = Path(directory) / "note.txt"
+            body.write_text("Here are the renderings.", encoding="utf-8")
+            image = Path(directory) / "view.png"
+            image.write_bytes(PNG)
+            desk = ws / "estimate-desk"
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()) as err:
+                code = workflow_safe.main([
+                    "send-rendering", "--monitor-root", str(desk / "inbox-monitor"), "--claim-root", str(desk / "inbox-claims"),
+                    "--record-root", str(desk / "records"), "--message-id", "m9", "--estimate-id", "jed-0123456789abcdef",
+                    "--record-output", str(Path(directory) / "out.json"), "--body", str(body), "--image", str(image),
+                    "--gmail-payload", str(Path(directory) / "p.json"), "--provider-response", str(Path(directory) / "r.json"),
+                ])
+            self.assertNotEqual(code, 0)
+            self.assertIn("approval-gated", err.getvalue())
+            self.assertEqual(world.sent, [])
+
+    def test_worker_prompt_files_a_card_and_never_sends(self) -> None:
+        import cron_config
+
+        post = cron_config.render_worker_message(Path("/ws"), ROOT, "abcdef0123456789", "jed-0123456789abcdef", "/ws/estimate-desk/work/x", branch="post_estimate") \
+            if "branch" in cron_config.render_worker_message.__code__.co_varnames else (ROOT / "templates" / "worker-post-estimate.txt").read_text(encoding="utf-8")
+        self.assertIn("request-rendering-approval", post)
+        self.assertNotIn("needs no new approval", post)
+        self.assertIn("never email the customer", post)
+        self.assertIn("Never run `send-rendering`", post)
+        # The card-filing command the prompt names parses and dispatches.
+        with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()) as err:
+            code = workflow_safe.main([
+                "request-rendering-approval", "--monitor-root", "/nope/inbox-monitor", "--claim-root", "/nope/claims",
+                "--record-root", "/nope/records", "--shop-profile", "/nope/profile.json", "--message-id", "m9",
+                "--estimate-id", "jed-0123456789abcdef", "--checker", "worker",
+            ])
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("unknown command", err.getvalue())
+        self.assertNotIn("invalid choice", err.getvalue())

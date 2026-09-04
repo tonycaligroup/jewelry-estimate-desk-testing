@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.3.1
+version: 4.3.2
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -431,8 +431,9 @@ For each returned message:
    records the approval before finalizing an appointment-only claim. Run
    `assert-settled` and return `NO_REPLY`; the approval remains visible and
    actionable even if cron announce delivery fails. For a message that also
-   requests rendering, add `--defer-finalize-for-rendering`, then complete
-   `send-rendering`, which finalizes the claim. Never claim the appointment is
+   requests rendering, add `--defer-finalize-for-rendering`, then file the
+   rendering card with `request-rendering-approval`; the claim waits there
+   for the owner. `send-rendering` refuses without an approved card. Never claim the appointment is
    booked until approval is granted and the live calendar write succeeds.
 3. Before deciding which specifications are missing or complete, fetch the
    exact Gmail thread resource and read every message in chronological order,

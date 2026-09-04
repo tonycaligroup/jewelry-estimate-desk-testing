@@ -488,7 +488,29 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
     return record
 
 
+RENDERING_GATE = (
+    "renderings are approval-gated at every stage: file the card with request-rendering-approval; "
+    "the owner's approval runs send-approved-rendering"
+)
+
+
 def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
+    """Deliver approved renderings. Only send_approved_rendering may call this.
+
+    WORKFLOW.md 6.6: nothing customer-facing without a card. The approval the
+    owner saw is required here, and the images must be the ones on it. A
+    rendering sent by a worker agent without a card (4 September 2026, a
+    tennis bracelet) is what this gate prevents.
+    """
+    approval = getattr(args, "approved_rendering", None)
+    if not isinstance(approval, dict):
+        raise ValueError(RENDERING_GATE)
+    if approval.get("estimate_id") != args.estimate_id or approval.get("gmail_message_id") != args.message_id:
+        raise ValueError("rendering approval does not match this estimate and message")
+    expected = {item["slot"]: item["sha256"] for item in approval.get("images", [])}
+    images = list(args.images)
+    if len(images) != len(expected) or any(_sha256_file(img) != expected.get(i) for i, img in enumerate(images, start=1)):
+        raise ValueError("rendering images changed since the owner approved them")
     record, _decision = estimate_record.post_estimate_decision(
         args.record_root,
         args.estimate_id,
@@ -1590,7 +1612,7 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         message_id=args.message_id, estimate_id=args.estimate_id, body=body, images=images,
         gmail_payload=Path(paths["gmail_payload"]), provider_response=Path(paths["gmail_provider_response"]),
-        record_output=Path(paths["current_record"]),
+        record_output=Path(paths["current_record"]), approved_rendering=approval,
     ))
     result = {"outcome": "rendering_sent", "images": len(images), "record_status": record.get("status"), "email": body_source}
     if getattr(args, "brief_id", None):
@@ -2227,13 +2249,20 @@ def main(argv: list[str] | None = None) -> int:
     send.add_argument("--body", type=Path, required=True)
     send.add_argument("--gmail-payload", type=Path, required=True)
     send.add_argument("--provider-response", type=Path, required=True)
-    rendering = sub.add_parser("send-rendering")
+    rendering = sub.add_parser("send-rendering")  # refused: kept so old prompts fail loudly
     add_common_paths(rendering)
     rendering.add_argument("--monitor-root", type=Path, required=True)
     rendering.add_argument("--body", type=Path, required=True)
     rendering.add_argument(
         "--image", dest="images", type=Path, action="append", required=True
     )
+    ask_render = sub.add_parser("request-rendering-approval")
+    for name in ("--monitor-root", "--claim-root", "--record-root", "--shop-profile"):
+        ask_render.add_argument(name, type=Path, required=True)
+    ask_render.add_argument("--message-id", required=True)
+    ask_render.add_argument("--estimate-id", required=True)
+    ask_render.add_argument("--checker", default=None)
+    ask_render.add_argument("--archetype", default=None)
     rendering.add_argument("--gmail-payload", type=Path, required=True)
     rendering.add_argument("--provider-response", type=Path, required=True)
     appointment = sub.add_parser("request-appointment-approval")
@@ -2377,8 +2406,12 @@ def main(argv: list[str] | None = None) -> int:
             record = finalize_post_estimate(args)
         elif args.command == "record-appointment-booked":
             record = record_appointment_booked(args)
+        elif args.command == "request-rendering-approval":
+            record = request_rendering_approval(args)
+        elif args.command == "send-rendering":
+            raise ValueError(RENDERING_GATE)
         else:
-            record = send_rendering(args)
+            raise ValueError(f"unknown command {args.command}")
         print(json.dumps(record, sort_keys=True))
         return 0
     except (

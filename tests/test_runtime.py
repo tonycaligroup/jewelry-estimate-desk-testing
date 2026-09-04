@@ -2503,7 +2503,8 @@ class CronConfigTests(unittest.TestCase):
         )
         self.assertIn("--defer-finalize-for-rendering", message)
         approval = message.index("request-appointment-approval")
-        self.assertLess(approval, message.index("send-rendering", approval))
+        self.assertLess(approval, message.index("request-rendering-approval", approval))
+        self.assertIn("Never run `send-rendering`", message)
 
     def test_live_binding_accepts_default_agent_omitted_by_kolo(self) -> None:
         job = self.live_job()
@@ -7036,7 +7037,9 @@ class WorkerTemplateTests(unittest.TestCase):
         self.assertNotIn("gmail_message", common)
         self.assertIn("review-thread", post)
         self.assertNotIn("finalize-post-estimate", post)
-        self.assertIn("send-rendering", post)
+        self.assertIn("request-rendering-approval", post)
+        self.assertIn("Never run `send-rendering`", post)
+        self.assertNotIn("needs no new approval", post)
         self.assertIn("request-appointment-approval", post)
         self.assertIn("rendering_wait.py wait", post)
         for text in (common, intake, post):

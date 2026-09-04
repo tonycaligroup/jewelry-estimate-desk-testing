@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.3.2 (built 4 September 2026): the rendering gate in code.** A tennis
+bracelet's renderings reached the customer without a card. The inline
+render had failed on every 4.2 and 4.3.0 pod (the materializer refused the
+desk's own files), so each rendering request fell to the worker agent, whose
+branch prompt said a rendering "needs no new approval" and ran
+`send-rendering`, which had no gate. Now `send-rendering` refuses unless
+called by `send-approved-rendering` with the approval the owner saw and the
+same image hashes; the worker's branch (and the legacy cron prompt) render,
+materialize, and run the new `request-rendering-approval` command, which
+files the card and parks the claim; the worker never emails a customer.
+
 **4.3.1 (built 4 September 2026): the full check.** A golden-path test
 (`tests/test_golden_path.py`) drives the real watcher tick and the exact
 execute lines from the cards through inquiry, follow-up, rate question,
