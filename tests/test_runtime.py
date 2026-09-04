@@ -1682,10 +1682,9 @@ class SafeCliTests(unittest.TestCase):
                 inbox_claim.claim_path(claim_root, message_id)
             )
             self.assertEqual(stored["owner_notification"]["status"], "sent")
-            self.assertEqual(
-                stored["manual_review_notification"]["status"], "sent"
-            )
-            self.assertEqual(runner.call_count, 2)
+            # Since 4 Sep 2026 a manual review is recorded silently.
+            self.assertNotIn("manual_review_notification", stored)
+            self.assertEqual(runner.call_count, 1)
 
     def test_manual_review_is_durable_before_owner_notification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1709,15 +1708,16 @@ class SafeCliTests(unittest.TestCase):
             runner = Mock(
                 side_effect=subprocess.CalledProcessError(1, ["kolo", "notify-owner"])
             )
-            with self.assertRaises(subprocess.CalledProcessError):
-                kolo_safe.manual_review_claimed(
-                    monitor_root,
-                    claim_root,
-                    message_id,
-                    claim["claim_token"],
-                    "missing_thread_ownership",
-                    runner=runner,
-                )
+            # Nothing is sent for a manual review, so a broken notifier cannot hurt it.
+            kolo_safe.manual_review_claimed(
+                monitor_root,
+                claim_root,
+                message_id,
+                claim["claim_token"],
+                "missing_thread_ownership",
+                runner=runner,
+            )
+            runner.assert_not_called()
             queue = inbox_monitor.load_queue_item(monitor_root, message_id)
             stored_claim = inbox_claim.read_state(
                 inbox_claim.claim_path(claim_root, message_id)
@@ -1725,9 +1725,7 @@ class SafeCliTests(unittest.TestCase):
             self.assertEqual(queue["processing_status"], "manual_review")
             self.assertEqual(queue["reason_code"], "missing_thread_ownership")
             self.assertEqual(stored_claim["status"], "manual_review")
-            self.assertEqual(
-                stored_claim["manual_review_notification"]["status"], "uncertain"
-            )
+            self.assertNotIn("manual_review_notification", stored_claim)  # nothing was sent
 
     def test_complete_claimed_terminalizes_filtered_message(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1820,7 +1818,7 @@ class SafeCliTests(unittest.TestCase):
                 ],
                 "manual_review",
             )
-            self.assertEqual(runner.call_count, 1)
+            self.assertEqual(runner.call_count, 0)  # stale claims are recorded, not announced
 
     def test_invalid_session_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7116,37 +7114,25 @@ class ReviewBriefTests(unittest.TestCase):
                 kolo_safe.claimed_message_headers(args.monitor_root, args.claim_root, "never-seen"), {}
             )
 
-    def test_manual_review_files_a_brief_when_the_approver_is_bound(self) -> None:
+    def test_manual_review_is_recorded_and_silent(self) -> None:
         helper = IntakeTests("test_intake_cli_prints_the_result")
         with tempfile.TemporaryDirectory() as directory:
             args, _paths = helper.claimed(directory, sender="sam@shop.example")
             activation_binding.create(
                 activation_binding.binding_path(args.monitor_root), "agent:main:kolo:direct:chat-1"
             )
-            runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"status":"ok","brief":{"briefId":"b-1"}}', ""))
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "{}", ""))
             item, result = kolo_safe.manual_review_claimed(
                 args.monitor_root, args.claim_root, "inquiry-1", None, "uncertain_classification", runner=runner
             )
             self.assertEqual(item["processing_status"], "manual_review")
-            # A desk failure is a plain notice in the owner's channel, never a card.
-            argv = runner.call_args.args[0]
-            self.assertEqual(argv[:3], ["kolo", "notify-owner", "-m"])
-            self.assertIn("Pat Customer", argv[3])
-            self.assertIn("Custom ring inquiry", argv[3])
-            self.assertIn("stepped back", argv[3])
-            # It lands in the thread that activated the desk, beside the approval cards.
-            self.assertEqual(argv[-2:], ["--session-key", "agent:main:kolo:direct:chat-1"])
-            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
-            self.assertEqual(state["manual_review_notification"]["status"], "sent")
-            # A repeat never sends a second notice.
-            runner.reset_mock()
-            kolo_safe.review_notice_claimed(
-                args.monitor_root, args.claim_root, "inquiry-1", state["claim_token"],
-                "uncertain_classification", {}, runner=runner,
-            )
+            # The owner hears only questions and approvals; the review is listed on request.
             runner.assert_not_called()
+            self.assertEqual(result.returncode, 0)
+            reviews = inbox_monitor.list_manual_reviews(args.monitor_root)
+            self.assertEqual([r["reason_code"] for r in reviews], ["uncertain_classification"])
 
-    def test_manual_review_falls_back_to_the_chat_alert_without_a_binding(self) -> None:
+    def test_manual_review_is_silent_without_a_binding_too(self) -> None:
         helper = IntakeTests("test_intake_cli_prints_the_result")
         with tempfile.TemporaryDirectory() as directory:
             args, _paths = helper.claimed(directory)
@@ -7154,7 +7140,7 @@ class ReviewBriefTests(unittest.TestCase):
             kolo_safe.manual_review_claimed(
                 args.monitor_root, args.claim_root, "inquiry-1", None, "uncertain_classification", runner=runner
             )
-            self.assertEqual(runner.call_args.args[0][1], "notify-owner")
+            runner.assert_not_called()
 
     def test_resolve_review_approval_closes_and_reports(self) -> None:
         helper = IntakeTests("test_intake_cli_prints_the_result")

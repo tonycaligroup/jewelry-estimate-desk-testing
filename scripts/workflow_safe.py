@@ -682,6 +682,12 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
         asked = ask_same_sender(args, token, route, decision.get("estimate_id"), message)
         result.update(asked)
         return result
+    if decision["decision"] == "manual_review" and decision.get("reason_code") == "missing_thread_ownership":
+        # A reply in a conversation the desk never started is not the desk's
+        # business: close it quietly, no review, no notice.
+        kolo_safe.complete_claimed(args.monitor_root, args.claim_root, args.message_id, token)
+        result.update({"outcome": "not_desk_thread", "next_action": "done"})
+        return result
     if decision["decision"] in {"manual_review", "owned_manual_review"}:
         kolo_safe.manual_review_claimed(
             args.monitor_root, args.claim_root, args.message_id, token, decision["reason_code"]

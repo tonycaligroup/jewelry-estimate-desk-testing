@@ -1002,6 +1002,18 @@ def review_notice_claimed(
     return result
 
 
+# Reasons that still send a notice. Empty on purpose: the owner asked for
+# approvals and questions only. Add a reason here only with the owner's say.
+NOTIFY_REVIEW_REASONS: frozenset[str] = frozenset()
+
+
+def review_notice_claimed_or_alert(monitor_root, claim_root, message_id, claim_token, reason_code, runner):
+    headers = claimed_message_headers(monitor_root, claim_root, message_id)
+    if activation_binding.binding_path(monitor_root).exists():
+        return review_notice_claimed(monitor_root, claim_root, message_id, claim_token, reason_code, headers, runner=runner)
+    return notify_monitor_claimed(claim_root, message_id, claim_token, f"manual_review:{reason_code}:{message_id}", "manual-review", runner=runner)
+
+
 def manual_review_claimed(
     monitor_root: Path,
     claim_root: Path,
@@ -1027,22 +1039,16 @@ def manual_review_claimed(
         "manual_review",
         reason_code,
     )
-    binding = activation_binding.binding_path(monitor_root)
-    if binding.exists():
-        # A desk failure is a plain notice in the owner's channel, not a
-        # card to click: who wrote, what stopped, and that the desk stepped
-        # back from the thread. Reviews that need a decision are questions.
-        result = review_notice_claimed(
-            monitor_root, claim_root, message_id, claim_token, reason_code, headers, runner=runner,
-        )
+    # Since 4 September 2026 a desk failure is recorded and nothing is sent:
+    # the owner hears only questions and approvals (WORKFLOW.md 6.10). The
+    # review stays listed for "show desk reviews". Reviews that need a
+    # decision are asked as questions before this point.
+    del headers
+    if reason_code in NOTIFY_REVIEW_REASONS:
+        result = review_notice_claimed_or_alert(monitor_root, claim_root, message_id, claim_token, reason_code, runner)
     else:
-        result = notify_monitor_claimed(
-            claim_root,
-            message_id,
-            claim_token,
-            f"manual_review:{reason_code}:{message_id}",
-            "manual-review",
-            runner=runner,
+        result = subprocess.CompletedProcess(
+            ["kolo", "notify-owner", "--skipped", reason_code], 0, "silent manual review\n", ""
         )
     return queue_item, result
 
@@ -1097,7 +1103,9 @@ def reconcile_stale_claims(
             item["reason_code"],
         )
         summary["manual_review"] += 1
-        try:
+        # No notice: a stale claim is recorded as a review the owner can list;
+        # the owner asked to hear only questions and approvals.
+        if False:  # kept for the day a reason is added to NOTIFY_REVIEW_REASONS
             notify_monitor_claimed(
                 claim_root,
                 item["gmail_message_id"],
@@ -1106,6 +1114,8 @@ def reconcile_stale_claims(
                 "manual-review",
                 runner=runner,
             )
+        try:
+            pass
         except (OSError, subprocess.CalledProcessError):
             # Terminal state is already committed. An ambiguous notification
             # is preserved and never retried automatically.
