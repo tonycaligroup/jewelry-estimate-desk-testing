@@ -357,6 +357,13 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     else:
         approval = _appointment_approval_details(record, args.message_id, intent, args.monitor_root)
         write_private(args.appointment_approval, approval)
+    # WORKFLOW.md 6.6: only times inside the owner's declared windows may be
+    # offered or booked, whoever wrote the intent (a worker agent once put a
+    # Sunday on a card).
+    scheduling = (_profile_for(args).get("scheduling") or {})
+    outside = slots.outside_windows(scheduling, approval.get("calendar_availability") or [])
+    if outside:
+        raise ValueError("times outside the declared consultation windows: " + "; ".join(outside)[:200])
     # The claim's work directory is cleaned once the claim closes; the executor
     # needs the options the owner saw, so keep a durable private copy.
     store = approval_store_path(args.monitor_root, args.estimate_id, args.message_id)
@@ -1678,6 +1685,9 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     token = gateway_token.load_token()
     opener = getattr(args, "opener", None)
     kwargs = {"opener": opener} if opener else {}
+    outside = slots.outside_windows(scheduling, [chosen])
+    if outside:
+        raise ValueError("the approved time is outside the declared consultation windows; ask the desk for new options")
     # Approval does not make stale availability current.
     receipt = calendar_query.query_freebusy(
         chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC", calendar_id, token, **kwargs
@@ -1804,6 +1814,15 @@ def send_approved_times(args: argparse.Namespace) -> dict[str, Any]:
     _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the times offered")
     _report_brief(args, result, runner)
     return result
+
+
+def _profile_for(args: argparse.Namespace) -> dict[str, Any]:
+    """The shop profile: the flag when given, else the workspace's own copy."""
+    path = getattr(args, "shop_profile", None) or workspace_of(args.monitor_root) / "estimate-desk" / "shop-profile.json"
+    try:
+        return read_object(Path(path))
+    except (OSError, ValueError):
+        return {}
 
 
 def _appointment_next_text(record: dict[str, Any], approval: dict[str, Any]) -> str:
@@ -2267,6 +2286,7 @@ def main(argv: list[str] | None = None) -> int:
     rendering.add_argument("--provider-response", type=Path, required=True)
     appointment = sub.add_parser("request-appointment-approval")
     add_common_paths(appointment)
+    appointment.add_argument("--shop-profile", type=Path, default=None)
     appointment.add_argument("--monitor-root", type=Path, required=True)
     appointment.add_argument("--appointment-intent", type=Path, required=True)
     appointment.add_argument("--appointment-approval", type=Path, required=True)

@@ -110,6 +110,24 @@ def candidate_slots(
     return slots
 
 
+def outside_windows(scheduling: dict[str, Any], options: list[dict[str, Any]]) -> list[str]:
+    """Labels of options that fall outside the declared windows; empty when no windows are declared."""
+    if not parse_windows(scheduling):
+        return []
+    zone = ZoneInfo(scheduling.get("timezone") or "UTC")
+    bad: list[str] = []
+    for option in options:
+        try:
+            start = calendar_query.parse_timestamp(option["start"], "option.start").astimezone(zone)
+            end = calendar_query.parse_timestamp(option["end"], "option.end").astimezone(zone)
+        except (KeyError, TypeError, ValueError):
+            bad.append(str(option.get("label") or option.get("start") or "?"))
+            continue
+        if not _inside_windows(scheduling, start, end - start):
+            bad.append(str(option.get("label") or option["start"]))
+    return bad
+
+
 def _inside_windows(scheduling: dict[str, Any], start: datetime, length: timedelta) -> bool:
     minute = start.hour * 60 + start.minute
     span = int(length.total_seconds() // 60)

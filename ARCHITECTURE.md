@@ -381,6 +381,12 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.3.3 (built 4 September 2026): windows are a gate, not a hint.** The
+same worker path put a Sunday on a booking card: its prompt let the agent
+write the availability list. `request-appointment-approval` now refuses any
+option outside the declared consultation windows, and
+`book-approved-appointment` refuses to book one, whoever wrote it.
+
 **4.3.2 (built 4 September 2026): the rendering gate in code.** A tennis
 bracelet's renderings reached the customer without a card. The inline
 render had failed on every 4.2 and 4.3.0 pod (the materializer refused the

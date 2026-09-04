@@ -7825,7 +7825,7 @@ class OneCommandExecutorTests(unittest.TestCase):
         estimate_record.persist_record(record_root, record)
         profile = {"shop": {"name": "Cali Jewelers"}, "terms": {"quote_valid_days": 7, "lead_time_business_days": 15},
                    "scheduling": {"timezone": "America/Los_Angeles", "calendar": "primary",
-                                  "windows": [{"days": ["fri"], "start": "10:00", "end": "17:00"}]}}
+                                  "windows": [{"days": ["mon", "fri"], "start": "10:00", "end": "17:00"}]}}
         (desk / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
         return ws, record, profile
 

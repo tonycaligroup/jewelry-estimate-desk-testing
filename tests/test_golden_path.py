@@ -917,3 +917,94 @@ class RenderingGateTests(GoldenPathTests):
         self.assertNotEqual(code, 0)
         self.assertNotIn("unknown command", err.getvalue())
         self.assertNotIn("invalid choice", err.getvalue())
+
+
+class WindowGateTests(SideBranchTests):
+    """A time outside the owner's declared windows never reaches a card or the calendar."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:  # inherited; runs once in the parent
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:  # inherited; runs once in SideBranchTests
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def _sunday(self) -> datetime:
+        day = datetime.now(ZONE) + timedelta(days=2)
+        while day.weekday() != 6:
+            day += timedelta(days=1)
+        return day.replace(hour=15, minute=0, second=0, microsecond=0)
+
+    def test_hand_written_intent_with_a_sunday_is_refused_before_any_card(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            import argparse
+
+            thread, estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["appointment_request"]
+            world.requested = (["Sunday afternoon"], [])
+            world.customer_message("s2", thread, "Could we meet Sunday afternoon?\n\nPat")
+            # Stop the inline pipeline at the intent so the claim stays processing, as a worker would find it.
+            with patch.object(inbox_watcher.pipeline, "post_estimate_actions", return_value={"outcome": "needs_worker", "next_action": "request_appointment_approval"}):
+                inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t", judge_runner=world.run)
+            cards_before = len(world.cards)
+            desk = ws / "estimate-desk"
+            paths = inbox_monitor.prepare_claim_work(desk / "inbox-monitor", desk / "inbox-claims", "s2")
+            sunday = self._sunday()
+            intent = {"requested_times": ["Sunday afternoon"], "calendar_availability": [{
+                "start": sunday.isoformat(), "end": (sunday + timedelta(minutes=30)).isoformat(),
+                "label": sunday.strftime("%A %B %-d, 3:00 PM"),
+            }]}
+            Path(paths["appointment_intent"]).write_text(json.dumps(intent), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "outside the declared consultation windows"):
+                workflow_safe.request_appointment_approval(argparse.Namespace(
+                    monitor_root=desk / "inbox-monitor", claim_root=desk / "inbox-claims", record_root=desk / "records",
+                    shop_profile=None, message_id="s2", estimate_id=estimate_id,
+                    appointment_intent=Path(paths["appointment_intent"]),
+                    appointment_approval=Path(paths["appointment_approval"]), record_output=Path(paths["current_record"]),
+                    defer_finalize_for_rendering=False, runner=world.run,
+                ))
+            self.assertEqual(len(world.cards), cards_before, "no card with a Sunday on it")
+            self.assertEqual(world.calendar_events, {})
+        self.run_branch(branch)
+
+    def test_booking_executor_refuses_a_sunday_even_on_an_approved_store(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            import argparse
+
+            thread, estimate_id = self._estimate_sent(ws, world)
+            wanted = next_weekday(2, 14, 0)
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+            world.customer_message("s2", thread, f"Can we meet {wanted.strftime('%A')} at 2?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "appointment_booking")
+            # Someone edits the durable store to a Sunday after the card was filed.
+            store = workflow_safe.approval_store_path(ws / "estimate-desk" / "inbox-monitor", estimate_id, "s2")
+            approval = json.loads(store.read_text(encoding="utf-8"))
+            sunday = self._sunday()
+            approval["calendar_availability"] = [{"start": sunday.isoformat(), "end": (sunday + timedelta(minutes=30)).isoformat(),
+                                                  "label": "Sunday 3:00 PM"}]
+            store.write_text(json.dumps(approval), encoding="utf-8")
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()) as err:
+                parts = shlex.split(card["payload"]["execute"].replace("<Brief ID>", card["brief_id"]))
+                code = workflow_safe.main(parts[2:])
+            self.assertNotEqual(code, 0)
+            self.assertIn("outside the declared consultation windows", err.getvalue())
+            self.assertEqual(world.calendar_events, {}, "nothing booked")
+            self.assertEqual(len(world.sent), 1, "no confirmation email")
+        self.run_branch(branch)
