@@ -20,7 +20,11 @@ import validate_profile
 
 HASH_DIR_RE = re.compile(r"^[0-9a-f]{64}$")
 # Claim work is keyed by hash; executor work is named by what it did.
-WORK_DIR_RE = re.compile(r"[0-9a-f]{64}|(booking|offer)-[0-9a-f]{16}(-[a-z0-9]+)?|estimate-jed-[0-9a-f]{16}")
+# Every shape the desk itself creates under work/: claim work by hash,
+# booking and offer executors by message key, estimate work by estimate id
+# and message key (4.3.0). The names are checked against the code that makes
+# them (tests), and anything else refuses the reset.
+WORK_DIR_RE = re.compile(r"[0-9a-f]{64}|(booking|offer)-[0-9a-f]{16}(-[a-z0-9]+)?|estimate-jed-[0-9a-f]{16}(-[0-9a-f]{16}|-none)?")
 RUN_DIR_RE = re.compile(r"^[0-9a-f]{24}$")
 
 

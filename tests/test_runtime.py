@@ -935,6 +935,9 @@ class CustomerStateResetTests(unittest.TestCase):
             for file in files:
                 (desk / name / file).write_text("{}", encoding="utf-8")
         (desk / "work" / "offer-0123456789abcdef-round2").mkdir()
+        # The names the desk makes today, exactly as the code makes them.
+        (workflow_safe.estimate_work_dir(desk / "inbox-monitor", "jed-0123456789abcdef", "some-gmail-id")).mkdir(parents=True)
+        (workflow_safe.estimate_work_dir(desk / "inbox-monitor", "jed-0123456789abcdef", "")).mkdir(parents=True)
         run_work = desk / "run-work" / ("a" * 24)
         run_work.mkdir(parents=True)
         (run_work / "discovery-batch.json").write_text("[]", encoding="utf-8")
@@ -975,6 +978,7 @@ class CustomerStateResetTests(unittest.TestCase):
             self.assertEqual(result["removed"]["approvals"], 2)
             self.assertEqual(result["removed"]["briefs"], 2)
             self.assertFalse((desk / "work" / "offer-0123456789abcdef-round2").exists())
+            self.assertEqual([p.name for p in (desk / "work").iterdir() if p.is_dir()], [], "every desk-made work folder is gone")
             self.assertTrue((desk / "work" / "cron-binding.json").exists())
             self.assertEqual(
                 inbox_monitor.load_monitor_state(desk / "inbox-monitor")[
