@@ -123,12 +123,18 @@ def reflow(text: str) -> str:
         for line in lines:
             if not line.strip():
                 continue
+            # A new bullet starts its own line. A plain line after a bullet
+            # is that bullet's wrapped tail only when the bullet did not end
+            # its sentence; a sign-off after a finished bullet stays its own line.
+            previous = joined[-1] if joined else ""
+            finished = previous.rstrip().endswith((".", "?", "!", ":"))
             keep_break = (
                 not joined
                 or _is_bullet(line)
-                or _is_bullet(joined[-1])
-                or _is_salutation(joined[-1])
-                or (len(joined) == 1 and _is_label(joined[0]))
+                or _is_salutation(line)
+                or _is_salutation(previous)
+                or (_is_bullet(previous) and finished)
+                or (len(joined) == 1 and _is_label(joined[0]) and not _is_bullet(joined[0]))
             )
             if keep_break:
                 joined.append(line)

@@ -889,6 +889,10 @@ class ReflowTests(unittest.TestCase):
         self.assertTrue(text.endswith("Warmly,\nLomelino Jewelry"))
         self.assertEqual(text.count("\n\n"), 4)
         self.assertEqual(customer_content_guard.plain_text(text), text, "already-flowed text is unchanged")
+        bullets = customer_content_guard.plain_text(
+            "Could you tell me:\n- Is the diamond natural or\nlab-grown?\n- What ring size would you like for\nthe band?\n- Which metal?\n\nWarmly,\nLomelino Jewelry"
+        )
+        self.assertEqual(bullets, "Could you tell me:\n- Is the diamond natural or lab-grown?\n- What ring size would you like for the band?\n- Which metal?\n\nWarmly,\nLomelino Jewelry")
 
 
 class CustomerStateResetTests(unittest.TestCase):

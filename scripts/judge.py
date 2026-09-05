@@ -414,6 +414,10 @@ def classify_reply(
     return ask_json(prompt, check_artifact, model, runner, openclaw)
 
 
+QUESTION_STARTS = {"what", "which", "how", "when", "where", "who", "do", "does", "is", "are", "would", "could",
+                   "can", "will", "any", "natural", "lab", "yellow", "white", "rose", "round", "size"}
+
+
 def check_body(value: dict[str, Any]) -> dict[str, Any]:
     body = value.get("body")
     if not isinstance(body, str) or len(body.strip()) < 40:
@@ -423,18 +427,26 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
     body = customer_content_guard.plain_text(body.strip())
     if len(body) > 4000:
         raise ValueError("body is too long")
+    # Headings and sign-offs dressed as questions ("The setting?", "Warmly,
+    # Lomelino Jewelry?") are refused; a short question in a bullet, or one
+    # that starts like a question ("Which metal?"), is fine.
+    stubs = []
+    for line in body.splitlines():
+        if line.strip().startswith(("- ", "* ", "• ")):
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            words = sentence.rstrip("?").split()
+            if sentence.endswith("?") and 0 < len(words) <= 3 and words[0].lower() not in QUESTION_STARTS:
+                stubs.append(sentence)
+    if stubs:
+        raise ValueError("no headings or sign-offs ending in a question mark (" + "; ".join(stubs[:3]) + "); "
+                         "write each question as a full sentence")
     if re.search(r"[$€£]\s*\d|\b\d[\d,]*\s*(?:dollars|usd)\b|\bper carat\b|\bper gram\b", body, re.IGNORECASE):
         raise ValueError("body must not contain a price, rate, or amount")
     if "{{" in body or "}}" in body:
         raise ValueError("body must not contain template placeholders")
     if "?" not in body:
         raise ValueError("a follow-up must ask the customer at least one question")
-    stubs = [line.strip() for line in body.splitlines()
-             if line.strip().endswith("?") and len(line.strip().rstrip("?").split()) <= 3
-             and not line.strip().startswith(("- ", "* ", "• "))]
-    if stubs:
-        raise ValueError("no headings or sign-offs ending in a question mark (" + "; ".join(stubs[:3]) + "); "
-                         "write each question as a full sentence")
     recap = [line for line in body.splitlines() if re.match(r"\s*[-*\u2022]\s", line) and "?" not in line
              and re.search(r"\b(I've noted|I have noted|I have you down|noted your|you mentioned)\b", line, re.IGNORECASE)]
     if recap:
