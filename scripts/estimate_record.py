@@ -394,20 +394,26 @@ def followup_stalled(record: dict[str, Any], source_message_id: str, missing: li
     if not missing or record.get("status") != "awaiting_specs":
         return []
     source_hash = sha256_text(source_message_id)
-    asked_before: set[str] = set()
-    for review in record.get("thread_reviews", []):
-        if not isinstance(review, dict) or review.get("source_message_id_sha256") == source_hash:
-            continue
-        if review.get("outcome") != "awaiting_specs":
-            continue
-        earlier = review.get("missing_required_fields") or []
-        if not isinstance(earlier, list):
-            continue
-        asked_before.update(str(field) for field in earlier)
-    if not asked_before or not (record.get("spec_gate_reply") or record.get("followup_replies")):
+    earlier_reviews = [
+        review for review in record.get("thread_reviews", [])
+        if isinstance(review, dict) and review.get("source_message_id_sha256") != source_hash
+        and review.get("outcome") == "awaiting_specs" and isinstance(review.get("missing_required_fields"), list)
+    ]
+    if not earlier_reviews or not (record.get("spec_gate_reply") or record.get("followup_replies")):
         return []
-    repeated = sorted(set(missing) & asked_before)
-    return repeated if set(missing) <= asked_before else []
+    last_missing = {str(field) for field in earlier_reviews[-1]["missing_required_fields"]}
+    sent = (1 if record.get("spec_gate_reply") else 0) + len([
+        item for item in record.get("followup_replies") or [] if isinstance(item, dict) and item.get("status") == "sent"
+    ])
+    still_open = sorted(set(missing) & last_missing)
+    if set(missing) == last_missing:
+        # The reply answered none of it: the same question is not sent again.
+        return still_open
+    if sent >= 2:
+        # Two asks already; a third email is a nag. The owner decides.
+        return still_open or sorted(missing)
+    # Progress: the customer answered some of it. One more ask for the rest.
+    return []
 
 
 def mark_jewelers_choice(root: Path, estimate_id: str, source_message_id: str, fields: list[str]) -> dict[str, Any]:

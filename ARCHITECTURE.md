@@ -381,6 +381,15 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.8.2 (built 5 September 2026): a partial answer earns one more ask.**
+The stall guard counted every field on the missing list as "asked once",
+though a follow-up asks at most three; a customer who answered all three
+was then reported to the owner as unresponsive. Now a reply that answered
+nothing stalls, a reply that made progress gets one more ask for the rest,
+and a third email is never sent (the owner decides). The follow-up asks the
+fields that move the price first (origin, stone, size), so the three it
+asks are the ones that matter.
+
 **4.8.0 (built 5 September 2026): speed, measured first.** `judge.CALL_LOG`
 times every completion; the tick summary carries `timing` (tick seconds,
 model calls, model seconds, prompt characters) and each inline claim its

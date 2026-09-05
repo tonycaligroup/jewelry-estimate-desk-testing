@@ -92,6 +92,18 @@ FIELD_QUESTIONS = {
 }
 
 
+FIELD_PRIORITY = (
+    "stone_origin", "stone_type", "stone_carat", "finger_size", "dimensions", "metal", "metal_karat", "metal_color",
+    "stone_shape", "stone_cut", "setting_style", "stone_color", "stone_clarity",
+)
+
+
+def prioritized(missing: list[str]) -> list[str]:
+    """The fields that move the price first: origin, stone, size; the follow-up asks at most three."""
+    rank = {name: index for index, name in enumerate(FIELD_PRIORITY)}
+    return sorted(missing, key=lambda field: (rank.get(field, len(rank)), field))
+
+
 def plain_followup(missing: list[str], shop_name: str) -> str:
     asks = [FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?") for field in missing[:4]]
     lines = "\n".join(f"- {q[0].upper() + q[1:]}" for q in asks) or "- Is there anything else we should know?"
@@ -108,6 +120,7 @@ def _send_followup(
     command_runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
+    missing = prioritized(missing)
     try:
         drafted = judge.draft_followup(digest, missing, _template_text(base_dir), shop_name, model, judge_runner, openclaw)
     except judge.JudgmentError as exc:

@@ -7525,7 +7525,8 @@ class InlinePipelineTests(unittest.TestCase):
             ):
                 out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
             self.assertEqual(out["outcome"], "followup_sent")
-            self.assertEqual(out["missing_required_fields"], ["finger_size", "setting_style", "stone_clarity", "stone_color", "stone_cut"])
+            self.assertEqual(sorted(out["missing_required_fields"]), ["finger_size", "setting_style", "stone_clarity", "stone_color", "stone_cut"])
+            self.assertEqual(out["missing_required_fields"][0], "finger_size", "the fields that move the price are asked first")
             self.assertEqual(runner.call_count, 2)  # one call reads the inquiry, one writes back or prices
             record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
             self.assertEqual(record["status"], "awaiting_specs")

@@ -1719,3 +1719,60 @@ class ReliabilityRulesTests(unittest.TestCase):
             self.assertNotIn(gone, self.skill, gone)
         self.assertIn("never emails a customer", self.skill)
         self.assertIn("does none of this", self.skill)
+
+
+class PartialAnswerTests(SideBranchTests):
+    """A customer who answers some of what was asked gets one more ask for the rest; only silence or a nag stalls."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_progress_earns_a_second_ask_and_the_price_fields_come_first(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            import pipeline
+
+            world.spec = {"piece_type": "engagement ring"}
+            world.customer_message("e1", "thread-eng", "I am looking for an engagement ring.\n\nTony")
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), 1)
+            asked = [p for p in world.prompts if "MISSING DETAILS TO ASK FOR" in p][-1]
+            order = asked.split("MISSING DETAILS TO ASK FOR: ", 1)[1].split("\n", 1)[0]
+            self.assertTrue(order.startswith("finger_size, metal"), order)
+            # He answers most of it, not the size or the origin: one more ask, no owner question.
+            world.spec = {"piece_type": "engagement ring", "metal": "rose gold", "metal_karat": "18k", "stone_type": "diamond",
+                          "stone_carat": "3", "stone_color": "D", "stone_clarity": "flawless", "stone_cut": "ideal",
+                          "setting_style": "solitaire", "finish": "polished"}
+            world.customer_message("e2", "thread-eng", "A classic 3 ct solitaire, D flawless, ideal cut, 18k rose gold, polished.\n\nTony")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual(len(world.sent), 2)
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "no owner question for a partial answer")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(sorted(record["missing_required_fields"]), ["finger_size", "stone_origin"])
+            # He answers nothing new: now the owner is asked, not the customer a third time.
+            world.customer_message("e3", "thread-eng", "Sounds great, thanks!\n\nTony")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
+            self.assertEqual(len(world.sent), 2)
+            self.assertEqual(len([n for n in world.notices if not n["file"]]), 1)
+            self.assertEqual(pipeline.prioritized(["setting_style", "finger_size", "stone_origin", "metal"]),
+                             ["stone_origin", "finger_size", "metal", "setting_style"])
+        self.run_branch(branch)
