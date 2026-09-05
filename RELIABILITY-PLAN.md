@@ -75,11 +75,31 @@ resumes at the step that did not finish. This is what the booking got today
 (`calendar-event.json`); it becomes the pattern, with one helper, not four
 hand-rolled versions.
 
+Two runs of the same command at once (the line pasted twice, or a retry
+from `answer-question` while the first paste is still running) are handled
+the way claims already are: the helper takes a **lease** on the run journal
+(an exclusive create of `run.lock` with a token and an expiry, the same
+mechanism as the claim lease) before reading it, and refuses with "another
+run of this command is in progress" while a live lease exists. Within a
+run, every step is **write-ahead**: `started` is written and flushed before
+the side effect, `done` after it, so a crash between the two leaves a
+`started` step, which is the ambiguous case below and never a silent
+replay. Customer sends already work this way inside `gmail_safe`
+(`acquire_external_action` marks the action pending under the claim lock
+before the call); the run journal extends the same rule to the calendar and
+to the report steps.
+
 The ambiguous case is a crash inside the irreversible step: the journal says
 `started`, the provider may or may not have sent. `gmail_safe` already marks
-that `uncertain`. The rule: an uncertain send is never retried by the desk.
-It becomes a question: "I cannot tell whether the confirmation reached Pat;
-look at the thread. Reply 'sent' and I will record it, or 'resend'."
+that `uncertain`. The rule: an uncertain send is never blindly retried. The
+desk can usually answer the question itself, because it built the MIME
+message and so knows its own `Message-ID` header: on the next run it
+fetches the thread (read-only) and looks for a message carrying that id.
+Found: the send happened; record the receipt and continue. Not found, and
+the thread was read successfully: the send did not happen; resend the same
+journaled payload. Only when Gmail itself cannot be read does the owner get
+the question: "I cannot tell whether the confirmation reached Pat; look at
+the thread. Reply 'sent' and I will record it, or 'resend'."
 
 ### 3.2 A failure is a question, with the fix attached
 
@@ -109,6 +129,21 @@ What never becomes a question: the tick's own retries (transient model or
 gateway trouble on the first attempts), housekeeping, and anything the
 owner did not initiate and no customer is waiting on. Those stay in the run
 summary, as today.
+
+### 3.2a Which paths are journaled, and when
+
+"Every executor" is a claim only once section 5 is complete. Precisely:
+
+| Path | Effects | Covered by |
+|---|---|---|
+| The four card executors (`send-approved-estimate-brief`, `send-approved-rendering`, `book-approved-appointment`, `send-approved-times`) | send, calendar, record, report | Step 2 of section 5: the run journal and `fail()` |
+| `answer-question` outcomes that act: price after a rate, the offer card after a rejection, "ask again", "skip" | model calls, card, send, record | Step 3: the same helper wraps each outcome as a journaled run keyed by question id, so a replayed answer resumes rather than repeats (today's replay rule for rate answers becomes the general case) |
+| The tick's inline sends and cards (follow-up email, price card, rendering card, appointment card) | send, card, notice | Already keyed by the claim's external-action journal; step 3 adds the bounded-attempt rule and the `stuck_claim` question |
+| Watcher housekeeping (audit poll, reminders, stale reconcile, worker sweep) | reads and notices | Reads are harmless to repeat; notices are deduplicated by the journal's reported flag; nothing else needed |
+
+Until step 3 lands, `answer-question` keeps today's behaviour (safe to run
+twice for rate answers and decisions; the offer-card outcome files a second
+card if run twice after a crash), and the doctor names that as a known gap.
 
 ### 3.3 Stuck is bounded
 
@@ -187,8 +222,21 @@ reordered step that breaks a promise fails here before it reaches a pod.
 
 Nothing a customer sees. No new setup question. No new owner channel. The
 execute line on every card stays the same line. Records, claims, and the
-Kolo mirror keep their shapes; journals are new files beside the work, and
-old work folders without one are treated as a fresh start.
+Kolo mirror keep their shapes; journals are new files beside the work.
+
+A work folder without a run journal is **not** treated as untouched. The
+effects the old code could leave behind are already durable elsewhere or
+are reconstructed on first contact: customer sends live in the claim's
+external-action journal (pending, sent, uncertain) and are honoured as
+today; calendar events created by 4.4.2 or later live in
+`calendar-event.json`; and for a booking work folder from before 4.4.2 with
+an approval on record and no booking, the first run under the new code
+checks free/busy for that exact slot before creating anything and, if the
+slot is taken, stops and asks the owner whether the event on the calendar
+is the desk's own ("release" deletes nothing here; the owner removes a
+pre-journal event by hand, once). The doctor reports every such folder on
+the day the new version is installed, so the migration is a list, not a
+surprise.
 
 ## 5. Order of work
 
@@ -301,3 +349,23 @@ Targets and the changes that reach them:
 Speed and efficiency changes ship after the reliability steps in section 5,
 as their own versions, each with the measurement in place first so the
 gain is a number and not an impression.
+
+## 8. Review, 5 September 2026
+
+An independent review of this plan raised four points; all four are taken.
+
+1. **Concurrency of journal-based idempotency.** Two runs could both see a
+   step as not done. Answered in 3.1: a lease per command run, and
+   write-ahead `started` before every side effect, the same mechanism the
+   claim journal already uses for sends.
+2. **Legacy folders treated as fresh starts.** Answered in section 4:
+   absence of a journal is not proof of nothing done; old sends are already
+   journaled on the claim, old calendar work is checked against free/busy
+   before anything is created, and the doctor lists every pre-journal
+   folder at install time.
+3. **"Every executor" was wider than the first step delivered.** Answered in
+   3.2a: a table of which paths are covered by which step, and what the gap
+   is until then.
+4. **Uncertain sends resolved by the owner's word alone.** Answered in 3.1:
+   the desk verifies against Gmail first using its own Message-ID; the
+   owner is asked only when Gmail cannot be read.
