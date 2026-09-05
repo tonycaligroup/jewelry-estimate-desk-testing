@@ -87,11 +87,27 @@ def local_key(value: datetime) -> str:
     return value.strftime("%Y-%m-%dT%H:%M")
 
 
+class Crash(BaseException):
+    """The process was killed right after a side effect. Not an Exception: nothing in the code may catch it."""
+
+
 class World:
-    """Everything outside the skill: Gmail, Kolo, the calendar, the model, the image tool."""
+    """Everything outside the skill: Gmail, Kolo, the calendar, the model, the image tool.
+
+    Fault injection: `fail_next[service] = n` makes the next n calls to that
+    service fail the way the real one would; `crash_after.add(service)` lets
+    the next call succeed and then kills the process (a Crash). Every call is
+    logged in `calls`, so a test can learn which services an action touches.
+    """
+
+    SERVICES = ("gmail_read", "gmail_send", "calendar_freebusy", "calendar_create", "calendar_delete",
+                "kolo_card", "kolo_notify", "kolo_audit", "kolo_update", "model", "image")
 
     def __init__(self, ws: Path) -> None:
         self.ws = ws
+        self.fail_next: dict[str, int] = {}
+        self.crash_after: set[str] = set()
+        self.calls: list[str] = []
         self.threads: dict[str, list[dict]] = {}
         self.messages: dict[str, dict] = {}
         self.batch: list[dict] = []
@@ -106,6 +122,7 @@ class World:
         self.other: list[list[str]] = []
         self.busy: list[dict[str, str]] = []
         self.calendar_events: dict[str, dict] = {}
+        self.created_events: list[dict] = []
         self.deleted_events: list[str] = []
         self.prompts: list[str] = []
         # What the model "sees" at each stage; the test moves these along.
@@ -117,6 +134,23 @@ class World:
         self.email_count = 0
         self.brief_count = 0
         self.event_count = 0
+
+    # ---- Fault injection ----------------------------------------------
+    def _service(self, name: str, argv: list[str] | None = None, subprocess_style: str | None = None) -> None:
+        """Log the call; raise the realistic failure when one is armed. Called before the effect."""
+        self.calls.append(name)
+        if self.fail_next.get(name, 0) > 0:
+            self.fail_next[name] -= 1
+            if subprocess_style == "checked":
+                raise subprocess.CalledProcessError(1, argv or [name], "", f"{name}: gateway error")
+            raise OSError(f"{name}: gateway dropped")
+
+    def _after(self, name: str, result):
+        """Called after the effect: a crash armed for this service kills the process here."""
+        if name in self.crash_after:
+            self.crash_after.discard(name)
+            raise Crash(f"killed right after {name}")
+        return result
 
     # ---- Gmail ---------------------------------------------------------
     def customer_message(self, message_id: str, thread_id: str, body: str, subject: str = "Custom signet ring",
@@ -166,6 +200,7 @@ class World:
         return {"discovered": len(batch), **result}
 
     def fake_fetch(self, monitor_root: Path, claim_root: Path, message_id: str, token: str, opener=None) -> dict:
+        self._service("gmail_read")
         paths = inbox_monitor.prepare_claim_work(monitor_root, claim_root, message_id)
         message = self.messages[message_id]
         Path(paths["gmail_message"]).write_text(json.dumps(message), encoding="utf-8")
@@ -173,6 +208,7 @@ class World:
         return {"gmail_message": paths["gmail_message"], "gmail_thread": paths["gmail_thread"]}
 
     def fake_fetch_json(self, path: str, params, token: str, opener=None) -> dict:
+        self._service("gmail_read")
         match = re.fullmatch(r"threads/([^/]+)", path)
         if not match:
             raise AssertionError("unexpected Gmail fetch: " + path)
@@ -188,6 +224,7 @@ class World:
         return [target]
 
     def _curl(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        self._service("gmail_send", argv, "checked")
         payload = json.loads(Path(flag(argv, "--data-binary")[1:]).read_text(encoding="utf-8"))
         raw = payload["raw"]
         raw += "=" * (-len(raw) % 4)
@@ -202,23 +239,25 @@ class World:
         sent = self._shop_message(payload["threadId"], str(mime["Subject"]), body)
         self.sent.append({"id": sent["id"], "thread_id": payload["threadId"], "subject": str(mime["Subject"]),
                           "to": str(mime["To"]), "body": body, "attachments": attachments})
-        return ok(argv, json.dumps({"id": sent["id"], "threadId": payload["threadId"]}))
+        return self._after("gmail_send", ok(argv, json.dumps({"id": sent["id"], "threadId": payload["threadId"]})))
 
     # ---- Calendar ------------------------------------------------------
     def query_freebusy(self, time_min, time_max, timezone_name, calendar_id, token, opener=None) -> dict:
+        self._service("calendar_freebusy")
         lo, hi = calendar_query.parse_timestamp(time_min, "a"), calendar_query.parse_timestamp(time_max, "b")
         busy = [b for b in self.busy
                 if calendar_query.parse_timestamp(b["start"], "s") < hi and calendar_query.parse_timestamp(b["end"], "e") > lo]
         query = {"timeMin": time_min, "timeMax": time_max, "timeZone": timezone_name, "items": [{"id": calendar_id}]}
         body = {"kind": "calendar#freeBusy", "timeMin": time_min, "timeMax": time_max,
                 "calendars": {calendar_id: {"busy": busy}}}
-        return {"schema_version": 1, "provider": "google_calendar_freebusy",
+        return self._after("calendar_freebusy", {"schema_version": 1, "provider": "google_calendar_freebusy",
                 "provider_request_id": "request-0123456789abcdef",
                 "response_date": format_datetime(datetime.now(timezone.utc)), "query": query,
-                "response_body_sha256": calendar_query.canonical_hash(body), "response_body": body}
+                "response_body_sha256": calendar_query.canonical_hash(body), "response_body": body})
 
     def create_event(self, calendar_id, start, end, timezone_name, summary, description, attendee_email, token,
                      opener=None) -> dict:
+        self._service("calendar_create")
         self.event_count += 1
         event = {"kind": "calendar#event", "id": f"evt-{self.event_count}", "summary": summary,
                  "start": {"dateTime": start, "timeZone": timezone_name}, "end": {"dateTime": end, "timeZone": timezone_name},
@@ -226,12 +265,14 @@ class World:
                  "status": "confirmed"}
         self.calendar_events[event["id"]] = event
         self.busy.append({"start": start, "end": end, "event": event["id"]})
-        return event
+        self.created_events.append(event)
+        return self._after("calendar_create", event)
 
     def delete_event(self, calendar_id, event_id, token, opener=None) -> bool:
+        self._service("calendar_delete")
         self.deleted_events.append(event_id)
         self.busy = [b for b in self.busy if b.get("event") != event_id]
-        return self.calendar_events.pop(event_id, None) is not None
+        return self._after("calendar_delete", self.calendar_events.pop(event_id, None) is not None)
 
     # ---- The runner: every command the skill shells out to --------------
     def run(self, argv, **_kwargs) -> subprocess.CompletedProcess[str]:
@@ -253,13 +294,18 @@ class World:
         if argv[1:4] == ["infer", "model", "run"]:
             prompt = flag(argv, "--prompt") or ""
             self.prompts.append(prompt)
-            return ok(argv, json.dumps({"text": json.dumps(self.answer(prompt))}))
+            self.calls.append("model")
+            if self.fail_next.get("model", 0) > 0:
+                self.fail_next["model"] -= 1
+                return subprocess.CompletedProcess(argv, 1, "", "model down")
+            return self._after("model", ok(argv, json.dumps({"text": json.dumps(self.answer(prompt))})))
         if argv[1:3] == ["infer", "image"] and argv[3] in ("generate", "edit"):
+            self._service("image", argv, "checked")
             output = Path(flag(argv, "--output"))
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(PNG)
             self.renders.append(argv)
-            return ok(argv, json.dumps({"ok": True, "outputs": [{"path": str(output)}]}))
+            return self._after("image", ok(argv, json.dumps({"ok": True, "outputs": [{"path": str(output)}]})))
         if argv[1:4] == ["infer", "image", "describe"]:
             ids = re.findall(r"^- (\w+):", flag(argv, "--prompt") or "", re.MULTILINE)
             text = json.dumps({"answers": {i: "yes" for i in ids}, "notes": {}})
@@ -275,6 +321,7 @@ class World:
     def _kolo(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
         command = argv[1]
         if command == "request-approval":
+            self._service("kolo_card", argv, "checked")
             self.brief_count += 1
             brief_id = f"{self.brief_count:08x}-0000-4000-8000-000000000000"
             payload = json.loads(flag(argv, "--execution-payload") or "{}")
@@ -286,18 +333,21 @@ class World:
             self.events.insert(0, {"event_type": "brief.submitted", "brief_id": brief_id, "brief_number": self.brief_count,
                                    "description": card["title"], "created_at": datetime.now(timezone.utc).isoformat(),
                                    "details": {}})
-            return ok(argv, "")
+            return self._after("kolo_card", ok(argv, ""))
         if command == "notify-owner":
+            self._service("kolo_notify", argv, "checked")
             self.notices.append({"text": flag(argv, "-m"), "file": flag(argv, "--file"),
                                  "session_key": flag(argv, "--session-key")})
-            return ok(argv, "")
+            return self._after("kolo_notify", ok(argv, ""))
         if command == "audit-query":
+            self._service("kolo_audit", argv, "checked")
             wanted = flag(argv, "--event-type")
             events = [e for e in self.events if not wanted or e["event_type"] == wanted]
-            return ok(argv, json.dumps({"status": "ok", "events": events}))
+            return self._after("kolo_audit", ok(argv, json.dumps({"status": "ok", "events": events})))
         if command == "update-brief":
+            self._service("kolo_update", argv, "checked")
             self.updates.append((flag(argv, "--brief-id"), flag(argv, "--status")))
-            return ok(argv, "")
+            return self._after("kolo_update", ok(argv, ""))
         self.other.append(argv)
         return ok(argv, "")
 
