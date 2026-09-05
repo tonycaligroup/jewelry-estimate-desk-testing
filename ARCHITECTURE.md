@@ -381,6 +381,19 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.4.0 (built 5 September 2026): meeting first, and a jeweler's voice.**
+A customer who wrote "I can bring the stone, are you free next week?" was
+answered with a questionnaire. Now scheduling intent before an estimate
+files the appointment card and holds the detail questions; approval
+stores, offers, and bookings accept an `awaiting_specs` record, a booking
+made before the estimate keeps the record waiting for details
+(`before_estimate` on the receipt), and the confirmation or offer says the
+design gets settled at the meeting. The follow-up prompt and template were
+rewritten as a jeweler writing back (react to what they shared, three
+questions at most, an invitation to come in), the body check refuses
+heading stubs and sign-offs ending in a question mark, and the default
+voice and the meeting briefs carry the same warmth.
+
 **4.3.5 (built 5 September 2026): a fresh start forgets everything about
 customers.** The customer-state reset now also removes owner questions,
 appointment approval stores, and the brief registry, and accepts the

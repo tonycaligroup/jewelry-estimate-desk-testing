@@ -272,6 +272,9 @@ def extract_specification(
         "(\"whatever you think\", \"work it out from the logo\", \"your call\"), write \"jeweler's choice\" for that key. "
         "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
         "Never include prices, costs, or anything the SHOP messages said. "
+        "scheduling_intent is the customer's own words when the message being handled asks to meet, come in, "
+        "visit, or bring something to the shop (\"can we meet next week\", \"I can come by Friday\"); omit it "
+        "when they do not ask to meet. "
         "customer_supplied_materials names anything the customer already owns and wants used (\"my mother's "
         "diamond\", \"reset my stone\", \"my own gold\"); when the stone is theirs, still fill stone_type and any "
         "shape or size they gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "
@@ -352,6 +355,11 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("body must not contain template placeholders")
     if "?" not in body:
         raise ValueError("a follow-up must ask the customer at least one question")
+    stubs = [line.strip() for line in body.splitlines()
+             if line.strip().endswith("?") and len(line.strip().rstrip("?").split()) <= 3]
+    if stubs:
+        raise ValueError("no headings or sign-offs ending in a question mark (" + "; ".join(stubs[:3]) + "); "
+                         "write each question as a full sentence")
     recap = [line for line in body.splitlines() if re.match(r"\s*[-*\u2022]\s", line) and "?" not in line
              and re.search(r"\b(I've noted|I have noted|I have you down|noted your|you mentioned)\b", line, re.IGNORECASE)]
     if recap:
@@ -370,15 +378,18 @@ def draft_followup(
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing."""
     prompt = (
-        "You write customer emails for a retail custom-jewelry shop. Write the reply body (no subject line, "
-        "no headers) asking the customer only for the missing details listed below, in the tone of the "
-        "template. Open with one half-sentence confirming your read of what they asked for; after that, "
-        "every line must ask something. Include a section only when it holds a question; never write a "
-        "bullet or line that merely restates what the customer already said (no \"I've noted\", no "
-        "\"I have you down for\"); never add a timing or budget section unless it asks a question. Keep it "
+        "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
+        "body (no subject line, no headers) in the tone of the template: warm, personal, unhurried. Open with "
+        "one sentence that reacts to what they shared (the occasion, who it is for, a family stone, the idea "
+        "they described); never open with a summary of their request. Then ask only for the missing details "
+        "listed below, at most three questions, each a plain sentence or one dash bullet, folded into one or "
+        "two sentences where you can; tell them it is fine not to know and you will suggest what usually looks "
+        "best. Never write a line that merely restates what they said (no \"I've noted\", no \"I have you "
+        "down for\"); never add a timing or budget section unless it asks a question. Close by inviting them "
+        "to come by the shop if they would rather talk it through in person, without naming times. Keep it "
         "under 140 words. Use the customer's name if they gave one. Never mention prices, costs, rates, or "
-        "budgets as requirements; budget and dates may be invited but are optional. Do not offer meeting "
-        "times. Do not use template placeholders; write real text. "
+        "budgets as requirements. Do not use template placeholders; write real text. No headings or labels, "
+        "and the sign-off is a plain line with no question mark. "
         f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
         f"MISSING DETAILS TO ASK FOR: {', '.join(missing_fields)}\n\n"
         f"TEMPLATE (tone and structure only):\n{template}\n\n"

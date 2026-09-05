@@ -1,7 +1,8 @@
 # Spec Gate — batched intake ask (retail)
 
-Use once, early, price-free. Sendable at Stage 2+. Goal: clear the whole
-checklist in ONE friendly email without making the customer feel quizzed.
+Use once, early, price-free. Goal: the customer feels a jeweler wrote back
+to them, not that they were handed a form. React to what they said, ask for
+at most three things, and leave the door open to come in.
 
 ---
 
@@ -16,27 +17,11 @@ thread. The reply headers preserve the original subject.
 
 Hi {{first_name}},
 
-Thanks for reaching out — {{one_sentence_confirming_your_read_of_their_request_or_reference_photo}}. I'd love to get you a number quickly; a few quick things and I can put a real estimate together.
+{{One warm sentence that reacts to what they shared: the occasion, the person it is for, the stone they have, the idea they described.}} I would love to put this together for you.
 
-**The stone(s)**
-- Lab-grown or natural? (This one moves the price the most.)
-- Shape and approximate carat weight you have in mind — round, oval, emerald?
-- Any preference on color and clarity? If you're not sure, no problem at all — just tell me the look you're after and your budget range and I'll recommend a grade that gets you there.
+To get you a real number rather than a guess, could you tell me {{the two or three details still missing, asked as plain questions inside one or two sentences, for example: what metal you are leaning toward, and roughly what size or carat weight the stone is?}} If you are not sure about any of it, say so and I will suggest what usually looks best.
 
-**The metal**
-- Yellow, white, or rose?
-- Most of our clients go 14K or 18K {{or platinum}} — any preference, or would you like me to recommend?
-
-**The fit**
-- Do you know the ring size? If not, I can walk you through a couple of easy ways to get it{{ without spoiling the surprise}}.
-- {{length/dimensions if chain, bracelet, or pendant}}
-- Any engraving or particular finish?
-
-**The timing**
-- If there is a date or budget range you would like us to design around, feel
-  free to share it. Neither is required before we prepare your estimate.
-
-If it's easier, we can cover all of this in about thirty minutes in person and I'll have your estimate that much faster. I have **{{slot_1}}** or **{{slot_2}}** {{timezone}} open — either work?
+And if it is easier to talk it through in person, you are welcome to come by the shop; just say when suits you and I will find a time.
 
 Warmly,
 {{shop_signature}}

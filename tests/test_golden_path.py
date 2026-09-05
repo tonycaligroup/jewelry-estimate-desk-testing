@@ -312,7 +312,7 @@ class World:
             return {"kind": self.triage_kind, "note": "read by the fake"}
         if "merge every fact the customer actually stated" in prompt:
             return {"specification": dict(self.spec)}
-        if "asking the customer only for the missing details" in prompt:
+        if "MISSING DETAILS TO ASK FOR" in prompt:
             return {"body": (
                 "Hi Pat,\n\nThanks for writing about the signet ring; happy to price it. Two quick questions "
                 "so the number is right:\n\n- What finger size should the ring be?\n- How would you like the "
@@ -1125,4 +1125,86 @@ class OwnStoneAndStallTests(SideBranchTests):
             self.assertEqual(world.cards, [])
             self.assertIn(self.claim(ws, "d2")["status"], ("manual_review", "processed"))
             self.assertEqual(self.tick(ws, world)["claimed"], 0)
+        self.run_branch(branch)
+
+
+class MeetingFirstTests(SideBranchTests):
+    """A customer who asks to come in gets the meeting, not a questionnaire."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_meeting_before_the_estimate_then_details_then_price(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-propose"
+            world.spec = {
+                "piece_type": "engagement ring", "stone_type": "diamond",
+                "customer_supplied_materials": "his own stone", "notes": "ready to propose, has the stone",
+                "scheduling_intent": "are you available next week? I can bring the stone",
+            }
+            world.requested = (["next week"], [])
+            world.customer_message("p1", thread, "Hey, I think I am ready to propose. I have some ideas I'd love to show you "
+                                   "in person. Are you available next week? I can bring the stone :)\n\nDavid")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertEqual(world.sent, [], "no questionnaire; the meeting comes first")
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "appointment_offer", card["payload"])
+            self.assertTrue(card["payload"]["calendar_availability"])
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "awaiting_specs")
+            self.assertEqual(self.claim(ws, "p1")["status"], "processed")
+            # Approve the offer: the email says the design gets settled at the meeting, and asks for nothing.
+            self.execute(ws, world, card["payload"]["execute"], card)
+            self.assertEqual(len(world.sent), 1)
+            for option in card["payload"]["calendar_availability"]:
+                self.assertIn(option["label"], world.sent[0]["body"])
+            self.assertNotRegex(world.sent[0]["body"], r"(?i)carat|clarity|finger size")
+            # He picks a time: a booking card; approving books it and the record still waits for details.
+            pick = card["payload"]["calendar_availability"][0]
+            world.spec["scheduling_intent"] = f"{pick['label']} works"
+            world.requested = ([pick["label"]], [pick["start"][:16]])
+            world.customer_message("p2", thread, f"{pick['label']} works for me.\n\nDavid")
+            self.tick(ws, world)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking", book["payload"])
+            self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(len(world.calendar_events), 1)
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["status"], "awaiting_specs", "booked before the estimate; still waiting for details")
+            self.assertTrue(record["appointment_booked"].get("before_estimate"))
+            self.assertEqual(len(world.sent), 2)
+            self.assertIn(pick["label"], world.sent[1]["body"])
+            # After the visit he emails the details: the desk prices, no more meeting cards.
+            world.spec = {
+                "piece_type": "engagement ring", "stone_type": "diamond", "customer_supplied_materials": "his own stone",
+                "stone_shape": "round", "stone_carat": "1.2", "metal": "yellow gold", "metal_karat": "14k",
+                "finger_size": "6", "setting_style": "solitaire",
+            }
+            world.customer_message("p3", thread, "Great meeting you. Let's do 14k yellow gold, solitaire, size 6. "
+                                   "The stone is a 1.2 round.\n\nDavid")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(world.cards[-1]["kind"], world.cards[-1]["kind"])
+            self.assertIn("send-approved-estimate-brief", world.cards[-1]["payload"]["execute"])
+            self.assertEqual(self.record(ws, estimate_id)["status"], "pending_approval")
+            self.assertEqual(len([n for n in world.notices if not n["file"]]), 0, "no questions needed along the way")
         self.run_branch(branch)

@@ -24,8 +24,9 @@ import judge
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 DEFAULT_VOICE = (
-    "Warm and plain, like a note from the person at the bench. Short sentences, first names when the "
-    "customer used theirs, no sales language, no exclamation marks. Sign with the shop name."
+    "Warm and personal, like a note from the jeweler who will make the piece: react to what the customer "
+    "shared before asking anything, short sentences, first names when the customer used theirs, generous "
+    "with help, no sales language, no exclamation marks. Sign with the shop name."
 )
 THREAD_CHAR_LIMIT = 12_000
 
@@ -118,8 +119,10 @@ KIND_BRIEFS = {
     ),
     "confirmation": (
         "Confirm the appointment at exactly the time given (write the time exactly as provided). Say a calendar "
-        "invitation is on its way to this address. Say what the meeting is for. Say to reply if the time stops "
-        "working. No prices."
+        "invitation is on its way to this address. Say what the meeting is for in a personal way: mention what "
+        "they are bringing or planning if they said, and that you are looking forward to it. If the facts say "
+        "there is no estimate yet, say you will go through the design together at the meeting and do not ask "
+        "for any detail now. Say to reply if the time stops working. No prices."
     ),
     "reschedule": (
         "Confirm that the appointment has been moved to exactly the time given (write it exactly as provided), "
@@ -127,8 +130,10 @@ KIND_BRIEFS = {
         "No prices."
     ),
     "offer": (
-        "Offer the customer exactly these meeting times, each written exactly as provided, one per line, and "
-        "ask them to reply with the one that works or say what does. Nothing is booked yet. No prices."
+        "Say you would be glad to meet, in a personal way that reacts to what they said, then offer exactly these "
+        "meeting times, each written exactly as provided, one per line, and ask them to reply with the one that "
+        "works or say what does. If the facts say there is no estimate yet, say you will go through the design "
+        "together when they come in and do not ask for any detail now. Nothing is booked yet. No prices."
     ),
     "rendering": (
         "Send the attached design renderings. Say they illustrate the design direction discussed, that the "

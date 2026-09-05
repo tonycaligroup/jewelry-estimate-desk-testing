@@ -373,6 +373,22 @@ def process_claim(
         return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
     if nxt == "send_spec_followup":
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        if specification.get("scheduling_intent") and not record.get("appointment_booked"):
+            # Meeting first: a customer who asks to come in gets the meeting,
+            # not a questionnaire. The details are settled at the meeting or
+            # in a later email, and pricing picks up from there.
+            intent_path = Path(paths["appointment_intent"])
+            workflow_safe.write_private(intent_path, appointment_intent(
+                p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id,
+            ))
+            workflow_safe.request_appointment_approval(argparse.Namespace(
+                monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+                shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
+                appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
+                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=False,
+                runner=command_runner, judge_runner=judge_runner,
+            ))
+            return {"outcome": "appointment_approval_requested", "before_estimate": True, "next": "done"}
         repeated = estimate_record.followup_stalled(record, message_id, reviewed["missing_required_fields"])
         if repeated and not reviewed["initiating"]:
             # The customer was already asked for exactly this and did not

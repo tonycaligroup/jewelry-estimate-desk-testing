@@ -7422,6 +7422,8 @@ class JudgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             judge.check_body({"body": "Hi {{first_name}}, thanks for reaching out about the ring you described to us."})
         ok = judge.check_body({"body": "Hi Pat, thanks for reaching out about the ring. Could you tell me the ring size and metal color?"})
+        with self.assertRaisesRegex(ValueError, "headings"):
+            judge.check_body({"body": "Hi David, congratulations.\nThe setting?\n- What setting style are you envisioning?\nWarmly, Lomelino Jewelry?"})
         self.assertIn("ring size", ok["body"])
         q = judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3, "fees": ["casting"], "accents": [{"key": "melee", "carats": 0.2}]}, ["casting"], ["melee"], False)
         self.assertEqual(q["fees"], ["casting"])

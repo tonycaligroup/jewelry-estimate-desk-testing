@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.3.6
+version: 4.4.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -696,7 +696,13 @@ shape and its carat weight or millimetre size so the setting fits, never
 its color, clarity, cut, or origin, and the price carries no stone line for
 it. And the desk never sends the same follow-up twice: when a reply leaves
 the same fields open that were already asked for, the owner gets a question
-instead (skip and price it, ask again, or handle myself).
+instead (skip and price it, ask again, or handle myself). And a customer
+who asks to meet gets the meeting first, at any stage: before an estimate
+the desk files the appointment card instead of the detail questions, the
+confirmation says the design gets settled at the meeting, and pricing picks
+up whenever the details arrive, by email or after the visit. Every customer
+email reads as the jeweler writing back: it reacts to what the customer
+shared, asks at most three things, and invites them in.
 
 Before sending a retail estimate, require all applicable fields:
 

@@ -981,8 +981,9 @@ def record_appointment_booked(
             "estimate_sent",
             "appointment_booked",
             "approved",
+            "awaiting_specs",
         }:
-            raise ValueError("appointment booking requires a sent estimate")
+            raise ValueError("appointment booking requires an open estimate")
         if confirmation_thread_id != record["route"]["thread_id"]:
             raise ValueError("appointment confirmation thread does not match route")
         source_hash = sha256_text(source_message_id)
@@ -1018,8 +1019,13 @@ def record_appointment_booked(
                 raise ValueError("appointment_history must be an array")
             history.append({**existing, "replaced_at": datetime.now(timezone.utc).isoformat()})
         evidence["booked_at"] = datetime.now(timezone.utc).isoformat()
+        if record["status"] == "awaiting_specs":
+            # Booked before the estimate: the meeting is where the details
+            # get settled, so the record keeps waiting for them.
+            evidence["before_estimate"] = True
+        else:
+            record["status"] = "appointment_booked"
         record["appointment_booked"] = evidence
-        record["status"] = "appointment_booked"
         write_object(path, record)
         return record
 
@@ -1537,8 +1543,8 @@ def record_times_offered(
     with record_lock(root):
         record = read_object(path)
         route_ownership.validate_record(record)
-        if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
-            raise ValueError("offering times requires a sent estimate")
+        if record["status"] not in {"estimate_sent", "appointment_booked", "approved", "awaiting_specs"}:
+            raise ValueError("offering times requires an open estimate")
         offers = record.setdefault("times_offered", [])
         if not isinstance(offers, list):
             raise ValueError("times_offered must be an array")
@@ -1595,8 +1601,8 @@ def record_appointment_approval_requested(
     with record_lock(root):
         record = read_object(path)
         route_ownership.validate_record(record)
-        if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
-            raise ValueError("appointment approval requires a sent estimate")
+        if record["status"] not in {"estimate_sent", "appointment_booked", "approved", "awaiting_specs"}:
+            raise ValueError("appointment approval requires an open estimate")
         route = record["route"]
         if approval.get("customer_email") != route["recipient"]:
             raise ValueError("appointment approval customer email does not match route")

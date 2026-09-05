@@ -307,8 +307,8 @@ def _appointment_approval_details(
             raise ValueError(f"calendar_availability[{index}] contains invalid text")
         normalized_slots.append(dict(slot))
     route_ownership.validate_record(record)
-    if record["status"] not in {"estimate_sent", "appointment_booked", "approved"}:
-        raise ValueError("appointment approval requires a sent estimate")
+    if record["status"] not in {"estimate_sent", "appointment_booked", "approved", "awaiting_specs"}:
+        raise ValueError("appointment approval requires an open estimate")
     route = record["route"]
     if mode == "book" and len(normalized_slots) != 1:
         raise ValueError("a booking card carries exactly one time")
@@ -342,12 +342,18 @@ def _appointment_approval_details(
 
 def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     """Create a durable appointment approval and optionally finalize the claim."""
-    record, _decision = estimate_record.post_estimate_decision(
-        args.record_root,
-        args.estimate_id,
-        args.message_id,
-        "appointment_request",
-    )
+    record = estimate_record.read_object(estimate_record.record_path(args.record_root, args.estimate_id))
+    if record.get("status") in SENT_STATUSES:
+        record, _decision = estimate_record.post_estimate_decision(
+            args.record_root,
+            args.estimate_id,
+            args.message_id,
+            "appointment_request",
+        )
+    else:
+        # Meeting first (WORKFLOW.md): a customer who asks to come in gets
+        # the meeting; the design details are settled there or by email later.
+        route_ownership.validate_record(record)
     intent = read_object(args.appointment_intent)
     if args.appointment_approval.exists():
         approval = read_object(args.appointment_approval)
@@ -375,16 +381,19 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         options = approval.get("calendar_availability") or []
         paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
         digest = _digest_from_work(paths, args.message_id, profile)
+        before = {"before the estimate": "no estimate yet; the design details (metal, setting, size, stone) "
+                                         "get settled at the meeting, so do not ask for them now"} \
+            if record.get("status") == "awaiting_specs" else {}
         if approval.get("action_type") == "appointment_booking" and options:
             when = options[0]["label"]
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
-                           "confirmation", {"piece": piece, "time_labels": [when], "shop name": shop},
+                           "confirmation", {"piece": piece, "time_labels": [when], "shop name": shop, **before},
                            CONFIRMATION_NOTE.format(when=when, shop=shop, piece=piece), prepared_email_path(store), digest,
                            getattr(args, "runner", subprocess.run))
         elif options:
             labels = [o.get("label") or o["start"] for o in options]
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
-                           "offer", {"piece": piece, "time_labels": labels, "shop name": shop},
+                           "offer", {"piece": piece, "time_labels": labels, "shop name": shop, **before},
                            OFFER_NOTE.format(piece=piece, lines="\n".join(f"- {l}" for l in labels), shop=shop),
                            prepared_email_path(store), digest, getattr(args, "runner", subprocess.run))
     except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
@@ -1796,6 +1805,8 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
             "piece": piece, "time_labels": [chosen["label"]], "shop name": shop,
             "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
+            **({"before the estimate": "no estimate yet; the design details get settled at the meeting"}
+               if record.get("status") == "awaiting_specs" else {}),
         }, fixed, args)
     customer_content_guard.validate_customer_text(body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
