@@ -352,7 +352,8 @@ def process_claim(
     # A reply on a thread that already has a record is the same conversation
     # continuing; only the message that opened the record is triaged. A
     # customer asking "what does this have to do with it?" is not junk mail.
-    triage = judge.triage(digest, model, judge_runner, openclaw) if initiating else {"kind": "estimate_request", "note": "reply on an open estimate"}
+    judged = judge.triage_and_extract(digest, model, judge_runner, openclaw) if initiating else None
+    triage = {"kind": judged["kind"], "note": judged["note"]} if judged else {"kind": "estimate_request", "note": "reply on an open estimate"}
     if triage["kind"] in NOT_AN_INQUIRY:
         workflow_safe.not_an_inquiry(_namespace(
             p, message_id, estimate_id, reason=triage["kind"], record_output=Path(paths["current_record"]),
@@ -363,8 +364,7 @@ def process_claim(
     if triage["kind"] == "escalation":
         return _manual_review(p, message_id, "customer_escalation", command_runner)
 
-    extracted = judge.extract_specification(digest, model, judge_runner, openclaw)
-    specification = extracted["specification"]
+    specification = judged["specification"] if judged else judge.extract_specification(digest, model, judge_runner, openclaw)["specification"]
     missing = spec_gate.missing_required_fields(specification, profile)
     workflow_safe.write_private(review_path, {"specification": specification, "missing_required_fields": missing})
     reviewed = workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner))

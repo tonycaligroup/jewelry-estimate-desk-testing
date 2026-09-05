@@ -7513,8 +7513,7 @@ class InlinePipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ws, args, estimate_id = self.workspace(directory, self.profile())
             runner = self.judge_runner({
-                "decide what the CUSTOMER messages are": {"kind": "estimate_request", "note": "ring"},
-                "merge every fact": {"specification": {"piece_type": "ring", "metal": "14k white gold", "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 1}},
+                "Kinds:": {"kind": "estimate_request", "note": "ring", "specification": {"piece_type": "ring", "metal": "14k white gold", "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 1}},
                 "Write the reply body": {"body": "Hi Pat, thanks for reaching out about the sapphire ring. Could you share the ring size, the setting style you like, and any preference on color, clarity, and cut?"},
             })
             sent = Mock(return_value={"id": "sent-1", "threadId": "thread-1"})
@@ -7527,7 +7526,7 @@ class InlinePipelineTests(unittest.TestCase):
                 out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
             self.assertEqual(out["outcome"], "followup_sent")
             self.assertEqual(out["missing_required_fields"], ["finger_size", "setting_style", "stone_clarity", "stone_color", "stone_cut"])
-            self.assertEqual(runner.call_count, 3)
+            self.assertEqual(runner.call_count, 2)  # one call reads the inquiry, one writes back or prices
             record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
             self.assertEqual(record["status"], "awaiting_specs")
             self.assertEqual(record["spec_gate_reply"]["status"], "sent")
@@ -7538,8 +7537,7 @@ class InlinePipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ws, args, estimate_id = self.workspace(directory, self.profile())
             runner = self.judge_runner({
-                "decide what the CUSTOMER messages are": {"kind": "estimate_request", "note": "pendant"},
-                "merge every fact": {"specification": {"piece_type": "pendant", "metal": "14k white gold", "dimensions": "18 inch chain",
+                "Kinds:": {"kind": "estimate_request", "note": "pendant", "specification": {"piece_type": "pendant", "metal": "14k white gold", "dimensions": "18 inch chain",
                     "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 0.75, "stone_color": "jeweler's choice",
                     "stone_clarity": "jeweler's choice", "stone_shape": "oval", "setting_style": "bezel"}},
                 "bench jeweler estimating quantities": {"finished_grams": 4.5, "bench_hours": 3, "fees": ["casting", "setting"], "accents": []},
@@ -7552,7 +7550,7 @@ class InlinePipelineTests(unittest.TestCase):
                 out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
             self.assertEqual(out["outcome"], "approval_requested")
             self.assertGreater(out["proposed_price"], 0)
-            self.assertEqual(runner.call_count, 3)
+            self.assertEqual(runner.call_count, 2)  # one call reads the inquiry, one writes back or prices
             self.assertTrue(any(c.args[0][:2] == ["kolo", "request-approval"] for c in kolo.call_args_list))
             record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
             self.assertEqual(record["status"], "pending_approval")
@@ -7560,7 +7558,7 @@ class InlinePipelineTests(unittest.TestCase):
     def test_non_inquiries_and_escalations_never_reach_the_customer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ws, args, estimate_id = self.workspace(directory, self.profile())
-            runner = self.judge_runner({"decide what the CUSTOMER messages are": {"kind": "vendor_or_marketing", "note": "supplier"}})
+            runner = self.judge_runner({"Kinds:": {"kind": "vendor_or_marketing", "note": "supplier"}})
             with patch.object(workflow_safe, "mirror_record"):
                 out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
             self.assertEqual(out["outcome"], "not_an_inquiry")
@@ -7568,7 +7566,7 @@ class InlinePipelineTests(unittest.TestCase):
             self.assertEqual(record["status"], "dormant")
         with tempfile.TemporaryDirectory() as directory:
             ws, args, estimate_id = self.workspace(directory, self.profile())
-            runner = self.judge_runner({"decide what the CUSTOMER messages are": {"kind": "escalation", "note": "lawyer"}})
+            runner = self.judge_runner({"Kinds:": {"kind": "escalation", "note": "lawyer"}})
             brief = Mock(return_value=subprocess.CompletedProcess([], 0, '{"status":"ok"}', ""))
             out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, command_runner=brief, openclaw="openclaw")
             self.assertEqual(out["reason_code"], "customer_escalation")
@@ -7584,7 +7582,7 @@ class InlinePipelineTests(unittest.TestCase):
             with patch.object(inbox_watcher.pipeline, "process_claim", return_value={"outcome": "followup_sent"}) as process:
                 summary, runner = watcher.run_tick(ws)
             process.assert_called_once()
-            self.assertEqual(summary["inline"], [{"message_id": "inquiry-1", "outcome": "followup_sent"}])
+            self.assertEqual([(i["message_id"], i["outcome"]) for i in summary["inline"]], [("inquiry-1", "followup_sent")])
             self.assertEqual(summary["workers"], [])
             self.assertFalse(any(c.args[0][1:3] == ["cron", "create"] for c in runner.call_args_list))
         with tempfile.TemporaryDirectory() as directory:

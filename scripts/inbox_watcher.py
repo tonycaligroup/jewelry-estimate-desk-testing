@@ -213,6 +213,8 @@ def run_inline_claim(
     and every external effect is journaled by the code it calls.
     """
     summary = summary if summary is not None else {"workers": [], "spawn_failures": 0, "inline": [], "closed": 0, "manual_review": 0}
+    started = time.monotonic()
+    calls_before = len(judge.CALL_LOG)
     claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
     inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, True)
     inbox_claim.delegate(p["claim_root"], message_id, claim_token, INLINE_LEASE_SECONDS)
@@ -247,7 +249,10 @@ def run_inline_claim(
             model=inline.get("model"), judge_runner=judge_runner, command_runner=runner, openclaw=openclaw,
         )
         if done.get("outcome") != "needs_worker":
-            summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome")})
+            calls = judge.CALL_LOG[calls_before:]
+            summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome"),
+                                      "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls),
+                                      "model_seconds": round(sum(c["seconds"] for c in calls), 2)})
             return done
         summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action"),
                                   **({"error": done["error"]} if done.get("error") else {})})
@@ -316,6 +321,7 @@ def tick(
         "message": "NO_REPLY",
     }
     started = time.monotonic()
+    judge.reset_stats()
     profile_result = validate_profile.validate_profile(
         validate_profile.load_profile(p["shop_profile"])
     )
@@ -388,6 +394,7 @@ def tick(
         review_lines=False,
     )
     summary["message"] = report["message"]
+    summary["timing"] = {"tick_seconds": round(time.monotonic() - started, 2), **judge.stats()}
     notes = []
     if summary["spawn_failures"]:
         notes.append(f"{summary['spawn_failures']} worker job(s) could not be started; will retry.")

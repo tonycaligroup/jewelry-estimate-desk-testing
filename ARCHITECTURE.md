@@ -381,6 +381,16 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.8.0 (built 5 September 2026): speed, measured first.** `judge.CALL_LOG`
+times every completion; the tick summary carries `timing` (tick seconds,
+model calls, model seconds, prompt characters) and each inline claim its
+own seconds and call count. `judge.triage_and_extract` reads a new inquiry
+in one call (the two prompts merged, checked by both rules), so the common
+path is two model calls instead of three; replies on an open record were
+already one. `rendering.run` renders and checks the two views in parallel
+threads, so a rendering takes the time of one view. The audit trail was
+already read only while a card is pending.
+
 **4.7.1 (built 5 September 2026): reliability plan, step 5.** The rules
 the main session lives by are pinned by tests (`ReliabilityRulesTests`):
 run the line once more then wait, never narrate or edit state, run the

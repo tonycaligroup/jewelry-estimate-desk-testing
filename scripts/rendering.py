@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -237,7 +238,8 @@ def run(
         refs.append(Path(arch["exemplar"]))
     prompts = build_prompts(plan, specification, artwork is not None, bool(arch.get("exemplar")))
     report: dict[str, Any] = {"plan": plan, "prompts": prompts, "references": [str(r) for r in refs], "views": []}
-    for slot, prompt in enumerate(prompts, start=1):
+
+    def one_view(slot: int, prompt: str) -> dict[str, Any]:
         attempts = []
         current_prompt = prompt
         image = None
@@ -250,9 +252,15 @@ def run(
                 break
             problems = "; ".join(f"{cid}: {check['notes'].get(cid, 'failed')}" for cid in check["failed"])
             current_prompt = prompt + f" Correct these problems from the previous attempt: {problems}."
-        report["views"].append({
+        return {
             "slot": slot, "image": str(image), "passed": not check["failed"], "failed": check["failed"],
             "unsure": check["unsure"], "notes": check["notes"], "attempts": len(attempts), "history": attempts,
-        })
+        }
+
+    # The views are independent: render and check them side by side. Each
+    # is one image call and one check; the wall time is one view, not two.
+    with ThreadPoolExecutor(max_workers=max(1, len(prompts))) as pool:
+        futures = [pool.submit(one_view, slot, prompt) for slot, prompt in enumerate(prompts, start=1)]
+        report["views"] = [f.result() for f in futures]
     report["all_passed"] = all(v["passed"] for v in report["views"])
     return report

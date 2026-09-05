@@ -366,6 +366,10 @@ class World:
 
     # ---- The model, by contract ---------------------------------------
     def answer(self, prompt: str) -> dict:
+        if "Kinds:" in prompt and '"specification": {...}' in prompt:
+            # One call for a new inquiry: kind and specification together.
+            spec = dict(self.spec) if self.triage_kind == "estimate_request" else {}
+            return {"kind": self.triage_kind, "note": "read by the fake", "specification": spec}
         if "decide what the CUSTOMER messages are" in prompt:
             return {"kind": self.triage_kind, "note": "read by the fake"}
         if "merge every fact the customer actually stated" in prompt:
@@ -579,6 +583,9 @@ class GoldenPathTests(unittest.TestCase):
         ))
         summary = self.tick(ws, world)
         self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+        self.assertEqual(len(world.prompts), 2, "a new inquiry costs two model calls: one to read it, one to write back")
+        self.assertEqual(summary["inline"][0]["model_calls"], 2, summary)
+        self.assertIn("tick_seconds", summary["timing"])
         self.assertEqual(len(world.sent), 1)
         self.assertIn("?", world.sent[0]["body"])
         self.assertNotIn("$", world.sent[0]["body"])

@@ -13,7 +13,7 @@ This plan removes the shape, not the instances.
 - Step 3, bounded stuck in the tick, card verification, answer replay: done (4.6.0). Every combination ends ok or recovered.
 - Step 4, doctor and requeue, readiness state line: done (4.7.0).
 - Step 5, SKILL.md rules and coherence tests: done (4.7.1). SKILL.md also lost its agent-era runbook (64.5 KB to 43 KB).
-- Next: section 7, speed and efficiency, each change with its measurement in place first.
+- Section 7, speed and efficiency, first batch: done (4.8.0). Every model call is timed and the tick summary carries per-claim seconds and call counts; a new inquiry is read in one call (triage and extraction merged), so the common path is two calls instead of three; the two rendering views render and check in parallel; the audit trail was already polled only while a card is pending.
 
 ## 1. What we are protecting
 

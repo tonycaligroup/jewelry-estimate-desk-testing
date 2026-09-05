@@ -16,6 +16,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from typing import Any, Callable
 
 import cost_components
@@ -107,6 +108,22 @@ def _unwrap(stdout: str) -> str:
     return value if isinstance(value, str) else json.dumps(value)
 
 
+CALL_LOG: list[dict[str, Any]] = []  # one entry per completion this process made: seconds, prompt size, ok
+
+
+def reset_stats() -> None:
+    CALL_LOG.clear()
+
+
+def stats() -> dict[str, Any]:
+    """Calls made so far and the time they took; the tick puts this in its summary."""
+    return {
+        "model_calls": len(CALL_LOG),
+        "model_seconds": round(sum(c["seconds"] for c in CALL_LOG), 2),
+        "prompt_chars": sum(c["prompt_chars"] for c in CALL_LOG),
+    }
+
+
 def complete(
     prompt: str,
     model: str | None = None,
@@ -119,10 +136,13 @@ def complete(
     if len(prompt) > PROMPT_LIMIT:
         raise ValueError("prompt exceeds the size limit")
     argv = infer_argv(prompt, model or DEFAULT_MODEL, openclaw or default_openclaw())
+    started = time.monotonic()
     try:
         completed = runner(argv, check=False, capture_output=True, text=True, shell=False, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
+        CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": False})
         raise JudgmentError(f"completion call failed: {exc}", transient=True) from exc
+    CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": completed.returncode == 0})
     if completed.returncode != 0:
         raise JudgmentError(
             f"completion exited {completed.returncode}: {(completed.stderr or completed.stdout or '')[:200]}",
@@ -282,6 +302,58 @@ def extract_specification(
         f"THREAD:\n{thread_text(digest)}"
     )
     return ask_json(prompt, check_specification, model, runner, openclaw)
+
+
+def check_triage_and_specification(value: dict[str, Any]) -> dict[str, Any]:
+    triaged = check_triage(value)
+    if triaged["kind"] != "estimate_request":
+        return {**triaged, "specification": {}}
+    return {**triaged, **check_specification(value)}
+
+
+def triage_and_extract(
+    digest: dict[str, Any], model: str | None = None, runner: Runner = subprocess.run, openclaw: str | None = None,
+) -> dict[str, Any]:
+    """One call for a new inquiry: what the thread is, and every fact the customer gave.
+
+    Two calls became one (RELIABILITY-PLAN.md 7.2). The shape is the union of
+    the two single calls, checked by the same rules; a thread that is not an
+    estimate request carries an empty specification.
+    """
+    prompt = (
+        "You are the intake desk of a retail custom-jewelry shop. Read the email thread and answer with one "
+        "JSON object only: {\"kind\": <one of the kinds below>, \"note\": <one short sentence>, "
+        "\"specification\": {...}}.\n"
+        "Kinds: estimate_request (they want a custom piece, replica, redesign, remount, or repair quoted); "
+        "not_a_quote_request (a person writing about something other than getting a piece made); "
+        "vendor_or_marketing (a supplier, sales pitch, or marketing); "
+        "personal_or_internal (a personal note or internal shop matter); "
+        "unrelated (none of the above); "
+        "not_an_estimate_request (an appraisal or insurance valuation, the price of existing inventory, or a job-status question); "
+        "escalation (anger, a legal threat, a chargeback or insurance dispute, a lost or damaged claim, press, fraud, or price pushback on a quote already sent).\n"
+        "When in doubt between estimate_request and anything else, choose estimate_request.\n"
+        "When the kind is estimate_request, merge every fact the CUSTOMER actually stated about the piece into "
+        "specification; otherwise leave specification as {}.\n"
+        f"Allowed specification keys (use only those the customer answered): {', '.join(SPEC_KEYS)}.\n"
+        "Rules: stone_origin is \"natural\" or \"lab-grown\" only when the customer said so. "
+        "center_stone is \"yes\" when the piece has one main feature stone and \"no\" when every stone is a small "
+        "accent, pave, melee, or cluster stone (for example 1mm stones filling a logo or a band); omit it when unclear. "
+        "metal_karat is a number like 14 or 18 when stated. finger_size is the ring size. "
+        "dimensions is length or size for a chain, bracelet, or pendant. "
+        "setting_style is the customer's own design wording (classic band, solitaire, bezel, channel-set, halo) or "
+        "\"jeweler's choice\" when they explicitly leave it to you; never invent one. "
+        "When the customer explicitly leaves color, clarity, cut, finish, or the carat weight or stone size to the jeweler "
+        "(\"whatever you think\", \"work it out from the logo\", \"your call\"), write \"jeweler's choice\" for that key. "
+        "scheduling_intent is the customer's own words when the message being handled asks to meet, come in, "
+        "visit, or bring something to the shop; omit it when they do not ask to meet. "
+        "customer_supplied_materials names anything the customer already owns and wants used (\"my mother's "
+        "diamond\", \"reset my stone\"); when the stone is theirs, still fill stone_type and any shape or size they "
+        "gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "
+        "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
+        "Never include prices, costs, or anything the SHOP messages said.\n\n"
+        f"THREAD:\n{thread_text(digest)}"
+    )
+    return ask_json(prompt, check_triage_and_specification, model, runner, openclaw)
 
 
 def check_artifact(value: dict[str, Any]) -> dict[str, Any]:
