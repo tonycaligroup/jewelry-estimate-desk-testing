@@ -1535,3 +1535,128 @@ class StuckClaimTests(SideBranchTests):
             self.assertEqual(len(summary["stuck"]), 1, summary)
             self.assertEqual(len([n for n in world.notices if not n["file"]]), 1)
         self.run_branch(branch)
+
+
+class DoctorTests(SideBranchTests):
+    """The doctor names each inconsistency with its repair line; requeue hands the desk a message again (plan 3.4)."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def _doctor(self, ws: Path) -> list[dict]:
+        import doctor
+
+        return doctor.scan(ws)
+
+    def _rate_parked(self, ws: Path, world: World) -> None:
+        world.spec = {
+            "piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+            "setting_style": "bead set", "accent_stones": "small lab-grown diamonds",
+            "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS",
+        }
+        world.customer_message("q1", "thread-doc", "Quote please: 14k yellow gold signet, size 10, small lab-grown diamonds.\n\nPat")
+        self.tick(ws, world)
+        self.assertEqual(self.claim(ws, "q1")["status"], "awaiting_owner")
+
+    def test_a_clean_desk_has_no_findings_and_readiness_says_so(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._estimate_sent(ws, world)
+            self.assertEqual(self._doctor(ws), [])
+            import doctor
+
+            self.assertEqual(doctor.report([]), "state: clean")
+        self.run_branch(branch)
+
+    def test_a_parked_claim_whose_question_vanished_is_found_and_requeued(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            import doctor
+
+            self._rate_parked(ws, world)
+            root = owner_questions.questions_root(ws / "estimate-desk" / "inbox-monitor")
+            for path in root.glob("q-*.json"):
+                path.unlink()
+            findings = self._doctor(ws)
+            self.assertEqual([f["code"] for f in findings], ["parked_without_question"], findings)
+            self.assertIn("--requeue 'q1'", findings[0]["repair"])
+            asked_before = len([n for n in world.notices if not n["file"]])
+            result = doctor.requeue(ws, "q1")
+            self.assertEqual(result["outcome"], "requeued", result)
+            self.assertEqual(self.claim(ws, "q1")["status"], "processing")
+            self.assertEqual(self._doctor(ws)[0]["code"], "inline_retry_pending")
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["retried"], 1, summary)
+            self.assertEqual(self.claim(ws, "q1")["status"], "awaiting_owner")
+            self.assertEqual(len([n for n in world.notices if not n["file"]]), asked_before + 1, "the rate question is asked again")
+            self.assertEqual(self._doctor(ws), [])
+        self.run_branch(branch)
+
+    def test_a_question_whose_claim_is_gone_gets_a_closing_line(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            import shutil
+
+            self._rate_parked(ws, world)
+            shutil.rmtree(inbox_claim.claim_path(ws / "estimate-desk" / "inbox-claims", "q1").parent)
+            codes = sorted(f["code"] for f in self._doctor(ws))
+            self.assertEqual(codes, ["question_without_claim", "queue_without_claim"], codes)
+            stale = next(f for f in self._doctor(ws) if f["code"] == "question_without_claim")
+            self.assertIn("answer-question", stale["repair"])
+        self.run_branch(branch)
+
+    def test_a_calendar_hold_nothing_recorded_points_at_the_question_or_the_line(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            wanted = next_weekday(2, 14, 0)
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+            world.customer_message("s2", thread, f"Can we meet {wanted.strftime('%A')} at 2?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            world.fail_next["gmail_send"] = 5
+            parts = shlex.split(card["payload"]["execute"].replace("<Brief ID>", card["brief_id"]))
+            with patch.object(gmail_safe, "find_delivery", side_effect=OSError("gateway down")):
+                with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                    workflow_safe.main(parts[2:])
+            world.fail_next.clear()
+            findings = [f for f in self._doctor(ws) if f["level"] == "repair"]
+            self.assertEqual([f["code"] for f in findings], ["calendar_hold_unrecorded"], findings)
+            self.assertIn("answer-question", findings[0]["repair"])
+            self.assertIn("retry", findings[0]["repair"])
+            self.answer(ws, "retry")
+            self.assertEqual([f for f in self._doctor(ws) if f["level"] == "repair"], [])
+        self.run_branch(branch)
+
+    def test_requeue_hands_the_desk_a_missed_email_and_refuses_a_finished_one(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            import doctor
+
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7"}
+            world.customer_message("missed-1", "thread-missed", "A plain band please.\n\nPat")
+            world.batch = []  # discovery never saw it
+            with patch.object(sys.modules["gmail_fetch"], "fetch_json", side_effect=lambda path, params, token, opener=None: (
+                world.messages["missed-1"] if path.startswith("messages/") else world.fake_fetch_json(path, params, token))):
+                result = doctor.requeue(ws, "missed-1", token="t")
+            self.assertEqual(result["outcome"], "requeued", result)
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["claimed"], 1, summary)
+            self.assertEqual(self.claim(ws, "missed-1")["status"], "processed")
+            with self.assertRaisesRegex(ValueError, "already finished"):
+                doctor.requeue(ws, "missed-1", token="t")
+        self.run_branch(branch)

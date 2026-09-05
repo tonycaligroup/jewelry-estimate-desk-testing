@@ -381,6 +381,20 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.7.0 (built 5 September 2026): reliability plan, step 4.** `doctor.py`
+scans the desk read-only and prints one line per inconsistency with its
+repair: a queue item with no claim, a parked claim with no open question, a
+question whose claim is gone or finished, a pending card whose claim is
+gone, an unsettled external action, a lapsed lease, a calendar hold nothing
+recorded (pointing at the open failure question or the execute line), a
+booking killed inside the calendar call, a stale lock. `--requeue` hands
+the desk a message again: a lost claim folder resets the queue item, a
+parked claim with no question is reopened for the tick's retry loop, an
+unknown message is fetched from Gmail and queued; a finished message is
+refused. Readiness ends with a desk-state line. SKILL.md tells the main
+session to run the doctor instead of reading files, and to requeue instead
+of writing queue items.
+
 **4.6.0 (built 5 September 2026): reliability plan, step 3.** The tick
 owns its inline claims: each is marked and leased (`inline_attempts`,
 `INLINE_LEASE_SECONDS`), a failure is counted on the claim with its kind and

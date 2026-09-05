@@ -11,8 +11,8 @@ This plan removes the shape, not the instances.
 - Step 1, the harness: done (4.5.0). 84 combinations.
 - Step 2, journaled executors, verified sends, lease, failure question: done (4.5.0).
 - Step 3, bounded stuck in the tick, card verification, answer replay: done (4.6.0). Every combination ends ok or recovered.
-- Step 4, doctor and requeue: next.
-- Step 5, SKILL.md rules and coherence tests: after step 4.
+- Step 4, doctor and requeue, readiness state line: done (4.7.0).
+- Step 5, SKILL.md rules and coherence tests: next (the rules themselves landed with steps 2 to 4; the tests remain).
 
 ## 1. What we are protecting
 

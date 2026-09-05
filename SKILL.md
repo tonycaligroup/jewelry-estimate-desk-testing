@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.6.0
+version: 4.7.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -106,6 +106,10 @@ model with thinking off. If Kolo cannot verify the model, stop.
 - `scripts/rendering_materialize.py`: copy a PNG the desk rendered into its
   own work folder (or one the Kolo image tool put in the managed media
   directory) into the claimed canonical rendering path.
+- `scripts/doctor.py`: read-only scan of the desk's state, one line per
+  inconsistency with the exact command that repairs it; `--requeue <gmail-id>`
+  hands the desk an email again through the normal path. This is what the
+  main session runs instead of reading files.
 - `scripts/rendering_wait.py`: keep an asynchronous rendering claim active for
   at most eight fixed 30-second intervals while awaiting its completion event.
 - `scripts/workflow_safe.py`: execute complete spec-follow-up, approval-request,
@@ -1026,6 +1030,14 @@ resumes where it stopped and never sends or books twice (a send whose
 outcome was unknown is checked against the thread first). If it fails
 again, paste the output and wait: the desk has already asked the owner
 what to do, with the fix attached.
+
+Never summarise a record, a queue, a claim, or a brief from memory, and
+never write, rename, or delete anything under `estimate-desk/`. When
+something looks wrong, run `python3 {baseDir}/scripts/doctor.py --workspace
+'<absolute-workspace>'` and show what it prints: every finding carries the
+one line that repairs it. If the doctor has no line for what you see, say
+so and stop. A missed email is handed back with `doctor.py --requeue
+'<gmail-id>'`, never by writing a queue item.
 
 While a desk question is open (the last desk message ended with
 `desk-answer <CODE>`), the owner's next reply is the answer to it: run

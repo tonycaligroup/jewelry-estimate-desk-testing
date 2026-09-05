@@ -111,6 +111,18 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
         add("watcher cron", "FAIL", "no job named jed-inbox-monitor")
     else:
         add("watcher cron", "PASS", f"enabled={watcher.get('enabled')} schedule={watcher.get('schedule') or watcher.get('cron')}")
+
+    # Desk state: what the doctor sees. A finding is not a readiness failure,
+    # but the owner should know before the cron runs on top of it.
+    try:
+        import doctor  # local import: keeps the readiness checks importable on their own
+
+        findings = doctor.scan(workspace)
+        repairs = [f for f in findings if f["level"] == "repair"]
+        add("desk state", "PASS" if not repairs else "WARN",
+            "clean" if not findings else f"{len(repairs)} to repair, {len(findings) - len(repairs)} informational; run doctor.py")
+    except (OSError, ValueError) as exc:
+        add("desk state", "WARN", f"doctor could not scan: {exc}")
     return out
 
 
