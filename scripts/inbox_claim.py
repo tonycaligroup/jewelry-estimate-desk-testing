@@ -63,13 +63,17 @@ def claim_path(root: Path, message_id: str) -> Path:
 
 
 def authoritative_claim_token(
-    root: Path, message_id: str, *, allow_processed: bool = False
+    root: Path, message_id: str, *, allow_processed: bool = False, allow_parked: bool = False
 ) -> str:
     """Resolve a processing claim token from durable state, never model context."""
     state = read_state(claim_path(root, message_id))
     if state.get("message_id_sha256") != claim_key(message_id):
         raise ValueError("claim state does not match the Gmail message ID")
     allowed = {"processing", "processed"} if allow_processed else {"processing"}
+    if allow_parked:
+        # A claim parked behind one owner card (awaiting_owner) may still be
+        # acted on by the executor of another card for the same message.
+        allowed = allowed | {"awaiting_owner"}
     if state.get("status") not in allowed:
         raise ValueError("claim is not in an allowed state")
     return state["claim_token"]
@@ -577,6 +581,7 @@ def acquire_external_action(
     category: str,
     binding_sha256: str,
     allow_processed: bool = False,
+    allow_parked: bool = False,
 ) -> tuple[bool, dict[str, Any]]:
     if not re.fullmatch(r"[A-Za-z0-9_.:@-]{1,200}", action_key):
         raise ValueError("invalid external action key")
@@ -590,6 +595,8 @@ def acquire_external_action(
         if state.get("claim_token") != token:
             raise ValueError("claim token does not match")
         allowed = {"processing", "processed"} if allow_processed else {"processing"}
+        if allow_parked:
+            allowed = allowed | {"awaiting_owner"}
         if state.get("status") not in allowed:
             raise ValueError("external action requires an allowed claim state")
         actions = state.setdefault("external_actions", {})

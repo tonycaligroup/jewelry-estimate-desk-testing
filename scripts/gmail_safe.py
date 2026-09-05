@@ -111,10 +111,11 @@ def send_reply_claimed(
     token: str,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     allow_processed_claim: bool = False,
+    allow_parked_claim: bool = False,
 ) -> dict[str, str]:
     if claim_token is None:
         claim_token = inbox_claim.authoritative_claim_token(
-            claim_root, message_id, allow_processed=allow_processed_claim
+            claim_root, message_id, allow_processed=allow_processed_claim, allow_parked=allow_parked_claim
         )
     payload = read_payload(payload_path)
     binding = canonical_sha256(payload)
@@ -128,6 +129,7 @@ def send_reply_claimed(
         "customer_delivery",
         binding,
         allow_processed=allow_processed_claim,
+        allow_parked=allow_parked_claim,
     )
     if not acquired:
         action = state["external_actions"][delivery_key]

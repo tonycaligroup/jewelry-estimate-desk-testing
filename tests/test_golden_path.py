@@ -461,10 +461,10 @@ class GoldenPathTests(unittest.TestCase):
         self.assertEqual(parts[0], "python3")
         self.assertTrue(parts[1].endswith("scripts/workflow_safe.py"), parts[1])
         self.assertEqual(Path(parts[parts.index("--workspace") + 1]), ws.resolve())
-        with patch("sys.stdout", io.StringIO()) as stdout:
+        with patch("sys.stdout", io.StringIO()) as stdout, patch("sys.stderr", io.StringIO()) as stderr:
             code = workflow_safe.main(parts[2:])
         printed = stdout.getvalue()
-        self.assertEqual(code, 0, printed)
+        self.assertEqual(code, 0, printed + stderr.getvalue())
         return json.loads(printed)
 
     def answer(self, ws: Path, text: str) -> dict:
@@ -1207,4 +1207,76 @@ class MeetingFirstTests(SideBranchTests):
             self.assertIn("send-approved-estimate-brief", world.cards[-1]["payload"]["execute"])
             self.assertEqual(self.record(ws, estimate_id)["status"], "pending_approval")
             self.assertEqual(len([n for n in world.notices if not n["file"]]), 0, "no questions needed along the way")
+        self.run_branch(branch)
+
+
+class CombinedIntentTests(SideBranchTests):
+    """A rendering and a meeting in one email: two cards, approved in either order, booked once."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def _both_cards(self, ws: Path, world: World) -> tuple[dict, dict, datetime]:
+        thread, _estimate_id = self._estimate_sent(ws, world)
+        wanted = next_weekday(2, 15, 0)
+        world.intents = ["rendering_request", "appointment_request"]
+        world.requested = ([f"{wanted.strftime('%A')} at 3"], [local_key(wanted)])
+        world.customer_message("s2", thread, f"Looks good. Could you send a rendering, and can we meet {wanted.strftime('%A')} at 3?\n\nPat")
+        self.tick(ws, world)
+        kinds = [c["kind"] for c in world.cards[-2:]]
+        self.assertEqual(sorted(kinds), ["appointment_booking", "send_rendering"], kinds)
+        book = next(c for c in world.cards if c["kind"] == "appointment_booking")
+        render = next(c for c in world.cards if c["kind"] == "send_rendering")
+        self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner", "parked behind the rendering card")
+        return book, render, wanted
+
+    def test_booking_approved_while_the_rendering_card_is_still_open(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, render, wanted = self._both_cards(ws, world)
+            sent_before = len(world.sent)
+            result = self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(result["outcome"], "appointment_booked", result)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertEqual(len(world.sent), sent_before + 1, "the confirmation went out")
+            self.assertIn((book["brief_id"], "executed"), world.updates)
+            # The rendering card still works afterwards.
+            result = self.execute(ws, world, render["payload"]["execute"], render)
+            self.assertEqual(len(world.sent), sent_before + 2)
+            self.assertEqual(len(world.sent[-1]["attachments"]), 2)
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_a_booking_that_died_after_creating_the_event_books_once_on_retry(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, _render, wanted = self._both_cards(ws, world)
+            parts = shlex.split(book["payload"]["execute"].replace("<Brief ID>", book["brief_id"]))
+            with patch.object(gmail_safe, "send_reply_claimed", side_effect=OSError("gateway dropped")):
+                with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                    code = workflow_safe.main(parts[2:])
+            self.assertNotEqual(code, 0)
+            self.assertEqual(len(world.calendar_events), 1, "the event exists; nothing recorded it")
+            self.assertIsNone(self.record(ws, self.only_estimate(ws)).get("appointment_booked"))
+            result = self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(result["outcome"], "appointment_booked", result)
+            self.assertEqual(len(world.calendar_events), 1, "the same event, not a second one")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["appointment_booked"]["calendar_event_id"], next(iter(world.calendar_events)))
         self.run_branch(branch)

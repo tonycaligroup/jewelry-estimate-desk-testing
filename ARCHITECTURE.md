@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.4.2 (built 5 September 2026): two cards from one email, approved in
+either order.** A customer asked for a rendering and a meeting in one
+email; the desk filed both cards and parked the claim behind the rendering
+card. The booking card was approved first: the executor created the
+calendar event, then refused to send the confirmation because the claim
+was parked ("claim is not in an allowed state"), leaving an event nothing
+recorded. Now executors may act on a claim parked behind another card,
+every refusal happens before the calendar is touched, and a created event
+is written beside the booking work so a retry after a crash reuses it
+instead of booking twice or finding its own slot busy.
+
 **4.4.1 (built 5 September 2026): no ragged lines.** The model wrapped an
 estimate at seventy columns and Gmail showed the breaks mid-sentence.
 `plain_text` (applied on every send) now reflows single line breaks inside

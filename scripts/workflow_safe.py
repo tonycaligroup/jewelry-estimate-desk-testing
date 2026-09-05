@@ -1765,29 +1765,43 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("no calendar configured in the shop profile")
     import gateway_token  # local import: only needed here
 
+    # Everything that can refuse, before the calendar is touched: a claim
+    # parked behind another card (a rendering filed from the same email) is
+    # fine, but a claim in no usable state must fail here, not after an
+    # event exists that nothing records.
+    if inbox_claim.claim_path(p["claim_root"], args.message_id).exists():
+        inbox_claim.authoritative_claim_token(p["claim_root"], args.message_id, allow_processed=True, allow_parked=True)
     token = gateway_token.load_token()
     opener = getattr(args, "opener", None)
     kwargs = {"opener": opener} if opener else {}
     outside = slots.outside_windows(scheduling, [chosen])
     if outside:
         raise ValueError("the approved time is outside the declared consultation windows; ask the desk for new options")
-    # Approval does not make stale availability current.
-    receipt = calendar_query.query_freebusy(
-        chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC", calendar_id, token, **kwargs
-    )
-    busy = receipt["response_body"]["calendars"][calendar_id].get("busy", [])
-    if busy:
-        raise ValueError("the approved time is no longer free; ask the desk for new options")
     shop = (profile.get("shop") or {}).get("name") or "the shop"
     piece = approval.get("piece") or "your piece"
-    event = calendar_query.create_event(
-        calendar_id, chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC",
-        f"{shop}: design consultation, {piece}"[:200],
-        f"Design consultation for {piece}. Estimate {args.estimate_id.upper()}.",
-        record["route"]["recipient"], token, **kwargs,
-    )
     work_dir = p["monitor_root"].resolve().parent / "work" / f"booking-{inbox_claim.claim_key(args.message_id)[:16]}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    event_path = work_dir / "calendar-event.json"
+    saved = read_object(event_path) if event_path.exists() else {}
+    if isinstance(saved, dict) and saved.get("id") and saved.get("desk_slot_start") == chosen["start"]:
+        # An earlier run created the event and died before recording it;
+        # the slot is already ours, so use that event rather than book twice.
+        event = saved
+    else:
+        # Approval does not make stale availability current.
+        receipt = calendar_query.query_freebusy(
+            chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC", calendar_id, token, **kwargs
+        )
+        busy = receipt["response_body"]["calendars"][calendar_id].get("busy", [])
+        if busy:
+            raise ValueError("the approved time is no longer free; ask the desk for new options")
+        event = calendar_query.create_event(
+            calendar_id, chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC",
+            f"{shop}: design consultation, {piece}"[:200],
+            f"Design consultation for {piece}. Estimate {args.estimate_id.upper()}.",
+            record["route"]["recipient"], token, **kwargs,
+        )
+        write_private(event_path, {**event, "desk_slot_start": chosen["start"]})
     cancelled_old = None
     if existing:
         # Rescheduling: the new event is in; take the old one off the calendar.
@@ -1814,7 +1828,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], args.message_id, None,
         f"appointment_confirmation:{args.estimate_id}:{args.message_id}",
-        payload_path, response_path, token, runner=runner, allow_processed_claim=True,
+        payload_path, response_path, token, runner=runner, allow_processed_claim=True, allow_parked_claim=True,
     )
     booked = estimate_record.record_appointment_booked(p["record_root"], args.estimate_id, {
         "estimate_id": args.estimate_id,
@@ -1867,6 +1881,7 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], message_id, None, f"times_offered:{record['estimate_id']}:{message_id}:{label}",
         payload_path, response_path, gateway_token.load_token(), runner=runner, allow_processed_claim=True,
+        allow_parked_claim=True,
     )
     updated = estimate_record.record_times_offered(p["record_root"], record["estimate_id"], message_id, options, delivery)
     mirror_record(updated, work_dir / "current-record.json")
