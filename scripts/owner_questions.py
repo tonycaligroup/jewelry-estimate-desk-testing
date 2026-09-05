@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 SCHEMA_VERSION = 1
-QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed"}
-DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed"}
+QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim"}
+DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -45,6 +45,11 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "skip": ("skip", "price it", "go ahead", "without", "don't need", "do not need", "not needed", "jeweler's choice", "your call", "proceed"),
         "ask_again": ("ask again", "ask them again", "try again", "resend", "send it again", "ask once more"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it"),
+    },
+    "stuck_claim": {
+        "retry": ("retry", "try again", "again", "go", "go ahead", "yes"),
+        "skip": ("skip", "set it aside", "drop it", "leave it", "ignore"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "myself", "i got it", "i have it"),
     },
     "command_failed": {
         "retry": ("retry", "try again", "again", "run it again", "go", "go ahead", "yes"),
@@ -422,6 +427,14 @@ def deliver(
         field = "reminder"
     else:
         if question["delivery"]["status"] != "pending":
+            return question
+        if question["delivery"].get("attempted_at"):
+            # An earlier run started the notice and died before recording
+            # the outcome. Kolo gives no receipt, so this is uncertain: the
+            # owner is never asked twice on a guess; the reminder covers a
+            # notice that truly never went.
+            question["delivery"] = {**question["delivery"], "status": "uncertain"}
+            save(root, question)
             return question
         text = question_text(question)
         question["delivery"] = {"status": "pending", "attempted_at": current}

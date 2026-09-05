@@ -118,6 +118,10 @@ def validate_state(state: Any) -> dict[str, Any]:
         "retry_count_at_phase",
         "recovery_lease_expires_at",
         "external_actions",
+        "inline_attempts",
+        "last_error",
+        "last_error_kind",
+        "last_error_at",
     }
     required = {
         "schema_version",
@@ -637,6 +641,56 @@ def acquire_external_action(
         return True, state
 
 
+INLINE_ERROR_KINDS = {"transient", "deterministic"}
+
+
+def mark_inline(root: Path, message_id: str, token: str, inline: bool) -> dict[str, Any]:
+    """Say whether the tick itself owns this processing claim (inline) or a worker does."""
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        if inline:
+            state.setdefault("inline_attempts", 0)
+        else:
+            for field in ("inline_attempts", "last_error", "last_error_kind", "last_error_at"):
+                state.pop(field, None)
+        write_state(path, state)
+        return state
+
+
+def release_lease(root: Path, message_id: str, token: str) -> dict[str, Any]:
+    """End this run's lease now: the next tick may take the claim at once."""
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        state["recovery_lease_expires_at"] = datetime.now(timezone.utc).isoformat()
+        write_state(path, state)
+        return state
+
+
+def note_inline_attempt(root: Path, message_id: str, token: str, error: str, kind: str) -> int:
+    """Record one failed inline attempt; returns the count so far."""
+    if kind not in INLINE_ERROR_KINDS:
+        raise ValueError("error kind must be transient or deterministic")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        attempts = int(state.get("inline_attempts") or 0) + 1
+        state["inline_attempts"] = attempts
+        state["last_error"] = str(error)[:300]
+        state["last_error_kind"] = kind
+        state["last_error_at"] = datetime.now(timezone.utc).isoformat()
+        state["last_progress_at"] = state["last_error_at"]
+        write_state(path, state)
+        return attempts
+
+
 def settle_external_action(
     root: Path,
     message_id: str,
@@ -646,7 +700,7 @@ def settle_external_action(
     provider_message_id: str | None = None,
     provider_thread_id: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve a pending or uncertain delivery from evidence: the thread was read.
+    """Resolve a pending or uncertain action from evidence: the provider was read.
 
     `sent` records the provider ids the thread showed; `verified_unsent`
     records that the provider does not have the message, so the same payload
@@ -663,7 +717,7 @@ def settle_external_action(
         if not isinstance(action, dict) or action.get("status") not in {"pending", "uncertain"}:
             raise ValueError("only a pending or uncertain delivery can be settled")
         now = datetime.now(timezone.utc).isoformat()
-        if status == "sent":
+        if status == "sent" and action.get("category") == "customer_delivery":
             for value, field in (
                 (provider_message_id, "provider_message_id"),
                 (provider_thread_id, "provider_thread_id"),
@@ -673,7 +727,7 @@ def settle_external_action(
             action["provider_message_id"] = provider_message_id
             action["provider_thread_id"] = provider_thread_id
         action["status"] = status
-        action["settled_by"] = "thread_read"
+        action["settled_by"] = "provider_read"
         action["updated_at"] = now
         state["last_progress_at"] = now
         write_state(path, state)

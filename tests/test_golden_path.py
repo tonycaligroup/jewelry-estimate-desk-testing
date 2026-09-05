@@ -1444,3 +1444,94 @@ class FailureQuestionTests(SideBranchTests):
             self.assertEqual(code, 0)
             self.assertEqual(len(world.calendar_events), 1)
         self.run_branch(branch)
+
+
+class StuckClaimTests(SideBranchTests):
+    """A claim the tick cannot finish is retried with a bound, then becomes one question (plan 3.3)."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def _raw_tick(self, ws: Path, world: World) -> dict:
+        return inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t", judge_runner=world.run)
+
+    def test_a_deterministic_failure_asks_after_two_tries_and_retry_finishes(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7",
+                          "notes": "plain band, no stones"}
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+            world.customer_message("k1", "thread-stuck", "A plain 14k yellow gold band, size 7 please.\n\nPat")
+            with patch.object(inbox_watcher.pipeline, "process_claim", side_effect=ValueError("the record is odd")):
+                first = self._raw_tick(ws, world)
+                self.assertEqual(first["inline"][0]["outcome"], "deferred", first)
+                self.assertEqual(first["inline"][0]["kind"], "deterministic")
+                self.assertEqual(first["message"], "NO_REPLY")
+                second = self._raw_tick(ws, world)
+                self.assertEqual(second["retried"], 1, second)
+                self.assertEqual(second["inline"][0]["attempts"], 2)
+                self.assertEqual([n for n in world.notices if not n["file"]], [], "no question yet: two tries first")
+                third = self._raw_tick(ws, world)
+            self.assertEqual(len(third["stuck"]), 1, third)
+            asked = [n for n in world.notices if not n["file"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertRegex(asked[0]["text"], r"(?i)could not finish Pat Customer's email")
+            self.assertRegex(asked[0]["text"], r"the record is odd")
+            self.assertIn("desk-answer", asked[0]["text"])
+            self.assertEqual(self.claim(ws, "k1")["status"], "awaiting_owner")
+            self.assertEqual(self._raw_tick(ws, world)["stuck"], [], "asked once")
+            self.assertEqual(len([n for n in world.notices if not n["file"]]), 1)
+            # The owner says retry: the claim runs to its end (a price card for a complete band).
+            answered = self.answer(ws, "retry")
+            self.assertEqual(answered["decision"], "retry", answered)
+            self.assertEqual(answered.get("pipeline"), "approval_requested", answered)
+            self.assertEqual(self.claim(ws, "k1")["status"], "processed")
+            self.assertTrue(world.cards)
+        self.run_branch(branch)
+
+    def test_skip_sets_a_stuck_email_aside_for_the_owner(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7"}
+            world.customer_message("k1", "thread-stuck", "A plain band please.\n\nPat")
+            with patch.object(inbox_watcher.pipeline, "process_claim", side_effect=ValueError("the record is odd")):
+                for _ in range(3):
+                    self._raw_tick(ws, world)
+            self.assertEqual(self.claim(ws, "k1")["status"], "awaiting_owner")
+            answered = self.answer(ws, "skip it")
+            self.assertEqual(answered["decision"], "skip", answered)
+            self.assertEqual(self.claim(ws, "k1")["status"], "manual_review")
+            self.assertEqual(self._raw_tick(ws, world)["claimed"], 0)
+            self.assertEqual(world.sent, [])
+            self.assertEqual(world.cards, [])
+        self.run_branch(branch)
+
+    def test_a_transient_failure_retries_more_before_asking(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7"}
+            world.customer_message("k1", "thread-stuck", "A plain band please.\n\nPat")
+            with patch.object(inbox_watcher.pipeline, "process_claim", side_effect=OSError("gateway dropped")):
+                for _ in range(inbox_watcher.TRANSIENT_ATTEMPTS):
+                    summary = self._raw_tick(ws, world)
+                    self.assertEqual(summary["stuck"], [])
+                summary = self._raw_tick(ws, world)
+            self.assertEqual(len(summary["stuck"]), 1, summary)
+            self.assertEqual(len([n for n in world.notices if not n["file"]]), 1)
+        self.run_branch(branch)

@@ -177,8 +177,9 @@ def finish_processed(
 def send_spec_followup(args: argparse.Namespace) -> dict[str, Any]:
     route = read_object(args.route)
     body = args.body.read_text(encoding="utf-8")
-    payload = gmail_reply.build_reply(route, body)
-    write_private(args.gmail_payload, payload)
+    # The payload built by an earlier run is reused: same Message-ID, same
+    # journal binding, so a retry after a crash verifies instead of refusing.
+    _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body))
     receipt = gmail_safe.send_reply_claimed(
         args.claim_root,
         args.message_id,
@@ -362,7 +363,8 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
     if args.appointment_approval.exists():
         approval = read_object(args.appointment_approval)
         expected = _appointment_approval_details(record, args.message_id, intent, args.monitor_root)
-        if approval != expected:
+        # The reject code is added after the first write; it is not binding.
+        if {k: v for k, v in approval.items() if k != "reject_code"} != expected:
             raise ValueError("existing appointment approval binding changed")
     else:
         approval = _appointment_approval_details(record, args.message_id, intent, args.monitor_root)
@@ -1111,6 +1113,71 @@ def _reply_snippet(args: argparse.Namespace) -> str:
         return ""
 
 
+def ask_stuck_claim(p: dict[str, Path], message_id: str, error: str, attempts: int, runner: Any = subprocess.run) -> dict[str, Any]:
+    """The tick tried this email several times and could not finish: the owner decides (plan 3.3).
+
+    The claim parks behind the question, so it is visible in open-questions
+    and gets the one-day reminder; retry runs it again, skip or handle
+    myself closes it as the owner's.
+    """
+    token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+    who = _customer_name(p["monitor_root"], p["claim_root"], message_id)
+    snippet = ""
+    try:
+        paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+        message = read_object(Path(paths["gmail_message"]))
+        snippet = " ".join(gmail_text.body_text(message, limit=600).split())[:200]
+    except (OSError, ValueError, json.JSONDecodeError):
+        snippet = ""
+    estimate_id = "jed-0000000000000000"
+    try:
+        estimate_id = inbox_monitor.load_queue_item(p["monitor_root"], message_id).get("estimate_id") or estimate_id
+    except (OSError, ValueError, KeyError):
+        pass
+    text = (
+        f"I could not finish {who}'s email"
+        + (f' ("{snippet}")' if snippet else "")
+        + f" after {attempts} tries: {error[:200]}. "
+        "Reply \"retry\" and I will try again, \"skip\" and I will set it aside for you to handle, or \"handle myself\"."
+    )
+    root = owner_questions.questions_root(p["monitor_root"])
+    created, question = owner_questions.create_decision(
+        root, "stuck_claim", estimate_id, message_id, text, {"error": error[:300], "attempts": attempts},
+    )
+    question = _attach_answer_command(root, p["monitor_root"], question)
+    if created:
+        owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
+    inbox_monitor.park_item(p["monitor_root"], message_id, p["claim_root"], token, "stuck_question")
+    return {"outcome": "awaiting_owner", "question_id": question["question_id"]}
+
+
+def _answer_stuck_claim(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
+                        question: dict[str, Any], outcome: str) -> dict[str, Any]:
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    message_id = question["gmail_message_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "stuck_claim", "decision": outcome}
+    if outcome == "retry":
+        reopened = _resume_parked_claim(p, message_id)
+        token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+        inbox_claim.mark_inline(p["claim_root"], message_id, token, False)
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        done = inbox_watcher.run_inline_claim(
+            workspace, args.base_dir.resolve(), p, message_id, "", args.openclaw or inbox_watcher.default_openclaw(),
+            getattr(args, "runner", subprocess.run), getattr(args, "judge_runner", subprocess.run),
+            getattr(args, "token", None),
+        )
+        result["pipeline"] = done.get("outcome")
+        return result
+    if _claim_parked(p, message_id):
+        _close_parked_claim(p, message_id, f"owner_decided_{outcome}")
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    result["claim"] = f"owner_decided_{outcome}"
+    return result
+
+
 def ask_followup_stalled(args: argparse.Namespace, record: dict[str, Any], repeated: list[str]) -> dict[str, Any]:
     """The customer was asked for these details once and did not give them: the owner decides.
 
@@ -1350,7 +1417,8 @@ def _question_to_answer(args: argparse.Namespace, p: dict[str, Path], root: Path
     except ValueError as exc:
         answered = [
             q for q in owner_questions.list_questions(root, "answered")
-            if q["kind"] in owner_questions.DECISION_KINDS and _claim_still_waiting(p, q)
+            if (q["kind"] in owner_questions.DECISION_KINDS and _claim_still_waiting(p, q))
+            or (q["kind"] == "missing_rate" and _rate_claim_resumable(p, q))
         ]
         if len(answered) == 1:
             return answered[0]
@@ -1429,8 +1497,10 @@ def _rate_claim_resumable(p: dict[str, Path], question: dict[str, Any]) -> bool:
         return False
     if state.get("status") == "awaiting_owner":
         return True
-    # A processing claim is a worker or a tick still at it; the stale
-    # reconciler decides that one, not a repeat of the answer.
+    if state.get("status") == "processing" and "inline_attempts" in state:
+        # The answer's own run owns it: replay when that run recorded a
+        # failure or its lease has lapsed (it died); never under a live run.
+        return bool(state.get("last_error")) or not inbox_claim.recovery_lease_active(state)
     return state.get("status") == "manual_review" and state.get("reason_code") in RESUMABLE_REVIEW_REASONS
 
 
@@ -1443,15 +1513,20 @@ def _price_after_rate_answer(args: argparse.Namespace, workspace: Path, p: dict[
     switch = pipeline.settings(workspace / "estimate-desk")
     if not switch.get("inline"):
         return None
-    inbox_claim.delegate(
-        p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
-        __import__("cron_config").WORKER_LEASE_SECONDS,
-    )
-    done = pipeline.price_from_record(
-        workspace, message_id, estimate_id, model=switch.get("model"),
-        judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
-        openclaw=getattr(args, "openclaw", None) or inbox_watcher.default_openclaw(),
-    )
+    claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, True)
+    inbox_claim.delegate(p["claim_root"], message_id, claim_token, inbox_watcher.INLINE_LEASE_SECONDS)
+    try:
+        done = pipeline.price_from_record(
+            workspace, message_id, estimate_id, model=switch.get("model"),
+            judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
+            openclaw=getattr(args, "openclaw", None) or inbox_watcher.default_openclaw(),
+        )
+    except (judge.JudgmentError, OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+        # Counted on the claim so the same answer, pasted again, replays.
+        inbox_claim.note_inline_attempt(p["claim_root"], message_id, claim_token, str(exc), inbox_watcher._error_kind(exc))
+        raise
+    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, False)
     return {"pipeline": done.get("outcome"), "proposed_price": done.get("proposed_price")}
 
 
@@ -1562,6 +1637,8 @@ def answer_decision(
         return _answer_appointment_next(args, workspace, p, root, question, outcome)
     if question["kind"] == "command_failed":
         return _answer_command_failed(args, p, root, question, outcome)
+    if question["kind"] == "stuck_claim":
+        return _answer_stuck_claim(args, workspace, p, root, question, outcome)
     if question["kind"] == "followup_stalled" and outcome in {"skip", "ask_again"}:
         import pipeline  # local import: pipeline imports this module
 
@@ -2651,7 +2728,7 @@ def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
             try:
                 with run_lease.hold(desk, args.command, _executor_key(args)):
                     record = executors[args.command](args)
-            except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+            except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError, judge.JudgmentError) as exc:
                 if _retry_of is None:
                     try:
                         asked = _command_failed(args, argv, exc)
@@ -2690,6 +2767,7 @@ def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
         ValueError,
         json.JSONDecodeError,
         subprocess.CalledProcessError,
+        judge.JudgmentError,
     ) as exc:
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2

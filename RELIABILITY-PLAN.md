@@ -6,6 +6,14 @@ row, one failed, and the desk left a half-done state with nothing to tell
 the owner and nothing to run. Then the main Kolo session invented a story.
 This plan removes the shape, not the instances.
 
+## 0. Status
+
+- Step 1, the harness: done (4.5.0). 84 combinations.
+- Step 2, journaled executors, verified sends, lease, failure question: done (4.5.0).
+- Step 3, bounded stuck in the tick, card verification, answer replay: done (4.6.0). Every combination ends ok or recovered.
+- Step 4, doctor and requeue: next.
+- Step 5, SKILL.md rules and coherence tests: after step 4.
+
 ## 1. What we are protecting
 
 Three promises, in priority order. Everything below serves them.

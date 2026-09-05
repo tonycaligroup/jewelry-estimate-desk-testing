@@ -171,6 +171,123 @@ def sweep_worker_jobs(openclaw: str, runner: Runner = subprocess.run, now_ms: in
             continue
     return removed
 
+INLINE_LEASE_SECONDS = 300
+TRANSIENT_ATTEMPTS = 6
+DETERMINISTIC_ATTEMPTS = 2
+
+
+def _inline_retry_candidates(p: dict[str, Path]) -> list[str]:
+    """Processing claims the tick owns whose run ended without finishing: lapsed lease, no worker."""
+    found: list[str] = []
+    for item in inbox_monitor.all_queue_items(p["monitor_root"]):
+        if item["processing_status"] != "processing":
+            continue
+        try:
+            claim = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], item["gmail_message_id"]))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if claim.get("status") != "processing" or "inline_attempts" not in claim:
+            continue
+        if inbox_claim.recovery_lease_active(claim):
+            continue
+        found.append(item["gmail_message_id"])
+    return sorted(found)
+
+
+def _error_kind(exc: BaseException) -> str:
+    if isinstance(exc, judge.JudgmentError):
+        return "transient" if exc.transient else "deterministic"
+    if isinstance(exc, (OSError, subprocess.CalledProcessError)):
+        return "transient"
+    return "deterministic"
+
+
+def run_inline_claim(
+    workspace: Path, base_dir: Path, p: dict[str, Path], message_id: str, owner_target: str, openclaw: str,
+    runner: Runner, judge_runner: Runner, token: str | None, summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fetch, intake (once), and judge one claim in this process. Exceptions are the caller's.
+
+    Safe to run again after a failure or a crash: the thread is fetched only
+    when its file is missing, the intake result is reused when it exists,
+    and every external effect is journaled by the code it calls.
+    """
+    summary = summary if summary is not None else {"workers": [], "spawn_failures": 0, "inline": [], "closed": 0, "manual_review": 0}
+    claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, True)
+    inbox_claim.delegate(p["claim_root"], message_id, claim_token, INLINE_LEASE_SECONDS)
+    paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+    if not Path(paths["gmail_thread"]).exists() or not Path(paths["gmail_message"]).exists():
+        gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, token or gateway_token.load_token())
+    intake_path = Path(paths["work_dir"]) / "intake-result.json"
+    if intake_path.exists():
+        result = workflow_safe.read_object(intake_path)
+    else:
+        result = workflow_safe.intake(
+            argparse.Namespace(
+                monitor_root=p["monitor_root"],
+                claim_root=p["claim_root"],
+                record_root=p["record_root"],
+                message_id=message_id,
+                shop_profile=p["shop_profile"],
+            )
+        )
+        if result.get("next_action") == "done":
+            if result.get("outcome") == "manual_review":
+                summary["manual_review"] += 1
+            else:
+                summary["closed"] += 1
+            return {"outcome": result.get("outcome", "done")}
+        workflow_safe.write_private(intake_path, result)
+    work_dir = result["work_paths"]["work_dir"]
+    inline = pipeline.settings(workspace / "estimate-desk")
+    if inline.get("inline"):
+        done = pipeline.process_claim(
+            workspace, base_dir, message_id, result,
+            model=inline.get("model"), judge_runner=judge_runner, command_runner=runner, openclaw=openclaw,
+        )
+        if done.get("outcome") != "needs_worker":
+            summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome")})
+            return done
+        summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action"),
+                                  **({"error": done["error"]} if done.get("error") else {})})
+    # Hand the claim to a worker job: the worker owns it from here.
+    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, False)
+    inbox_claim.delegate(p["claim_root"], message_id, claim_token, cron_config.WORKER_LEASE_SECONDS)
+    try:
+        job_id = spawn_worker(
+            workspace, base_dir, owner_target, openclaw, message_id, result["estimate_id"], work_dir,
+            runner=runner, branch=cron_config.worker_branch(result.get("record_status")),
+        )
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        # Leave the claim processing with its lease. Once the lease ends
+        # the stale reconciler resumes it exactly once, and the next tick
+        # spawns again; a second failure becomes manual review.
+        summary["spawn_failures"] += 1
+        return {"outcome": "spawn_failed"}
+    summary["workers"].append({"message_id": message_id, "job_id": job_id})
+    return {"outcome": "worker", "job_id": job_id}
+
+
+def _attempt_inline(
+    workspace: Path, base_dir: Path, p: dict[str, Path], message_id: str, owner_target: str, openclaw: str,
+    runner: Runner, judge_runner: Runner, token: str | None, summary: dict[str, Any],
+) -> None:
+    """One attempt at a claim; a failure is counted on the claim and the lease released for the next tick."""
+    try:
+        run_inline_claim(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
+    except (judge.JudgmentError, OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+        summary["inline_failures"] += 1
+        kind = _error_kind(exc)
+        try:
+            claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+            attempts = inbox_claim.note_inline_attempt(p["claim_root"], message_id, claim_token, str(exc), kind)
+            inbox_claim.release_lease(p["claim_root"], message_id, claim_token)
+        except (OSError, ValueError, json.JSONDecodeError):
+            attempts = None
+        summary["inline"].append({"message_id": message_id, "outcome": "deferred", "error": str(exc)[:160],
+                                  "kind": kind, "attempts": attempts})
+
 
 def tick(
     workspace: Path,
@@ -194,6 +311,8 @@ def tick(
         "inline": [],
         "inline_failures": 0,
         "swept_jobs": 0,
+        "retried": 0,
+        "stuck": [],
         "message": "NO_REPLY",
     }
     started = time.monotonic()
@@ -225,6 +344,24 @@ def tick(
     summary["discovered"] = discovery.get("discovered", 0)
     summary["swept_jobs"] = sweep_worker_jobs(openclaw, runner=runner)
 
+    # Claims the tick itself owns whose last run ended without finishing (a
+    # deferral or a crash): retry them first, with a bound, then ask.
+    for message_id in _inline_retry_candidates(p):
+        if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
+            break
+        if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
+            break
+        claim = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], message_id))
+        attempts = int(claim.get("inline_attempts") or 0)
+        limit = DETERMINISTIC_ATTEMPTS if claim.get("last_error_kind") == "deterministic" else TRANSIENT_ATTEMPTS
+        if attempts >= limit:
+            asked = workflow_safe.ask_stuck_claim(p, message_id, str(claim.get("last_error") or "no error recorded"),
+                                                 attempts, runner=runner)
+            summary["stuck"].append({"message_id": message_id, "attempts": attempts, "question_id": asked.get("question_id")})
+            continue
+        summary["retried"] += 1
+        _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
+
     while len(summary["workers"]) + len(summary["inline"]) < max_workers:
         if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
             # Enough of the clock is gone; the rest of the queue waits a tick.
@@ -238,79 +375,7 @@ def tick(
             continue
         message_id = claimed["queue_item"]["gmail_message_id"]
         summary["claimed"] += 1
-        gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, token)
-        result = workflow_safe.intake(
-            argparse.Namespace(
-                monitor_root=p["monitor_root"],
-                claim_root=p["claim_root"],
-                record_root=p["record_root"],
-                message_id=message_id,
-                shop_profile=p["shop_profile"],
-            )
-        )
-        if result.get("next_action") == "done":
-            if result.get("outcome") == "manual_review":
-                summary["manual_review"] += 1
-            else:
-                summary["closed"] += 1
-            continue
-        work_dir = result["work_paths"]["work_dir"]
-        workflow_safe.write_private(Path(work_dir) / "intake-result.json", result)
-        inline = pipeline.settings(workspace / "estimate-desk")
-        if inline.get("inline"):
-            # Finish the claim here with one-shot judgment calls; no worker.
-            try:
-                done = pipeline.process_claim(
-                    workspace, base_dir, message_id, result,
-                    model=inline.get("model"), judge_runner=judge_runner, command_runner=runner,
-                    openclaw=openclaw,
-                )
-            except judge.JudgmentError as exc:
-                summary["inline_failures"] += 1
-                if exc.transient:
-                    # Leave the claim processing and unleased; the stale
-                    # reconciler resumes it once and the next tick retries.
-                    summary["inline"].append({"message_id": message_id, "outcome": "deferred", "error": str(exc)[:160]})
-                    continue
-                kolo_safe.manual_review_claimed(
-                    p["monitor_root"], p["claim_root"], message_id, None,
-                    "classification_malformed", runner=runner,
-                )
-                summary["inline"].append({"message_id": message_id, "outcome": "manual_review", "error": str(exc)[:160]})
-                continue
-            except (OSError, ValueError, subprocess.CalledProcessError) as exc:
-                summary["inline_failures"] += 1
-                summary["inline"].append({"message_id": message_id, "outcome": "deferred", "error": str(exc)[:160]})
-                continue
-            if done.get("outcome") != "needs_worker":
-                summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome")})
-                continue
-            summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action"),
-                                      **({"error": done["error"]} if done.get("error") else {})})
-        claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
-        inbox_claim.delegate(
-            p["claim_root"], message_id, claim_token, cron_config.WORKER_LEASE_SECONDS
-        )
-        try:
-            job_id = spawn_worker(
-                workspace,
-                base_dir,
-                owner_target,
-                openclaw,
-                message_id,
-                result["estimate_id"],
-                work_dir,
-                runner=runner,
-                branch=cron_config.worker_branch(result.get("record_status")),
-            )
-        except (OSError, ValueError, subprocess.CalledProcessError):
-            # Leave the claim processing with its lease. Once the lease ends
-            # the stale reconciler resumes it exactly once, and the next tick
-            # spawns again; a second failure becomes manual review. Nothing
-            # is dropped silently.
-            summary["spawn_failures"] += 1
-            continue
-        summary["workers"].append({"message_id": message_id, "job_id": job_id})
+        _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
 
     # The owner's channel may be a phone. Reviews reach the owner as approval
     # briefs, so the tick itself speaks only when something is wrong: an

@@ -277,32 +277,7 @@ class Harness(GoldenPathTests):
 
 # Combinations that fail on today's code, with the plan step that removes them.
 # Keyed by (action index, service, mode). The value is the plan step.
-KNOWN_GAPS: dict[tuple[int, str, str], str] = {
-    (0, "gmail_read", "fail_once"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (0, "gmail_read", "fail_twice"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (0, "gmail_send", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (0, "model", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (1, "gmail_read", "fail_once"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (1, "gmail_read", "fail_twice"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (1, "model", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (2, "kolo_card", "crash_after"): "step 3: answer-question outcomes journaled; a replayed rate answer resumes at the card",
-    (2, "kolo_card", "fail_once"): "step 3: answer-question outcomes journaled; a replayed rate answer resumes at the card",
-    (2, "kolo_card", "fail_twice"): "step 3: answer-question outcomes journaled; a replayed rate answer resumes at the card",
-    (2, "model", "crash_after"): "step 3: answer-question outcomes journaled; a replayed rate answer resumes at the card",
-    (2, "model", "fail_once"): "step 3: answer-question outcomes journaled; a replayed rate answer resumes at the card",
-    (2, "model", "fail_twice"): "step 3: answer-question outcomes journaled; a replayed rate answer resumes at the card",
-    (4, "gmail_read", "fail_once"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (4, "gmail_read", "fail_twice"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (4, "image", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (4, "kolo_card", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (4, "kolo_notify", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (4, "model", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (6, "calendar_freebusy", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (6, "gmail_read", "fail_once"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (6, "gmail_read", "fail_twice"): "step 3: a failed Gmail read is a transient deferral, retried then asked",
-    (6, "kolo_card", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-    (6, "model", "crash_after"): "step 3: a crashed tick is resumed once by the reconciler, then asked; today the second try is a silent manual review",
-}
+KNOWN_GAPS: dict[tuple[int, str, str], str] = {}
 
 
 class FaultInjectionTests(Harness):

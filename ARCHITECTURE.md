@@ -381,6 +381,22 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.6.0 (built 5 September 2026): reliability plan, step 3.** The tick
+owns its inline claims: each is marked and leased (`inline_attempts`,
+`INLINE_LEASE_SECONDS`), a failure is counted on the claim with its kind and
+the lease released, and the next tick retries claims whose lease has
+lapsed (a deferral or a crash) before taking new ones. Transient failures
+get six tries, deterministic ones two; then `ask_stuck_claim` files one
+question (`stuck_claim`: retry runs the claim again in the answer, skip or
+handle myself closes it) and parks the claim. The stale reconciler leaves
+inline claims alone. A card whose filing is unknown is checked against the
+audit trail by its title (`kolo_safe.verify_card`) the way sends are checked
+against the thread; a rate answer that died mid-way replays from the
+answered question; a started owner notice is never sent twice; the
+follow-up reuses its journaled payload; the appointment card's binding
+check ignores the reject code it adds after writing. The fault-injection
+suite ends every one of its 84 combinations in ok or recovered.
+
 **4.5.0 (built 5 September 2026): reliability plan, steps 1 and 2.**
 `tests/test_fault_injection.py` fails and crashes every external call in
 turn across the golden path (84 combinations) and checks three promises

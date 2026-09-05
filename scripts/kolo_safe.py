@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import subprocess
+from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -373,7 +374,14 @@ def request_rendering_approval_claimed(
         status = state["external_actions"][action_key]["status"]
         if status == "sent":
             return subprocess.CompletedProcess(command, 0, "rendering approval already sent\n", "")
-        raise ValueError(f"rendering approval is already {status}; refusing retry")
+        if status in {"pending", "uncertain"}:
+            if verify_card(claim_root, message_id, claim_token, action_key, command, runner=runner):
+                return subprocess.CompletedProcess(command, 0, "rendering approval already sent\n", "")
+            acquired, state = inbox_claim.acquire_external_action(
+                claim_root, message_id, claim_token, action_key, "approval_request", binding,
+            )
+        if not acquired:
+            raise ValueError(f"rendering approval is already {status}; refusing retry")
     try:
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):
@@ -686,6 +694,42 @@ def audit_events(
     return [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
 
 
+def _card_title(command: Sequence[str]) -> str:
+    command = list(command)
+    return command[command.index("--action") + 1] if "--action" in command else ""
+
+
+def verify_card(
+    claim_root: Path, message_id: str, claim_token: str, action_key: str, command: Sequence[str],
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> bool:
+    """A card whose filing is pending or uncertain: did Kolo get it?
+
+    The audit trail lists every brief submitted; the card's title is its
+    description. Found: the action settles as sent. Not found, with the
+    trail readable: verified unsent, so the same card may be filed once
+    more. Trail unreadable: raise; nothing is guessed.
+    """
+    title = _card_title(command)[:120]
+    since = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    argv = ["kolo", "audit-query", "--page-size", "100", "--event-type", "brief.submitted", "--from-date", since]
+    try:
+        result = run_command(argv, runner=runner or subprocess.run)
+        body = json.loads(result.stdout)
+        events = body.get("events") if isinstance(body, dict) else None
+        if not isinstance(events, list):
+            raise ValueError("audit trail returned no events list")
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        raise ValueError("the card's filing is uncertain and the audit trail could not be read to check it; "
+                         "run the same line again in a minute") from exc
+    found = any(isinstance(e, dict) and e.get("brief_id") and str(e.get("description") or "")[:120] == title
+                for e in events)
+    inbox_claim.settle_external_action(
+        claim_root, message_id, claim_token, action_key, "sent" if found else "verified_unsent"
+    )
+    return found
+
+
 def run_command(
     argv: Sequence[str],
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -731,10 +775,15 @@ def request_approval_claimed(
     if not acquired:
         status = state["external_actions"][action_key]["status"]
         if status == "sent":
-            return subprocess.CompletedProcess(
-                command, 0, "approval request already sent\n", ""
+            return subprocess.CompletedProcess(command, 0, "approval approval already sent\n", "")
+        if status in {"pending", "uncertain"}:
+            if verify_card(claim_root, message_id, claim_token, action_key, command, runner=runner):
+                return subprocess.CompletedProcess(command, 0, "approval approval already sent\n", "")
+            acquired, state = inbox_claim.acquire_external_action(
+                claim_root, message_id, claim_token, action_key, "approval_request", binding,
             )
-        raise ValueError(f"approval request is already {status}; refusing retry")
+        if not acquired:
+            raise ValueError(f"approval approval is already {status}; refusing retry")
     try:
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):
@@ -788,10 +837,15 @@ def request_appointment_approval_claimed(
     if not acquired:
         status = state["external_actions"][action_key]["status"]
         if status == "sent":
-            return subprocess.CompletedProcess(
-                command, 0, "appointment approval already sent\n", ""
+            return subprocess.CompletedProcess(command, 0, "appointment approval already sent\n", "")
+        if status in {"pending", "uncertain"}:
+            if verify_card(claim_root, message_id, claim_token, action_key, command, runner=runner):
+                return subprocess.CompletedProcess(command, 0, "appointment approval already sent\n", "")
+            acquired, state = inbox_claim.acquire_external_action(
+                claim_root, message_id, claim_token, action_key, "approval_request", binding,
             )
-        raise ValueError(f"appointment approval is already {status}; refusing retry")
+        if not acquired:
+            raise ValueError(f"appointment approval is already {status}; refusing retry")
     try:
         result = run_command(command, runner=runner)
     except (OSError, subprocess.CalledProcessError):

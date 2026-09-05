@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.5.0
+version: 4.6.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -1085,7 +1085,9 @@ appointment card, what to do when a customer asks to meet but the
 calendar offers no free time (or could not be read), and what to do when a
 customer was asked for details once and replied without giving them, and
 what to do when a card's command failed part way (reply "retry", "release"
-to let go of a calendar hold, or "handle myself"); those get a question
+to let go of a calendar hold, or "handle myself"), and what to do with an
+email the watcher could not finish after its own retries (reply "retry",
+"skip", or "handle myself"; the email is never dropped silently); those get a question
 straight away, never a card with nothing on it and never the same email
 twice. Every such message
 ends with one line, `desk-answer <CODE>`. When the owner replies to it, run exactly this, their words

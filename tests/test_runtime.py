@@ -1466,9 +1466,11 @@ class SafeCliTests(unittest.TestCase):
             )
             with self.assertRaises(subprocess.CalledProcessError):
                 kolo_safe.request_approval_claimed(*arguments, runner=runner)
+            # The audit trail cannot be read either: no guess, no second filing.
             with self.assertRaisesRegex(ValueError, "uncertain"):
                 kolo_safe.request_approval_claimed(*arguments, runner=runner)
-            self.assertEqual(runner.call_count, 1)
+            filings = [c for c in runner.call_args_list if c.args[0][:2] == ["kolo", "request-approval"]]
+            self.assertEqual(len(filings), 1)
 
     def test_claimed_approval_binding_rejects_changed_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -709,6 +709,10 @@ def stale_processing_items(
         lease_active = inbox_claim.recovery_lease_active(claim, current)
         if lease_active:
             continue
+        if "inline_attempts" in claim:
+            # The tick owns this claim (RELIABILITY-PLAN.md 3.3): it retries
+            # with a bound and asks the owner; the reconciler stays out.
+            continue
         resumable = (
             claim.get("processing_phase") in inbox_claim.PROCESSING_PHASES
             and not inbox_claim.has_ambiguous_external_action(claim)
