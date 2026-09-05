@@ -874,6 +874,23 @@ class WorkflowApprovalTransactionTests(unittest.TestCase):
             self.assertEqual(record["status"], "estimate_sent")
 
 
+class ReflowTests(unittest.TestCase):
+    def test_hard_wraps_inside_a_paragraph_are_joined(self) -> None:
+        wrapped = (
+            "Hi,\n\nIt is a privilege to help you design an engagement ring for your\ngirlfriend. A 1.5 carat pink "
+            "lab-grown diamond with a white diamond\nhalo in 18K rose gold is a beautiful vision.\n\n"
+            "I have prepared your estimate, which is $4,558.06. We intentionally\nprice our initial estimates on the "
+            "higher side.\n\nHere are the times:\n- Monday at 10:30 AM\n- Tuesday at 11:00 AM\n\nWarmly,\nLomelino Jewelry"
+        )
+        text = customer_content_guard.plain_text(wrapped)
+        self.assertIn("for your girlfriend. A 1.5 carat", text)
+        self.assertIn("We intentionally price our initial", text)
+        self.assertIn("Here are the times:\n- Monday at 10:30 AM\n- Tuesday at 11:00 AM", text)
+        self.assertTrue(text.endswith("Warmly,\nLomelino Jewelry"))
+        self.assertEqual(text.count("\n\n"), 4)
+        self.assertEqual(customer_content_guard.plain_text(text), text, "already-flowed text is unchanged")
+
+
 class CustomerStateResetTests(unittest.TestCase):
     def build_workspace(self, root: Path) -> tuple[Path, str]:
         desk = root / "estimate-desk"

@@ -381,6 +381,13 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.4.1 (built 5 September 2026): no ragged lines.** The model wrapped an
+estimate at seventy columns and Gmail showed the breaks mid-sentence.
+`plain_text` (applied on every send) now reflows single line breaks inside
+a paragraph into spaces, keeping blank-line paragraphs, dash bullets,
+greetings and sign-offs ("Warmly," then the name), and short heading
+lines; the drafting prompt asks for one paragraph per line.
+
 **4.4.0 (built 5 September 2026): meeting first, and a jeweler's voice.**
 A customer who wrote "I can bring the stone, are you free next week?" was
 answered with a questionnaire. Now scheduling intent before an estimate

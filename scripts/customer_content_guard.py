@@ -86,7 +86,57 @@ def plain_text(text: str) -> str:
     while previous != cleaned:
         previous = cleaned
         cleaned = MARKDOWN_EMPHASIS_RE.sub(r"\2", cleaned)
-    return MARKDOWN_CODE_RE.sub("", cleaned)
+    return reflow(MARKDOWN_CODE_RE.sub("", cleaned))
+
+
+def _is_bullet(line: str) -> bool:
+    return line.lstrip().startswith(("- ", "* ", "• "))
+
+
+def _is_salutation(line: str) -> bool:
+    """A greeting or sign-off line: a few words ending in a comma ("Hi David,", "Warmly,")."""
+    words = line.strip().split()
+    return bool(words) and line.rstrip().endswith(",") and len(words) <= 3
+
+
+def _is_label(line: str) -> bool:
+    """A short heading-like first line ("Lead Time", "Custom Wedding Band"): no end punctuation, few words."""
+    stripped = line.strip()
+    words = stripped.split()
+    return bool(words) and len(words) <= 4 and not stripped.endswith((".", "!", "?", ",", ";"))
+
+
+def reflow(text: str) -> str:
+    """Join the hard wraps a model puts inside a paragraph; keep paragraphs and bullets.
+
+    Models often wrap prose at about seventy columns. Gmail shows those
+    breaks as ragged lines in the middle of sentences. A blank line still
+    separates paragraphs, a dash bullet keeps its own line, and a greeting
+    or sign-off ("Warmly,") keeps the name on the next line.
+    """
+    if not isinstance(text, str):
+        return text
+    out: list[str] = []
+    for paragraph in re.split(r"\n[ \t]*\n", text.strip("\n")):
+        lines = [line.rstrip() for line in paragraph.split("\n")]
+        joined: list[str] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            keep_break = (
+                not joined
+                or _is_bullet(line)
+                or _is_bullet(joined[-1])
+                or _is_salutation(joined[-1])
+                or (len(joined) == 1 and _is_label(joined[0]))
+            )
+            if keep_break:
+                joined.append(line)
+            else:
+                joined[-1] = joined[-1] + " " + line.strip()
+        out.append("\n".join(joined))
+    flowed = "\n\n".join(out)
+    return flowed + "\n" if text.endswith("\n") else flowed
 
 
 def validate_customer_text(text: str) -> str:
