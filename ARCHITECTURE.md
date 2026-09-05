@@ -381,6 +381,23 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.5.0 (built 5 September 2026): reliability plan, steps 1 and 2.**
+`tests/test_fault_injection.py` fails and crashes every external call in
+turn across the golden path (84 combinations) and checks three promises
+after the operator's retry: nothing twice, nothing silent, nothing else
+heard; gaps are listed in the test with the plan step that removes them.
+Step 2 closed all ten executor gaps: a customer send whose outcome is
+unknown (a crash around the call, a failed call) is settled by reading the
+thread for the desk's own Message-ID (`gmail_safe.find_delivery`,
+`inbox_claim.settle_external_action`, status `verified_unsent`), never
+resent on a guess; the booking journals its slot before the calendar call
+and adopts its own event by the estimate id after a crash
+(`calendar_query.list_events`); the rendering executor resumes after its
+reopen. Each executor runs under a lease (`run_lease.py`, `locks/`), and a
+failure marks the brief, asks the owner once (`command_failed`: retry runs
+the same command from inside `answer-question`, release deletes only the
+desk's own journaled event, handle myself), and prints the error.
+
 **4.4.2 (built 5 September 2026): two cards from one email, approved in
 either order.** A customer asked for a rendering and a meeting in one
 email; the desk filed both cards and parked the claim behind the rendering

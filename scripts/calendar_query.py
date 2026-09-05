@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 FREEBUSY_URL = "https://gateway.maton.ai/google-calendar/calendar/v3/freeBusy"
 EVENTS_URL = "https://gateway.maton.ai/google-calendar/calendar/v3/calendars/{calendar}/events?sendUpdates=all"
+EVENTS_LIST_URL = "https://gateway.maton.ai/google-calendar/calendar/v3/calendars/{calendar}/events"
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
@@ -192,6 +193,32 @@ def create_event(
     if not isinstance(event, dict) or event.get("kind") != "calendar#event" or not event.get("id"):
         raise ValueError("calendar provider returned an invalid event")
     return event
+
+
+def list_events(
+    calendar_id: str,
+    time_min: str,
+    time_max: str,
+    token: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> list[dict[str, Any]]:
+    """Events overlapping the window, newest first; used to find the desk's own event after a crash."""
+    if parse_timestamp(time_max, "time_max") <= parse_timestamp(time_min, "time_min"):
+        raise ValueError("time_max must be after time_min")
+    if not isinstance(calendar_id, str) or not calendar_id or len(calendar_id) > 255:
+        raise ValueError("calendar_id must contain 1-255 characters")
+    if not token or any(character in token for character in "\r\n"):
+        raise ValueError("MATON_API_KEY is missing or invalid")
+    query = urllib.parse.urlencode({"timeMin": time_min, "timeMax": time_max, "singleEvents": "true"})
+    request = urllib.request.Request(
+        EVENTS_LIST_URL.format(calendar=urllib.parse.quote(calendar_id, safe="")) + "?" + query,
+        method="GET",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    with opener(request, timeout=20) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    items = body.get("items") if isinstance(body, dict) else None
+    return [e for e in items if isinstance(e, dict) and e.get("id")] if isinstance(items, list) else []
 
 
 def delete_event(

@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.4.2
+version: 4.5.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -1021,6 +1021,12 @@ or `request-approval`, and never continues an inquiry in chat. Every decision
 the desk needs from the owner arrives with the exact command to run, and the
 session runs that command and nothing else. If unsure, ask and wait.
 
+When an execute line fails, run the same line once more; every executor
+resumes where it stopped and never sends or books twice (a send whose
+outcome was unknown is checked against the thread first). If it fails
+again, paste the output and wait: the desk has already asked the owner
+what to do, with the fix attached.
+
 While a desk question is open (the last desk message ended with
 `desk-answer <CODE>`), the owner's next reply is the answer to it: run
 `answer-question` with their words first, and only if that command refuses
@@ -1077,9 +1083,11 @@ rate to use, whether a new thread from a known customer is the same piece or
 a new one, what an unclear reply meant, what to do after a rejected
 appointment card, what to do when a customer asks to meet but the
 calendar offers no free time (or could not be read), and what to do when a
-customer was asked for details once and replied without giving them; those
-last two get a question straight away, never a card with nothing on it and
-never the same email twice. Every such message
+customer was asked for details once and replied without giving them, and
+what to do when a card's command failed part way (reply "retry", "release"
+to let go of a calendar hold, or "handle myself"); those get a question
+straight away, never a card with nothing on it and never the same email
+twice. Every such message
 ends with one line, `desk-answer <CODE>`. When the owner replies to it, run exactly this, their words
 verbatim:
 

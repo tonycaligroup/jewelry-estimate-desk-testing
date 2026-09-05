@@ -100,7 +100,7 @@ class World:
     logged in `calls`, so a test can learn which services an action touches.
     """
 
-    SERVICES = ("gmail_read", "gmail_send", "calendar_freebusy", "calendar_create", "calendar_delete",
+    SERVICES = ("gmail_read", "gmail_send", "calendar_freebusy", "calendar_create", "calendar_delete", "calendar_list",
                 "kolo_card", "kolo_notify", "kolo_audit", "kolo_update", "model", "image")
 
     def __init__(self, ws: Path) -> None:
@@ -174,7 +174,7 @@ class World:
         self.batch.append({"gmail_message_id": message_id, "thread_id": thread_id, "internal_date_ms": self.clock_ms})
         return message
 
-    def _shop_message(self, thread_id: str, subject: str, body: str) -> dict:
+    def _shop_message(self, thread_id: str, subject: str, body: str, message_id_header: str | None = None) -> dict:
         self.clock_ms += 100
         self.email_count += 1
         message_id = f"sent-{self.email_count}"
@@ -183,7 +183,7 @@ class World:
             "payload": {"mimeType": "text/plain",
                         "headers": [{"name": "From", "value": f"Kolo Jewelers <{SHOP_MAILBOX}>"},
                                     {"name": "To", "value": CUSTOMER}, {"name": "Subject", "value": subject},
-                                    {"name": "Message-ID", "value": f"<{message_id}@example.com>"}],
+                                    {"name": "Message-ID", "value": message_id_header or f"<{message_id}@example.com>"}],
                         "body": {"data": b64url(body)}},
         }
         self.messages[message_id] = message
@@ -236,7 +236,7 @@ class World:
                 body = part.get_content()
             elif part.get_filename():
                 attachments.append(part.get_filename())
-        sent = self._shop_message(payload["threadId"], str(mime["Subject"]), body)
+        sent = self._shop_message(payload["threadId"], str(mime["Subject"]), body, str(mime["Message-ID"]))
         self.sent.append({"id": sent["id"], "thread_id": payload["threadId"], "subject": str(mime["Subject"]),
                           "to": str(mime["To"]), "body": body, "attachments": attachments})
         return self._after("gmail_send", ok(argv, json.dumps({"id": sent["id"], "threadId": payload["threadId"]})))
@@ -259,7 +259,7 @@ class World:
                      opener=None) -> dict:
         self._service("calendar_create")
         self.event_count += 1
-        event = {"kind": "calendar#event", "id": f"evt-{self.event_count}", "summary": summary,
+        event = {"kind": "calendar#event", "id": f"evt-{self.event_count}", "summary": summary, "description": description,
                  "start": {"dateTime": start, "timeZone": timezone_name}, "end": {"dateTime": end, "timeZone": timezone_name},
                  "attendees": [{"email": attendee_email}], "htmlLink": f"https://calendar.example/{self.event_count}",
                  "status": "confirmed"}
@@ -267,6 +267,14 @@ class World:
         self.busy.append({"start": start, "end": end, "event": event["id"]})
         self.created_events.append(event)
         return self._after("calendar_create", event)
+
+    def list_events(self, calendar_id, time_min, time_max, token, opener=None) -> list[dict]:
+        self._service("calendar_list")
+        lo, hi = calendar_query.parse_timestamp(time_min, "a"), calendar_query.parse_timestamp(time_max, "b")
+        found = [e for e in self.calendar_events.values()
+                 if calendar_query.parse_timestamp(e["start"]["dateTime"], "s") < hi
+                 and calendar_query.parse_timestamp(e["end"]["dateTime"], "e") > lo]
+        return self._after("calendar_list", found)
 
     def delete_event(self, calendar_id, event_id, token, opener=None) -> bool:
         self._service("calendar_delete")
@@ -490,6 +498,7 @@ class GoldenPathTests(unittest.TestCase):
             patch.object(calendar_query, "query_freebusy", side_effect=world.query_freebusy),
             patch.object(calendar_query, "create_event", side_effect=world.create_event),
             patch.object(calendar_query, "delete_event", side_effect=world.delete_event),
+            patch.object(calendar_query, "list_events", side_effect=world.list_events),
         )
 
     def tick(self, ws: Path, world: World) -> dict:
@@ -1329,4 +1338,109 @@ class CombinedIntentTests(SideBranchTests):
             self.assertEqual(len(world.calendar_events), 1, "the same event, not a second one")
             record = self.record(ws, self.only_estimate(ws))
             self.assertEqual(record["appointment_booked"]["calendar_event_id"], next(iter(world.calendar_events)))
+        self.run_branch(branch)
+
+
+class FailureQuestionTests(SideBranchTests):
+    """A card's command that fails becomes one question with the fix attached (plan 3.2), and runs one at a time (3.1)."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def _booking_card(self, ws: Path, world: World) -> dict:
+        thread, _estimate_id = self._estimate_sent(ws, world)
+        wanted = next_weekday(2, 14, 0)
+        world.intents = ["appointment_request"]
+        world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+        world.customer_message("s2", thread, f"Can we meet {wanted.strftime('%A')} at 2?\n\nPat")
+        self.tick(ws, world)
+        card = world.cards[-1]
+        self.assertEqual(card["kind"], "appointment_booking")
+        return card
+
+    def _run_line(self, ws: Path, card: dict) -> tuple[int, str]:
+        parts = shlex.split(card["payload"]["execute"].replace("<Brief ID>", card["brief_id"]))
+        with patch("sys.stdout", io.StringIO()) as out, patch("sys.stderr", io.StringIO()) as err:
+            code = workflow_safe.main(parts[2:])
+        return code, out.getvalue() + err.getvalue()
+
+    def test_a_failed_booking_asks_once_and_retry_finishes_it(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            card = self._booking_card(ws, world)
+            questions_before = len([n for n in world.notices if not n["file"]])
+            world.fail_next["gmail_send"] = 5
+            with patch.object(gmail_safe, "find_delivery", side_effect=OSError("gateway down")):
+                code, out = self._run_line(ws, card)
+                self.assertNotEqual(code, 0)
+                self.assertIn('"asked_owner": true', out)
+                # A second paste of the same line asks nothing new.
+                code, _out = self._run_line(ws, card)
+                self.assertNotEqual(code, 0)
+            world.fail_next.clear()
+            asked = [n for n in world.notices if not n["file"]][questions_before:]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertIn("desk-answer", asked[0]["text"])
+            self.assertRegex(asked[0]["text"], r"(?i)could not finish booking")
+            self.assertRegex(asked[0]["text"], r"(?i)held on your calendar")
+            self.assertIn((card["brief_id"], "failed"), world.updates)
+            self.assertEqual(len(world.calendar_events), 1, "the event exists; nothing sent")
+            self.assertEqual(len(world.sent), 1)
+            answered = self.answer(ws, "retry")
+            self.assertEqual(answered["decision"], "retry", answered)
+            self.assertEqual(len(world.calendar_events), 1, "the same event, adopted")
+            self.assertEqual(len(world.sent), 2, "the confirmation went out once")
+            self.assertEqual(self.record(ws, self.only_estimate(ws))["status"], "appointment_booked")
+            self.assertIn((card["brief_id"], "executed"), world.updates)
+            self.assertEqual([q["status"] for q in self.questions(ws) if q["kind"] == "command_failed"], ["answered"])
+        self.run_branch(branch)
+
+    def test_release_lets_go_of_the_calendar_hold_only(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            card = self._booking_card(ws, world)
+            world.fail_next["gmail_send"] = 5
+            with patch.object(gmail_safe, "find_delivery", side_effect=OSError("gateway down")):
+                self._run_line(ws, card)
+            world.fail_next.clear()
+            self.assertEqual(len(world.calendar_events), 1)
+            answered = self.answer(ws, "release it")
+            self.assertEqual(answered["decision"], "release", answered)
+            self.assertEqual(world.calendar_events, {}, "the desk's own hold is gone")
+            self.assertEqual(len(world.sent), 1, "nothing sent")
+            self.assertIsNone(self.record(ws, self.only_estimate(ws)).get("appointment_booked"))
+        self.run_branch(branch)
+
+    def test_two_runs_of_one_command_do_not_overlap(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            import run_lease
+
+            card = self._booking_card(ws, world)
+            desk = ws / "estimate-desk"
+            key = inbox_claim.claim_key("s2")[:16]
+            with run_lease.hold(desk, "book-approved-appointment", key):
+                code, out = self._run_line(ws, card)
+            self.assertNotEqual(code, 0)
+            self.assertIn("in progress", out)
+            self.assertEqual(world.calendar_events, {}, "the second run touched nothing")
+            self.assertFalse(run_lease.lock_path(desk, "book-approved-appointment", key).exists(), "released after the holder")
+            code, _out = self._run_line(ws, card)
+            self.assertEqual(code, 0)
+            self.assertEqual(len(world.calendar_events), 1)
         self.run_branch(branch)

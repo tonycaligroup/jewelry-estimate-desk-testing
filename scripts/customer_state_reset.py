@@ -119,6 +119,7 @@ def reset(workspace: Path, now_ms: int | None = None) -> dict[str, Any]:
     questions = _flat_files(desk / "questions", "questions", QUESTION_FILE_RE)
     approvals = _flat_files(desk / "approvals", "approvals", APPROVAL_FILE_RE)
     briefs = _flat_files(desk / "briefs", "briefs", BRIEF_FILE_RE)
+    locks = _flat_files(desk / "locks", "locks", re.compile(r"[a-z-]+-[A-Za-z0-9_-]{1,32}\.lock"))
     queue_items = _queue_paths(monitor_root)
     claims = _validated_directories(claim_root, HASH_DIR_RE)
     work_dirs = _validated_directories(work_root, WORK_DIR_RE)
@@ -143,7 +144,7 @@ def reset(workspace: Path, now_ms: int | None = None) -> dict[str, Any]:
 
         for path in claims + work_dirs + run_dirs:
             shutil.rmtree(path)
-        for path in questions + approvals + briefs:
+        for path in questions + approvals + briefs + locks:
             path.unlink()
 
     return {

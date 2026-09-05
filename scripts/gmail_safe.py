@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import base64
+
 import gateway_token
 import inbox_claim
 
@@ -78,6 +80,40 @@ def write_private_json(path: Path, value: dict[str, str]) -> None:
             pass
 
 
+def payload_message_id(payload: dict[str, str]) -> str:
+    """The Message-ID header the desk wrote into this payload's MIME message."""
+    raw = payload["raw"]
+    raw += "=" * (-len(raw) % 4)
+    from email import policy
+    from email.parser import BytesParser
+
+    message = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw))
+    value = str(message["Message-ID"] or "").strip()
+    if not value:
+        raise ValueError("reply payload carries no Message-ID")
+    return value
+
+
+def find_delivery(thread_id: str, message_id_header: str, token: str, opener: Any = None) -> dict[str, str] | None:
+    """Read the thread and look for the desk's own message; None when it is not there.
+
+    Raises when the thread cannot be read; the caller must not guess then.
+    """
+    import gmail_fetch  # local import: gmail_fetch does not import this module
+
+    from urllib.parse import quote
+
+    kwargs = {"opener": opener} if opener else {}
+    thread = gmail_fetch.fetch_json(f"threads/{quote(thread_id, safe='')}", {"format": "full"}, token, **kwargs)
+    wanted = message_id_header.strip().lower()
+    for message in thread.get("messages") or []:
+        headers = ((message.get("payload") or {}).get("headers") or [])
+        for header in headers:
+            if str(header.get("name", "")).lower() == "message-id" and str(header.get("value", "")).strip().lower() == wanted:
+                return {"id": str(message.get("id")), "threadId": str(message.get("threadId") or thread_id)}
+    return None
+
+
 def receipt_from_action(action: dict[str, Any]) -> dict[str, str]:
     message_id = action.get("provider_message_id")
     thread_id = action.get("provider_thread_id")
@@ -137,9 +173,33 @@ def send_reply_claimed(
             receipt = receipt_from_action(action)
             write_private_json(provider_response_path, receipt)
             return receipt
-        raise ValueError(
-            f"customer delivery is already {action['status']}; refusing retry"
-        )
+        if action["status"] in {"pending", "uncertain"}:
+            # The run died around the provider call, or the call itself
+            # failed after it started. The thread says what happened.
+            try:
+                found = find_delivery(payload["threadId"], payload_message_id(payload), token)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "customer delivery is uncertain and the thread could not be read to check it; "
+                    f"try again, or look at the thread yourself ({str(exc)[:120]})"
+                ) from exc
+            if found is not None:
+                inbox_claim.settle_external_action(
+                    claim_root, message_id, claim_token, delivery_key, "sent", found["id"], found["threadId"]
+                )
+                write_private_json(provider_response_path, found)
+                return found
+            inbox_claim.settle_external_action(claim_root, message_id, claim_token, delivery_key, "verified_unsent")
+            acquired, state = inbox_claim.acquire_external_action(
+                claim_root, message_id, claim_token, delivery_key, "customer_delivery", binding,
+                allow_processed=allow_processed_claim, allow_parked=allow_parked_claim,
+            )
+            if not acquired:
+                raise ValueError("customer delivery could not be retried after verification")
+        else:
+            raise ValueError(
+                f"customer delivery is already {action['status']}; refusing retry"
+            )
     try:
         result = run_command(command, runner=runner, stdin_text=config)
         response = json.loads(result.stdout)

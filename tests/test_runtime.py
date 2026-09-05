@@ -4233,8 +4233,16 @@ class GmailSafeTests(unittest.TestCase):
             )
             with self.assertRaises(subprocess.CalledProcessError):
                 gmail_safe.send_reply_claimed(*arguments, runner=runner)
-            with self.assertRaisesRegex(ValueError, "uncertain"):
-                gmail_safe.send_reply_claimed(*arguments, runner=runner)
+            # The thread cannot be read: still no guess, and no second curl.
+            with patch.object(gmail_safe, "find_delivery", side_effect=OSError("gateway down")):
+                with self.assertRaisesRegex(ValueError, "uncertain"):
+                    gmail_safe.send_reply_claimed(*arguments, runner=runner)
+            self.assertEqual(runner.call_count, 1)
+            # The thread shows the message: recorded as sent, still no second curl.
+            with patch.object(gmail_safe, "payload_message_id", return_value="<desk@example.com>"), \
+                    patch.object(gmail_safe, "find_delivery", return_value={"id": "found-1", "threadId": "thread-1"}):
+                receipt = gmail_safe.send_reply_claimed(*arguments, runner=runner)
+            self.assertEqual(receipt["id"], "found-1")
             self.assertEqual(runner.call_count, 1)
 
     def test_wrong_provider_thread_becomes_uncertain(self) -> None:
@@ -8717,7 +8725,12 @@ class RetrySafetyTests(unittest.TestCase):
             binding = "sha256:" + "a" * 64
             acquired, _state = inbox_claim.acquire_external_action(root, "m-1", token, "approved_estimate:x", "customer_delivery", binding)
             self.assertTrue(acquired)
-            # The run died before the provider call: the action is still pending.
+            # The run died around the provider call: whether it sent is unknown, so
+            # the journal refuses to guess; the caller reads the thread and settles.
+            acquired, state = inbox_claim.acquire_external_action(root, "m-1", token, "approved_estimate:x", "customer_delivery", binding)
+            self.assertFalse(acquired)
+            self.assertEqual(state["external_actions"]["approved_estimate:x"]["status"], "pending")
+            inbox_claim.settle_external_action(root, "m-1", token, "approved_estimate:x", "verified_unsent")
             acquired, state = inbox_claim.acquire_external_action(root, "m-1", token, "approved_estimate:x", "customer_delivery", binding)
             self.assertTrue(acquired)
             self.assertEqual(state["external_actions"]["approved_estimate:x"]["attempts"], 2)

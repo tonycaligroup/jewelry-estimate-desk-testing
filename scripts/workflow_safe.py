@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import re
 import os
 import secrets
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +35,7 @@ import inbox_monitor
 import judge
 import kolo_safe
 import owner_questions
+import run_lease
 import cost_components
 import route_ownership
 import slots
@@ -1556,6 +1560,8 @@ def answer_decision(
         return result
     if question["kind"] == "appointment_next":
         return _answer_appointment_next(args, workspace, p, root, question, outcome)
+    if question["kind"] == "command_failed":
+        return _answer_command_failed(args, p, root, question, outcome)
     if question["kind"] == "followup_stalled" and outcome in {"skip", "ask_again"}:
         import pipeline  # local import: pipeline imports this module
 
@@ -1678,8 +1684,13 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
     import inbox_watcher  # local import: inbox_watcher imports this module
 
     p = inbox_watcher.paths_for(args.workspace.resolve())
-    reopened = inbox_monitor.reopen_item(p["monitor_root"], args.message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
-    paths = reopened["work_paths"]
+    state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], args.message_id))
+    if state.get("status") == "processing":
+        # An earlier run of this command reopened the claim and died; carry on.
+        paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], args.message_id)
+    else:
+        reopened = inbox_monitor.reopen_item(p["monitor_root"], args.message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
+        paths = reopened["work_paths"]
     approval = read_object(Path(paths["work_dir"]) / "rendering-approval.json")
     if approval.get("estimate_id") != args.estimate_id or approval.get("gmail_message_id") != args.message_id:
         raise ValueError("rendering approval does not match this estimate and message")
@@ -1783,11 +1794,24 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     event_path = work_dir / "calendar-event.json"
     saved = read_object(event_path) if event_path.exists() else {}
-    if isinstance(saved, dict) and saved.get("id") and saved.get("desk_slot_start") == chosen["start"]:
-        # An earlier run created the event and died before recording it;
-        # the slot is already ours, so use that event rather than book twice.
-        event = saved
-    else:
+    description = f"Design consultation for {piece}. Estimate {args.estimate_id.upper()}."
+    event = None
+    if isinstance(saved, dict) and saved.get("desk_slot_start") == chosen["start"]:
+        if saved.get("id"):
+            # An earlier run created the event and died before recording it;
+            # the slot is already ours, so use that event rather than book twice.
+            event = saved
+        else:
+            # An earlier run was killed inside the create call. The calendar
+            # knows whether it went through: adopt the desk's own event by
+            # the estimate id it wrote in the description, never by time alone.
+            mark = f"Estimate {args.estimate_id.upper()}."
+            for candidate in calendar_query.list_events(calendar_id, chosen["start"], chosen["end"], token, **kwargs):
+                if mark in str(candidate.get("description") or ""):
+                    event = candidate
+                    write_private(event_path, {**event, "desk_slot_start": chosen["start"]})
+                    break
+    if event is None:
         # Approval does not make stale availability current.
         receipt = calendar_query.query_freebusy(
             chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC", calendar_id, token, **kwargs
@@ -1795,10 +1819,12 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         busy = receipt["response_body"]["calendars"][calendar_id].get("busy", [])
         if busy:
             raise ValueError("the approved time is no longer free; ask the desk for new options")
+        # Write-ahead: the slot is journaled before the call, so a kill inside
+        # the call leaves a mark the next run can check against the calendar.
+        write_private(event_path, {"desk_slot_start": chosen["start"], "started_at": datetime.now(timezone.utc).isoformat()})
         event = calendar_query.create_event(
             calendar_id, chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC",
-            f"{shop}: design consultation, {piece}"[:200],
-            f"Design consultation for {piece}. Estimate {args.estimate_id.upper()}.",
+            f"{shop}: design consultation, {piece}"[:200], description,
             record["route"]["recipient"], token, **kwargs,
         )
         write_private(event_path, {**event, "desk_slot_start": chosen["start"]})
@@ -2158,6 +2184,118 @@ def _reuse_or_build_payload(path: Path, build: Any) -> dict[str, Any]:
     return payload
 
 
+EXECUTOR_COMMANDS = {
+    "send-approved-estimate-brief", "send-approved-rendering", "book-approved-appointment",
+    "send-approved-times", "appointment-rejected",
+}
+EXECUTOR_WHAT = {
+    "send-approved-estimate-brief": "sending the estimate",
+    "send-approved-rendering": "sending the renderings",
+    "book-approved-appointment": "booking the appointment",
+    "send-approved-times": "emailing the meeting times",
+    "appointment-rejected": "handling the rejected appointment card",
+}
+
+
+def _executor_key(args: argparse.Namespace) -> str:
+    return inbox_claim.claim_key(getattr(args, "message_id", None) or getattr(args, "estimate_id", "") or "none")[:16]
+
+
+def _command_failed(args: argparse.Namespace, argv: list[str], exc: BaseException) -> dict[str, Any]:
+    """A card's command failed: mark the brief, ask the owner once, with the fix attached.
+
+    RELIABILITY-PLAN.md 3.2. What the desk managed (a time held on the
+    calendar) and what it did not (the email) are said in plain words; the
+    replies are retry (the desk runs the same command again), release (the
+    desk lets go of what it holds: its own calendar event), or handle myself.
+    """
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    # From the command line there is no runner; every Kolo call then goes
+    # through the desk's one command helper, the same path the tick uses.
+    runner = getattr(args, "runner", None) or (lambda argv, **_kw: kolo_safe.run_command(argv))
+    error = str(exc)[:300]
+    brief_id = getattr(args, "brief_id", None)
+    if brief_id and brief_id != "<Brief ID>":
+        try:
+            kolo_safe.run_command(kolo_safe.build_update_brief(
+                brief_id, "failed", {"command": args.command, "error": error}), runner=runner)
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+    p = inbox_watcher.paths_for(args.workspace.resolve())
+    estimate_id = getattr(args, "estimate_id", None) or "jed-0000000000000000"
+    try:
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        customer = kolo_safe._sender_display(record["route"]["recipient"])
+    except (OSError, ValueError, KeyError):
+        customer = "the customer"
+    message_id = getattr(args, "message_id", None) or f"command:{args.command}"
+    held = ""
+    if args.command == "book-approved-appointment":
+        event_path = (p["monitor_root"].resolve().parent / "work"
+                      / f"booking-{inbox_claim.claim_key(getattr(args, 'message_id', '') or '')[:16]}" / "calendar-event.json")
+        saved = read_object(event_path) if event_path.exists() else {}
+        if isinstance(saved, dict) and saved.get("id"):
+            held = " The time is held on your calendar; nothing was sent to the customer."
+    text = (
+        f"I could not finish {EXECUTOR_WHAT.get(args.command, args.command)} for {customer}: {error}.{held} "
+        "Reply \"retry\" and I will run it again, \"release\" and I will let go of what I hold (a calendar hold, "
+        "nothing already sent), or \"handle myself\"."
+    )
+    root = owner_questions.questions_root(p["monitor_root"])
+    created, question = owner_questions.create_decision(
+        root, "command_failed", estimate_id, message_id, text,
+        {"argv": list(argv), "command": args.command, "error": error, "brief_id": brief_id},
+    )
+    question = _attach_answer_command(root, p["monitor_root"], question)
+    if created:
+        owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
+    return {"question_id": question["question_id"], "created": created}
+
+
+def _answer_command_failed(args: argparse.Namespace, p: dict[str, Path], root: Path,
+                           question: dict[str, Any], outcome: str) -> dict[str, Any]:
+    context = question.get("context") or {}
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"],
+                              "kind": "command_failed", "decision": outcome}
+    if outcome == "retry":
+        argv = list(context.get("argv") or [])
+        if not argv:
+            raise ValueError("this question carries no command to retry")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = main(argv, _retry_of=question["question_id"])
+        printed = buffer.getvalue().strip()
+        if code != 0:
+            raise ValueError("the retry failed again: " + (printed or "see the error above"))
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        result["retried"] = json.loads(printed) if printed.startswith("{") else printed
+        return result
+    if outcome == "release":
+        released = []
+        if context.get("command") == "book-approved-appointment":
+            key = inbox_claim.claim_key(question["gmail_message_id"])[:16]
+            event_path = p["monitor_root"].resolve().parent / "work" / f"booking-{key}" / "calendar-event.json"
+            saved = read_object(event_path) if event_path.exists() else {}
+            record = estimate_record.read_object(estimate_record.record_path(p["record_root"], question["estimate_id"]))
+            booked = (record.get("appointment_booked") or {}).get("calendar_event_id")
+            if isinstance(saved, dict) and saved.get("id") and saved["id"] != booked:
+                profile = read_object(p["shop_profile"])
+                calendar_id = (profile.get("scheduling") or {}).get("calendar")
+                calendar_query.delete_event(calendar_id, saved["id"], gateway_token.load_token())
+                event_path.unlink(missing_ok=True)
+                released.append(saved["id"])
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        result["released"] = released
+        return result
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    result["note"] = "the desk leaves this to the owner"
+    return result
+
+
 def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any) -> None:
     brief_id = getattr(args, "brief_id", None)
     if brief_id and brief_id != "<Brief ID>":
@@ -2344,7 +2482,8 @@ def add_common_paths(
     parser.add_argument("--record-output", type=Path, required=True)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     spec = sub.add_parser("send-spec-followup")
@@ -2500,18 +2639,30 @@ def main(argv: list[str] | None = None) -> int:
             record = worker_start(args)
         elif args.command == "resolve-review-approval":
             record = resolve_review_approval(args)
-        elif args.command == "send-approved-rendering":
-            record = send_approved_rendering(args)
+        elif args.command in EXECUTOR_COMMANDS:
+            executors = {
+                "send-approved-rendering": send_approved_rendering,
+                "book-approved-appointment": book_approved_appointment,
+                "send-approved-estimate-brief": send_approved_estimate_brief,
+                "send-approved-times": send_approved_times,
+                "appointment-rejected": appointment_rejected,
+            }
+            desk = args.workspace.resolve() / "estimate-desk"
+            try:
+                with run_lease.hold(desk, args.command, _executor_key(args)):
+                    record = executors[args.command](args)
+            except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+                if _retry_of is None:
+                    try:
+                        asked = _command_failed(args, argv, exc)
+                    except (OSError, ValueError, subprocess.CalledProcessError):
+                        asked = None
+                    print(json.dumps({"error": str(exc), "asked_owner": bool(asked and asked.get("created"))}, sort_keys=True),
+                          file=sys.stderr)
+                    return 2
+                raise
         elif args.command == "reject-rendering":
             record = reject_rendering(args)
-        elif args.command == "book-approved-appointment":
-            record = book_approved_appointment(args)
-        elif args.command == "send-approved-estimate-brief":
-            record = send_approved_estimate_brief(args)
-        elif args.command == "send-approved-times":
-            record = send_approved_times(args)
-        elif args.command == "appointment-rejected":
-            record = appointment_rejected(args)
         elif args.command == "review-thread":
             record = review_thread(args)
         elif args.command == "price":

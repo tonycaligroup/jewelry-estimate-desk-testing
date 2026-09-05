@@ -38,7 +38,7 @@ PROCESSING_PHASES = {
     "work_persisted": 3,
     "ready_to_finalize": 4,
 }
-EXTERNAL_ACTION_STATUSES = NOTIFICATION_STATUSES
+EXTERNAL_ACTION_STATUSES = NOTIFICATION_STATUSES | {"verified_unsent"}
 RECOVERY_LEASE_SECONDS = 360
 
 
@@ -225,7 +225,7 @@ def validate_state(state: Any) -> dict[str, Any]:
                 or not required_action_fields.issubset(action)
                 or not set(action).issubset(
                     required_action_fields
-                    | {"provider_message_id", "provider_thread_id"}
+                    | {"provider_message_id", "provider_thread_id", "settled_by"}
                 )
             ):
                 raise ValueError(
@@ -613,11 +613,14 @@ def acquire_external_action(
                 and prior.get("attempts") == 1
             ):
                 attempts = 2
-            elif prior.get("status") == "pending" and int(prior.get("attempts") or 1) < 3:
-                # Journaled but the provider call never ran (the run died in
-                # between). Same payload, so a retry cannot double-send.
+            elif prior.get("status") == "verified_unsent" and int(prior.get("attempts") or 1) < 3:
+                # The provider was asked and does not have the message: the
+                # same payload may go again. Verified, never assumed.
                 attempts = int(prior.get("attempts") or 1) + 1
-            elif prior.get("status") in {"pending", "sent", "uncertain"}:
+            elif prior.get("status") in {"pending", "sent", "uncertain", "verified_unsent"}:
+                # pending: the run died around the provider call; whether the
+                # message went is unknown until the thread is read. The caller
+                # verifies and settles; nothing is resent on a guess.
                 return False, state
             else:
                 raise ValueError(f"external action is already {prior.get('status')}")
@@ -632,6 +635,49 @@ def acquire_external_action(
         state["last_progress_at"] = now
         write_state(path, state)
         return True, state
+
+
+def settle_external_action(
+    root: Path,
+    message_id: str,
+    token: str,
+    action_key: str,
+    status: str,
+    provider_message_id: str | None = None,
+    provider_thread_id: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a pending or uncertain delivery from evidence: the thread was read.
+
+    `sent` records the provider ids the thread showed; `verified_unsent`
+    records that the provider does not have the message, so the same payload
+    may be sent once more.
+    """
+    if status not in {"sent", "verified_unsent"}:
+        raise ValueError("a delivery settles as sent or verified_unsent")
+    path = claim_path(root, message_id)
+    with state_lock(path):
+        state = read_state(path)
+        if state.get("claim_token") != token:
+            raise ValueError("claim token does not match")
+        action = state.get("external_actions", {}).get(action_key)
+        if not isinstance(action, dict) or action.get("status") not in {"pending", "uncertain"}:
+            raise ValueError("only a pending or uncertain delivery can be settled")
+        now = datetime.now(timezone.utc).isoformat()
+        if status == "sent":
+            for value, field in (
+                (provider_message_id, "provider_message_id"),
+                (provider_thread_id, "provider_thread_id"),
+            ):
+                if not isinstance(value, str) or not value or len(value) > 512:
+                    raise ValueError(f"{field} is required for sent customer delivery")
+            action["provider_message_id"] = provider_message_id
+            action["provider_thread_id"] = provider_thread_id
+        action["status"] = status
+        action["settled_by"] = "thread_read"
+        action["updated_at"] = now
+        state["last_progress_at"] = now
+        write_state(path, state)
+        return state
 
 
 def finish_external_action(
