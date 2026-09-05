@@ -418,7 +418,9 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
     body = value.get("body")
     if not isinstance(body, str) or len(body.strip()) < 40:
         raise ValueError("body must be the email text")
-    body = body.strip()
+    import customer_content_guard  # local import: keeps judge free of the guard's other imports at load
+
+    body = customer_content_guard.plain_text(body.strip())
     if len(body) > 4000:
         raise ValueError("body is too long")
     if re.search(r"[$€£]\s*\d|\b\d[\d,]*\s*(?:dollars|usd)\b|\bper carat\b|\bper gram\b", body, re.IGNORECASE):
@@ -461,7 +463,8 @@ def draft_followup(
         "to come by the shop if they would rather talk it through in person, without naming times. Keep it "
         "under 140 words. Use the customer's name if they gave one. Never mention prices, costs, rates, or "
         "budgets as requirements. Do not use template placeholders; write real text. No headings or labels, "
-        "and the sign-off is a plain line with no question mark. "
+        "and the sign-off is a plain line with no question mark. Do not wrap lines: each paragraph is one line, "
+        "with a blank line between paragraphs. "
         f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
         f"MISSING DETAILS TO ASK FOR: {', '.join(missing_fields)}\n\n"
         f"TEMPLATE (tone and structure only):\n{template}\n\n"
