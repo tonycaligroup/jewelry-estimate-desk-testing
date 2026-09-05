@@ -8812,6 +8812,14 @@ class CalendarListTests(unittest.TestCase):
         self.assertIn("never ask for a calendar id", skill)
 
 
+class HtmlAlternativeTests(unittest.TestCase):
+    def test_every_reply_carries_the_same_words_as_html_paragraphs(self) -> None:
+        html = gmail_reply.html_body("Hi Tony, thank you & welcome.\n\nCould you tell me:\n- What ring size?\n- Which metal?\n\nWarmly,\nLomelino Jewelry")
+        self.assertEqual(html, "<div><p>Hi Tony, thank you &amp; welcome.</p><p>Could you tell me:<br>- What ring size?<br>- Which metal?</p>"
+                               "<p>Warmly,<br>Lomelino Jewelry</p></div>")
+        self.assertNotIn("<script", gmail_reply.html_body("<script>alert(1)</script> hello"))
+
+
 class PlainTextMailTests(unittest.TestCase):
     def test_markdown_from_the_model_is_stripped_before_the_customer_sees_it(self) -> None:
         body = (

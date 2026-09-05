@@ -48,6 +48,19 @@ def reply_subject(original_subject: str) -> str:
     return original_subject if re.match(r"^\s*re\s*:", original_subject, re.I) else f"Re: {original_subject}"
 
 
+def html_body(body: str) -> str:
+    """The plain body as minimal HTML: one <p> per paragraph, <br> inside one, everything escaped."""
+    from html import escape
+
+    paragraphs = [p for p in body.replace("\r\n", "\n").split("\n\n")]
+    rendered = []
+    for paragraph in paragraphs:
+        lines = [escape(line.rstrip()) for line in paragraph.split("\n") if line.strip()]
+        if lines:
+            rendered.append("<p>" + "<br>".join(lines) + "</p>")
+    return "<div>" + "".join(rendered) + "</div>"
+
+
 def build_reply(
     route: dict[str, Any],
     body: str,
@@ -87,6 +100,11 @@ def build_reply(
     message["In-Reply-To"] = original_message_id
     message["References"] = " ".join(references)
     message.set_content(body)
+    # The same words as HTML paragraphs. A plain-text part leaves line
+    # handling to each client and phones broke long lines badly; an HTML
+    # alternative wraps to the screen everywhere, and the text part stays
+    # for clients that prefer it.
+    message.add_alternative(html_body(body), subtype="html")
     attachments = (
         []
         if attachment is None

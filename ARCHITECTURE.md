@@ -381,6 +381,15 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.8.5 (built 5 September 2026): every customer email carries an HTML
+part.** A phone's mail app broke plain-text paragraphs into ragged lines
+that the desk had not written. `gmail_reply.build_reply` now sends
+multipart/alternative: the same plain text, plus a minimal HTML part with
+one paragraph per paragraph and a line break per line, everything
+escaped, no styling; renderings still attach on top (multipart/mixed).
+Clients render the HTML part and wrap to the screen. The reflow stays for
+the text part and for the stored drafts.
+
 **4.8.3 (built 5 September 2026): one follow-up asks for everything.** The
 owner's rule: a follow-up asks for every missing detail at once, as a short
 dash list, price-moving fields first, so the customer is never asked twice;
