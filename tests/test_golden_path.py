@@ -1660,3 +1660,55 @@ class DoctorTests(SideBranchTests):
             with self.assertRaisesRegex(ValueError, "already finished"):
                 doctor.requeue(ws, "missed-1", token="t")
         self.run_branch(branch)
+
+
+class ReliabilityRulesTests(unittest.TestCase):
+    """RELIABILITY-PLAN.md step 5: the rules the main session lives by are pinned to the code that backs them."""
+
+    def setUp(self) -> None:
+        raw = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.raw_size = len(raw.encode("utf-8"))
+        self.skill = " ".join(raw.split())  # SKILL.md wraps lines; the rules are read as sentences
+
+    def test_skill_md_fits_and_names_the_doctor(self) -> None:
+        self.assertLess(self.raw_size, 65_000)
+        self.assertIn("scripts/doctor.py", self.skill)
+        self.assertIn("--requeue", self.skill)
+
+    def test_the_session_runs_the_line_once_more_then_waits(self) -> None:
+        self.assertIn("run the same line once more", self.skill)
+        self.assertIn("paste the output and wait", self.skill)
+        self.assertIn("never sends or books twice", self.skill)
+
+    def test_the_session_never_narrates_or_edits_state(self) -> None:
+        self.assertIn("Never summarise a record, a queue, a claim, or a brief from memory", self.skill)
+        self.assertIn("never write, rename, or delete anything under `estimate-desk/`", self.skill)
+        self.assertIn("run `python3 {baseDir}/scripts/doctor.py", self.skill)
+        self.assertIn("never by writing a queue item", self.skill)
+
+    def test_an_open_desk_question_takes_the_next_reply(self) -> None:
+        self.assertIn("the owner's next reply is the answer to it", self.skill)
+        self.assertIn("Never ask the owner a question of your own while a desk question is open", self.skill)
+
+    def test_every_execute_line_names_a_real_executor(self) -> None:
+        import re
+
+        named = set(re.findall(r"workflow_safe\.py (send-approved-estimate-brief|send-approved-rendering|book-approved-appointment|send-approved-times|appointment-rejected)", self.skill))
+        self.assertEqual(named, workflow_safe.EXECUTOR_COMMANDS)
+
+    def test_every_question_kind_the_desk_asks_is_documented_with_its_replies(self) -> None:
+        for kind, words in (
+            ("command_failed", ("retry", "release", "handle myself")),
+            ("stuck_claim", ("retry", "skip", "handle myself")),
+            ("followup_stalled", ("skip", "ask again", "handle myself")),
+            ("appointment_next", ("other times", "handle myself")),
+        ):
+            self.assertIn(kind, owner_questions.DECISION_KINDS)
+            for word in words:
+                self.assertIn(word, self.skill, f"{kind}: {word}")
+
+    def test_the_legacy_runbook_is_gone(self) -> None:
+        for gone in ("needs no new approval", "rendering_wait.py wait", "image_generate", "Only Stage 3 authorizes"):
+            self.assertNotIn(gone, self.skill, gone)
+        self.assertIn("never emails a customer", self.skill)
+        self.assertIn("does none of this", self.skill)

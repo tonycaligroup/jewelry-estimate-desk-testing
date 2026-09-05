@@ -12,7 +12,8 @@ This plan removes the shape, not the instances.
 - Step 2, journaled executors, verified sends, lease, failure question: done (4.5.0).
 - Step 3, bounded stuck in the tick, card verification, answer replay: done (4.6.0). Every combination ends ok or recovered.
 - Step 4, doctor and requeue, readiness state line: done (4.7.0).
-- Step 5, SKILL.md rules and coherence tests: next (the rules themselves landed with steps 2 to 4; the tests remain).
+- Step 5, SKILL.md rules and coherence tests: done (4.7.1). SKILL.md also lost its agent-era runbook (64.5 KB to 43 KB).
+- Next: section 7, speed and efficiency, each change with its measurement in place first.
 
 ## 1. What we are protecting
 

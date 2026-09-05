@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.7.0
+version: 4.7.1
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -292,317 +292,27 @@ later discovery window from being durably recorded.
 
 ### Queue processing phase
 
-Steps 1 and 2 below (claim, fetch, intake) are performed by the watcher; the
-worker starts at step 3 with the intake result `worker-start` returns.
-Repeatedly call `inbox_monitor.py claim-next`. It returns the oldest eligible
-message already claimed and synchronized, or `null`. The helper permits only
-the oldest unfinished item in each Gmail thread; a stuck thread does not block
-other threads.
+Every tick, `inbox_watcher.py` (a command job, no model turn) does the whole
+of this itself: it discovers new mail behind a durable watermark, claims one
+message at a time under a journal, fetches the thread, runs intake, and
+judges the claim with a few stateless model calls (`pipeline.py`): triage
+and extraction for a new inquiry, classification for a reply on a sent
+estimate. Everything that follows is deterministic code: the specification
+gate, pricing from the profile, the price card with its execute line, the
+follow-up email (drafted in the shop's voice, reflowed to plain text), the
+rate question, the appointment card from live free/busy, the rendering
+from the customer's artwork with its card. Each claim ends processed,
+parked behind a question, or on a card; a claim the tick cannot finish is
+retried with a bound (six tries for a gateway or model hiccup, two for a
+refusal) and then becomes one question to the owner. A worker agent job is
+started only when the inline judgment hands off; it receives
+`templates/worker-common.txt` plus one branch prompt, never this file, and
+it files cards and never emails a customer.
 
-For each returned message:
-
-1. Select and claim the immutable Gmail message ID before fetching content,
-   notifying, drafting, sending, or mutating a Kolo estimate:
-
-   ```bash
-   python3 {baseDir}/scripts/inbox_monitor.py claim-next \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --stale-after-seconds 600
-   ```
-
-   This command selects, claims, synchronizes the queue, and creates the only
-   supported persistent per-claim work directory in one deterministic call.
-   Use the returned `work_paths.work_dir` as `$WORK` and each returned named
-   artifact path exactly. Never create `.jed-work`, `/tmp/jed-work`, or another
-   ad-hoc work directory. Never inspect `claim.json`, `state.json`, or queue
-   files, and never use a generic show/display/read-back tool for generated
-   artifacts; pass their returned paths directly between bundled scripts.
-   `claim-next` returns exit 0 for both `claim.acquired:true` and
-   `claim.acquired:false`.
-   A duplicate `processed` or `manual_review` claim completes the queue item. A
-   duplicate recent `processing` claim remains owned by the earlier run and
-   receives no side effects. A stale claim is resumed with its original token
-   only when its phase journal proves every external action is settled. A claim
-   receives at most one automatic retry at the same phase; a second stale
-   occurrence becomes manual review instead of refreshing its progress clock.
-   Legacy, retry-exhausted, or delivery-ambiguous stale claims become manual
-   review; never steal or automatically retry them.
-   After an operator independently verifies that a legacy claim caused no
-   external action, it may be journaled once with
-   `inbox_claim.py authorize-legacy-resume --message-id '<gmail-id>'
-   --claim-token '<token>' --minimum-age-seconds 600
-   --confirmed-no-external-actions`. Never put this command in the cron runbook
-   or infer the confirmation from an empty legacy state file.
-2. Only for `claim.acquired:true`, fetch the full Gmail message and run the conservative
-   deterministic header classifier before involving the LLM. Fetch only with:
-
-   ```bash
-   python3 {baseDir}/scripts/gmail_fetch.py fetch-claimed \
-     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --message-id '<gmail-id-returned-by-claim-next>'
-   ```
-
-   This writes the complete message and thread only to the authoritative
-   `work_paths.gmail_message` and `work_paths.gmail_thread`. Never construct a
-   Gmail read request or choose an output path. Then run the bundled intake:
-
-   ```bash
-   python3 {baseDir}/scripts/workflow_safe.py intake \
-     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --message-id '<gmail-id-returned-by-claim-next>' \
-     --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json'
-   ```
-
-   Eight fixed steps that never involve a judgment call now run inside this one
-   command, in this order: the conservative deterministic header classifier;
-   the exact customer route (the normalized sender email stays exact, never
-   stripped of plus tags or merged with aliases) written to `work_paths.route`;
-   the claim advanced to `routed`; the ownership candidates written to
-   `work_paths.candidate_records` from the private local record store's exact
-   thread lookup; the ownership decision using the exact Gmail thread message
-   count; for a `new_inquiry`, the retry-stable minimal record (created locally
-   first, mirrored to Kolo second, both keyed to the initiating Gmail ID so a
-   repeat targets the same record); the claim advanced to `ownership_confirmed`;
-   and the durable `customer-replied` owner alert bound to
-   `customer_replied:<jed-id>:<gmail-id>`. Every step is idempotent, so a
-   resumed claim runs the same command again; a resumed initiating message comes
-   back as `new_inquiry` with reason `initiating_claim_resumed`.
-
-   The command also terminalizes the deterministic exits itself: `auto_reply`,
-   `calendar_event`, `automated_notification`, `bulk_mail`, and
-   `internal_sender` complete as processed with no record, no response, and
-   no owner alert; `dsn_candidate`
-   becomes manual review with reason `uncorrelated_dsn` (never treat a bounce
-   as a customer, and never trust an estimate ID found only in message text);
-   an unsupported classification becomes `uncertain_classification`; and every
-   `manual_review` or `owned_manual_review` ownership decision becomes manual
-   review with the decision's own reason code. `declined` and `dormant` records
-   retain ownership but require manual review rather than a new estimate.
-   Mailbox quota, authentication, or persistent system failures are
-   `manual_review` with reason `system_actionable`.
-
-   Read the JSON result. `next_action: done` means the claim is terminal;
-   continue the `claim-next` loop. `next_action: review_thread` means continue
-   with the full-thread review for `estimate_id`; `record_status` tells you
-   whether an estimate has already been sent and therefore which review shape
-   to write. If the command exits nonzero, do not rerun the individual steps
-   by hand: finish as manual review with reason `intake_failed`.
-
-   The owner alert's wrapper writes `pending` before invoking Kolo and records
-   `sent` after successful CLI acceptance; `sent` is not an independent
-   user-visible delivery receipt. Because Kolo has no delivery-receipt query,
-   any command failure after invocation is `uncertain`, never a retryable
-   pre-delivery failure. A process crash may leave `pending`; the stale
-   reconciler marks it `uncertain` after 600 seconds. Never resend `pending` or
-   `uncertain` alerts. A `customer-replied` notice is not an approval request.
-   If approval creation later fails, say explicitly that the reply notice was
-   sent but no approval request was created.
-   Generic mailbox alerts tied to a claimed message must never call
-   `notify-monitor` directly.
-
-   Exception: when a reply contains appointment intent, do not use
-   the generic `customer-replied` notification as the appointment route and do
-   not rely on the cron's final chat delivery. Write this exact-shape private
-   artifact to `work_paths.appointment_intent`:
-
-   ```json
-   {
-     "requested_times": [],
-     "calendar_availability": []
-   }
-   ```
-
-   Preserve customer-provided timing in `requested_times`. Add only live,
-   validated slots to `calendar_availability`, each with exactly `start`, `end`,
-   and the owner-timezone `label`; either array may be empty. Then run:
-
-   ```bash
-   python3 {baseDir}/scripts/workflow_safe.py request-appointment-approval \
-     --monitor-root '<workspace>/estimate-desk/inbox-monitor' \
-     --claim-root '<workspace>/estimate-desk/inbox-claims' \
-     --record-root '<workspace>/estimate-desk/records' \
-     --message-id '<claimed-gmail-id>' --estimate-id '<jed-id>' \
-     --appointment-intent '<work_paths.appointment_intent>' \
-     --appointment-approval '<work_paths.appointment_approval>' \
-     --record-output '<work_paths.current_record>'
-   ```
-
-   This binds the activating Kolo user, the email-derived customer and thread,
-   and the claimed source message into one durable, retry-safe approval. It
-   records the approval before finalizing an appointment-only claim. Run
-   `assert-settled` and return `NO_REPLY`; the approval remains visible and
-   actionable even if cron announce delivery fails. For a message that also
-   requests rendering, add `--defer-finalize-for-rendering`, then file the
-   rendering card with `request-rendering-approval`; the claim waits there
-   for the owner. `send-rendering` refuses without an approved card. Never claim the appointment is
-   booked until approval is granted and the live calendar write succeeds.
-3. Before deciding which specifications are missing or complete, fetch the
-   exact Gmail thread resource and read every message in chronological order,
-   including the initiating inquiry and all later customer replies. Never
-   evaluate only the newest message and never treat the current record as a
-   substitute for missing thread content. Build `$WORK/thread-review.json`
-   directly from that exact thread with:
-
-   - `thread_id`: the owned Gmail thread ID;
-   - `source_message_id`: the currently claimed inbound Gmail ID;
-   - `message_ids`: every Gmail message ID in the fetched thread, in
-     chronological order, including shop messages;
-   - `specification`: for an estimate that has not been sent, one normalized
-     customer-safe specification merged from the complete thread; after an
-     estimate is sent, omit this field because the helper preserves the
-     immutable approved specification from the authoritative record;
-   - `missing_required_fields`: only the applicable Phase 1.5 field keys still
-     absent after the merge, or an empty array when complete; and
-   - `post_estimate_artifact`: only after an estimate is sent, an exact-shape
-     object with `design_change_assessment` (`unchanged`, `changed`, or
-     `uncertain`), unique `intents` chosen from `estimate_acceptance`,
-     `rendering_request`, and `appointment_request`, and `changed_fields`.
-     `changed_fields` must be nonempty only for `changed`; use `uncertain`
-     whenever the newest customer wording might alter the approved design but
-     cannot be mapped confidently to a specification field. Include every
-     explicit intent. A combined unchanged rendering-and-appointment request
-     is exactly `{"design_change_assessment":"unchanged","intents":
-     ["rendering_request","appointment_request"],"changed_fields":[]}`.
-
-   Persist this review before drafting, pricing, requesting approval, or
-   finalizing:
-
-   ```bash
-   python3 {baseDir}/scripts/estimate_record.py record-thread-review \
-     --estimate-id '<jed-id>' --snapshot "$WORK/thread-review.json" \
-     --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --output "$WORK/current-record.json"
-   ```
-
-   The helper stores normalized specifications plus hashes and counts, not raw
-   email bodies or later provider message IDs. It fails if the initiating or
-   currently claimed message is absent. For a post-estimate reply it derives
-   the approved-specification hash from the authoritative record, never from
-   model output, and records the bounded intent decision. Then run:
-
-   ```bash
-   python3 {baseDir}/scripts/workflow_safe.py finalize-post-estimate \
-     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --message-id '<gmail-id>' --estimate-id '<jed-id>' \
-     --record-output "$WORK/current-record.json"
-   ```
-
-   This command mirrors the review, finalizes acknowledgements, terminalizes
-   changed, uncertain, or malformed classifications to manual review, and
-   returns the only allowed next action for rendering and appointment intents.
-   Malformed evidence stores only bounded structural error codes, never the
-   raw model artifact or customer content.
-   Do not retry a deterministic classification with rewritten JSON. The later
-   appointment and rendering commands revalidate that the persisted decision
-   belongs to the same estimate and claimed Gmail message before acting. Do not
-   re-ask any field present anywhere in the thread.
-
-   If `missing_required_fields` is nonempty, follow the specification-request
-   branch and persist its same-source send receipt. Treat that returned list as
-   authoritative: never rewrite or retry the same source-message thread review
-   to clear, replace, or invent a returned missing field. If it is empty, continue
-   through internal pricing and the claimed owner-approval request in the same
-   run. Notification alone is never a completed customer reply.
-4. Complete normal branches only through `workflow_safe.py`; do not split
-   delivery, persistence, mirroring, phase advancement, or finalization.
-
-   For missing specifications, first write the price-free body to the returned
-   customer-reply path, then run:
-
-   ```bash
-   python3 {baseDir}/scripts/workflow_safe.py send-spec-followup \
-     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --record-root '<absolute-workspace>/estimate-desk/records' \
-     --message-id '<gmail-id>' --estimate-id '<jed-id>' \
-     --route "$WORK/route.json" --body "$WORK/customer-reply.txt" \
-     --gmail-payload "$WORK/gmail-send.json" \
-     --provider-response "$WORK/gmail-provider-response.json" \
-     --record-output "$WORK/current-record.json" \
-     [--initiating]
-   ```
-
-   Use `--initiating` only when the claimed message created the estimate.
-   Otherwise the helper appends later follow-up evidence. Provider ambiguity
-   is never retried.
-
-   For complete specifications, build the exact current state and owner-only
-   cost sheet, then use the `workflow_safe.py request-approval` command in
-   Phase 3. It creates the binding, requests approval, persists `pending_approval`,
-   mirrors the record, and finalizes the inbound claim.
-
-   For every manual-review decision, persist the terminal claim and queue state
-   before attempting the one privacy-safe owner notification:
-
-   ```bash
-   python3 {baseDir}/scripts/kolo_safe.py manual-review-claimed \
-     --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-     --message-id '<gmail-id>' \
-     --reason-code '<fixed_reason>'
-   ```
-
-   That is for failures of the desk itself; it sends the owner one plain
-   notice (who wrote, what stopped, that the desk stepped back). Anything
-   that needs the owner's judgment is a question, never a review. The
-   terminal claim is authoritative for processing side effects and the queue
-   only for discovery. Repeating the same terminal outcome with the same token
-   is a successful no-op. A different token, outcome, or reason remains an
-   error. Any impossible mismatch becomes manual review—never a customer send.
-
-   After the queue loop returns no item, run:
-
-   ```bash
-   python3 {baseDir}/scripts/inbox_monitor.py assert-settled
-   ```
-
-   A nonzero result means the run is incomplete. Never return `ok` or
-   `NO_REPLY` while any queue item remains `processing`.
-
-   Then derive the owner-facing summary from durable state rather than writing
-   it yourself:
-
-   ```bash
-   python3 {baseDir}/scripts/inbox_monitor.py run-report --announce \
-     --claim-root '<absolute-workspace>/estimate-desk/inbox-claims'
-   ```
-
-   `--announce` suppresses a report identical to the last one announced, so an
-   open review is raised once rather than every few minutes. A `NO_REPLY`
-   message means there is nothing new to tell the owner, not that nothing is
-   outstanding.
-
-   Deliver its `message` field verbatim as the entire announcement. Do not
-   compose, summarize, reword, or add to it, and never announce an outcome that
-   did not come from this command. A run that reports something it did not
-   observe is worse than a run that fails, because the owner and every later
-   session treat the announcement as evidence.
-
-   When the owner asks to see those reviews, run:
-
-   ```bash
-   python3 {baseDir}/scripts/inbox_monitor.py manual-reviews
-   ```
-
-   Present the privacy-safe review key, fixed reason, and time. Retrieve message
-   content only after the owner selects an item to review. Only after the owner
-   explicitly resolves it, run `inbox_monitor.py resolve-manual-review
-   --review-key '<review-key>'`; never resolve it from silence or merely because
-   cron announce metadata contains a fallback delivery field.
-
-Kolo records do not provide compare-and-swap. These helpers protect one shared
-workspace but cannot guarantee exclusion across independent hosts. Keep claim
-and queue state indefinitely; do not delete claims or create a retention cron.
-The monitor uses only the statuses `processed`, `manual_review`, and
-`awaiting_owner` (a claim parked while the owner answers a question) plus
-fixed reason codes. Its cron message contains only fixed instructions and
-opaque/provider IDs. Stay silent when no queued work or alert exists.
+The main session does none of this. It runs the execute line on an
+approved card, runs `answer-question` with the owner's words, and runs
+`doctor.py` when asked what is going on. Every state file under
+`estimate-desk/` is the watcher's or an executor's to write.
 
 ## Email reply invariant
 
@@ -805,137 +515,25 @@ an estimate into an appraisal or replacement value.
 
 ## Phase 3: bind and request owner approval
 
-For cron processing, use only the deterministic per-claim work directory and
-artifact paths returned by `inbox_monitor.py claim-next`. For an interactive
-non-cron estimate, create a private temporary directory with Python
-`tempfile.mkdtemp()` or `mktemp -d`. Directory permissions must be `0700`,
-contained files `0600`, and the name must not contain customer data. Generate
-an opaque ID:
+Pricing and the card are code, run by the watcher inside the tick (or by
+`answer-question` after the owner supplies a rate):
+`cost_components.py prepare` builds the cost skeleton from the recorded specification and the
+profile (spot price included when enabled), the model supplies only the
+few quantities a bench jeweler would estimate (finished grams, bench hours,
+a missing center carat, which fees and accent stones apply), and
+`pricing_model.py` turns the sheet into the quote. `workflow_safe.py price`
+then binds the price to the record, files the Kolo card whose title carries
+the quote, cost, profit, and every assumption (SMS shows the title alone),
+registers the brief so a rejection is read from the audit trail, and drafts
+the customer's estimate email so the approval sends in seconds. The
+customer-visible price is the bound proposed price; cost, rates, hours, and
+assumptions never leave the owner's card.
 
-```bash
-python3 {baseDir}/scripts/approval_guard.py new-id
-```
-
-Do not author the cost sheet by hand. Run the pricing helper, which reads the
-authoritative record's specification, resolves every rate from the shop's
-card, attaches the spot price evidence, and computes every unit cost exactly
-as the approval validators do:
-
-```bash
-python3 {baseDir}/scripts/cost_components.py prepare \
-  --record-root '<absolute-workspace>/estimate-desk/records' \
-  --estimate-id '<jed-id>' \
-  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
-  --spot-evidence "$WORK/spot-evidence.json" \
-  --output "$WORK/cost-skeleton.json"
-```
-
-Pass `--spot-evidence` (the `spot_price.py --output` file) whenever
-`pricing.spot_metal` is enabled; omit it otherwise. Read the skeleton and fill
-only the fields it lists under `fill`: finished grams, bench hours, and any
-missing carat weight. Add fee lines by copying entries from `fee_catalog`, and
-accent-stone lines by copying `stone_catalog` entries with a quantity. Never
-edit a `rate_key`, `unit_cost`, `spot_price_per_gram`, `purity`, or `rate`
-that the helper filled, and never read the scripts' source to work out a
-format. If `unresolved` is not empty, the shop has no single rate for that
-line; the worker asks the owner with `workflow_safe.py ask-missing-rate`
-(never guess a rate, never file a review for one). Otherwise finalize:
-
-```bash
-python3 {baseDir}/scripts/cost_components.py finalize \
-  --input "$WORK/cost-skeleton.json" \
-  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
-  --output "$WORK/current-state.json"
-```
-
-`finalize` re-derives every rate from the card, computes the proposed price
-with the configured pricing model, and writes the exact `current-state.json`
-that `request-approval` accepts. If it refuses, fix only the quantity or line
-it names; do not retry by rewriting rates or the price.
-
-For reference, `current-state.json` contains:
-
-- `estimate_id`
-- `route`: original channel, mailbox, recipient email, email-derived
-  `identity_key`, immutable Gmail message ID, Gmail thread ID, original RFC
-  `Message-ID`, original subject, and existing `References` message IDs
-- `specification`: the exact priced written specification
-- `proposed_price`
-- `cost_components`, containing exactly `metal_lines`, `stone_lines`,
-  `labor_lines`, and `other_hard_cost_lines`. Use these exact line shapes:
-  `{metal, rate_key, quantity_grams, unit_cost}`,
-  `{stone, rate_key, quantity, unit_cost}`, `{task, hours, rate}`, and
-  `{label, rate_key, total_cost}`. Every `rate_key` must name an entry the
-  owner configured in `pricing`: `metal_per_gram`, `stones_per_carat`, and
-  `fees` respectively, and the unit cost must equal that configured rate.
-  Labor `rate` must equal `bench_labor_per_hour`. When `pricing.spot_metal` is
-  enabled a metal line instead uses `rate_key` naming the spot metal plus
-  `spot_price_per_gram` and `purity`, and its `unit_cost` must equal
-  `spot_price_per_gram` times `purity`, with the spot figure matching the
-  recorded spot price evidence. If a required rate is not configured, never
-  substitute, estimate, or infer one: run `workflow_safe.py ask-missing-rate`
-  (Phase 2). `invalid_cost_components` is only for a malformed line the
-  helper refuses. Do not add line totals,
-  `hard_cost_total`, or `customer_price`; the approval helper calculates and
-  inserts them deterministically into the owner-only `internal_cost_sheet`.
-- internal pricing, jeweler cost assumptions, feasibility, appointment options,
-  and draft. Keep the internal pricing and assumption fields separate from the
-  customer-safe specification; they are owner-only and must never be copied or
-  summarized into customer-facing content.
-
-Create and deliver the immutable approval request with the single high-level
-command documented in Inbox monitoring. Do not call approval, Kolo, record, or
-finalization helpers separately. The binding includes the exact proposed price
-and complete owner-only cost sheet as well as estimate ID, route, and
-specification.
-
-```bash
-python3 {baseDir}/scripts/workflow_safe.py request-approval \
-  --monitor-root '<absolute-workspace>/estimate-desk/inbox-monitor' \
-  --claim-root '<absolute-workspace>/estimate-desk/inbox-claims' \
-  --record-root '<absolute-workspace>/estimate-desk/records' \
-  --message-id '<gmail-id>' \
-  --estimate-id '<jed-id>' \
-  --current-state "$WORK/current-state.json" \
-  --approval-request "$WORK/approval-request.json" \
-  --shop-profile '<absolute-workspace>/estimate-desk/shop-profile.json' \
-  --record-output "$WORK/current-record.json"
-```
-
-The command succeeds only when the claimed Kolo action, authoritative local
-record, Kolo mirror, claim phases, and queue finalization are complete.
-It always replaces any model-produced route and specification with the
-authoritative estimate record before requesting approval. If a retry finds an
-existing `approval-request.json`, it validates and reuses that exact artifact;
-never delete or rewrite it to force a retry.
-
-The claimed approval request is the owner-facing Kolo action. Do not add a
-second unjournaled `notify-owner` call for the same approval-ready event.
-
-The command loads the activating Kolo user's private approval binding. The
-owner notification contains only the opaque estimate ID. Never insert customer
-text into CLI arguments.
-
-Wait for a Kolo approval event. Copy only values actually returned by that
-event into `approved.json`: the submitted `estimate_id` and binding hash,
-`approval_status`, and `owner_approved_price`. Never infer approval from chat
-sentiment or silence.
-If the request is rejected, stop without sending. If the owner edits the
-request, treat the returned values as a new candidate approval and verify its
-binding and price against the current state; any missing or changed binding
-requires a new approval request.
-
-Immediately before customer send, re-read the current route and specification,
-then run:
-
-```bash
-python3 {baseDir}/scripts/approval_guard.py verify \
-  "$WORK/approved.json" "$WORK/current-state.json"
-```
-
-Exit 3 means recipient, route, specification, or approval state changed. Stop
-and request a new approval. Kolo stores the structured approval payload but
-does not enforce this binding; this verification is mandatory.
+Rejections need nothing from the session: the watcher reads them from the
+audit trail. An edited price is not applied: reject the card and the desk
+re-prices on the owner's word. Nothing here is run by hand; the session
+never authors a cost sheet, never runs the pricing helpers, and never
+files a card itself.
 
 ## Phase 4: send through the customer route
 

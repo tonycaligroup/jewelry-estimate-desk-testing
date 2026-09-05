@@ -381,6 +381,16 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.7.1 (built 5 September 2026): reliability plan, step 5.** The rules
+the main session lives by are pinned by tests (`ReliabilityRulesTests`):
+run the line once more then wait, never narrate or edit state, run the
+doctor, requeue instead of writing, the next reply answers the open
+question, every execute line names a real executor, every question kind
+is documented with its replies. SKILL.md's agent-era runbook (the 314-line
+queue-processing steps and the by-hand pricing phase) was replaced by a
+description of what the watcher does today; the file went from 64.5 KB to
+43 KB and no longer contains "needs no new approval" or "Only Stage 3".
+
 **4.7.0 (built 5 September 2026): reliability plan, step 4.** `doctor.py`
 scans the desk read-only and prints one line per inconsistency with its
 repair: a queue item with no claim, a parked claim with no open question, a
