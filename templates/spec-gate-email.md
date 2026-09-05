@@ -2,7 +2,8 @@
 
 Use once, early, price-free. Goal: the customer feels a jeweler wrote back
 to them, not that they were handed a form. React to what they said, ask for
-at most three things, and leave the door open to come in.
+everything still missing in one short list so they are never asked twice,
+and leave the door open to come in.
 
 ---
 
@@ -19,7 +20,12 @@ Hi {{first_name}},
 
 {{One warm sentence that reacts to what they shared: the occasion, the person it is for, the stone they have, the idea they described.}} I would love to put this together for you.
 
-To get you a real number rather than a guess, could you tell me {{the two or three details still missing, asked as plain questions inside one or two sentences, for example: what metal you are leaning toward, and roughly what size or carat weight the stone is?}} If you are not sure about any of it, say so and I will suggest what usually looks best.
+To get you a real number rather than a guess, could you tell me:
+
+- {{one plain question per missing detail, the ones that move the price first: "Is the diamond natural or lab-grown?", "What ring size?", "Which metal, and yellow, white, or rose?"}}
+- {{...}}
+
+If you are not sure about any of it, say so and I will suggest what usually looks best.
 
 And if it is easier to talk it through in person, you are welcome to come by the shop; just say when suits you and I will find a time.
 

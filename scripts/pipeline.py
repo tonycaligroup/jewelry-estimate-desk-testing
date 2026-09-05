@@ -99,7 +99,7 @@ FIELD_PRIORITY = (
 
 
 def prioritized(missing: list[str]) -> list[str]:
-    """The fields that move the price first: origin, stone, size; the follow-up asks at most three."""
+    """The fields that move the price first: origin, stone, size; the follow-up asks for all of them, in this order."""
     rank = {name: index for index, name in enumerate(FIELD_PRIORITY)}
     return sorted(missing, key=lambda field: (rank.get(field, len(rank)), field))
 

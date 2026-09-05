@@ -430,7 +430,8 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
     if "?" not in body:
         raise ValueError("a follow-up must ask the customer at least one question")
     stubs = [line.strip() for line in body.splitlines()
-             if line.strip().endswith("?") and len(line.strip().rstrip("?").split()) <= 3]
+             if line.strip().endswith("?") and len(line.strip().rstrip("?").split()) <= 3
+             and not line.strip().startswith(("- ", "* ", "• "))]
     if stubs:
         raise ValueError("no headings or sign-offs ending in a question mark (" + "; ".join(stubs[:3]) + "); "
                          "write each question as a full sentence")
@@ -455,14 +456,15 @@ def draft_followup(
         "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
         "body (no subject line, no headers) in the tone of the template: warm, personal, unhurried. Open with "
         "one sentence that reacts to what they shared (the occasion, who it is for, a family stone, the idea "
-        "they described); never open with a summary of their request. Then ask only for the missing details "
-        "listed below, in the order given (the first ones matter most to the price), at most three questions, "
-        "each a plain sentence or one dash bullet, folded into one or "
-        "two sentences where you can; tell them it is fine not to know and you will suggest what usually looks "
-        "best. Never write a line that merely restates what they said (no \"I've noted\", no \"I have you "
+        "they described); never open with a summary of their request. Then ask for every one of the missing "
+        "details listed below, in the order given (the first ones matter most to the price), as a short dash "
+        "list with one bullet per detail, each bullet a plain question in the customer's words (\"- What ring "
+        "size?\", \"- Is the diamond natural or lab-grown?\"); ask for all of them in this one email so the "
+        "customer is not asked twice, and tell them it is fine not to know and you will suggest what usually "
+        "looks best. Never write a line that merely restates what they said (no \"I've noted\", no \"I have you "
         "down for\"); never add a timing or budget section unless it asks a question. Close by inviting them "
         "to come by the shop if they would rather talk it through in person, without naming times. Keep it "
-        "under 140 words. Use the customer's name if they gave one. Never mention prices, costs, rates, or "
+        "under 180 words. Use the customer's name if they gave one. Never mention prices, costs, rates, or "
         "budgets as requirements. Do not use template placeholders; write real text. No headings or labels, "
         "and the sign-off is a plain line with no question mark. Do not wrap lines: each paragraph is one line, "
         "with a blank line between paragraphs. "

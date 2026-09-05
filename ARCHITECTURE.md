@@ -381,6 +381,11 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.8.3 (built 5 September 2026): one follow-up asks for everything.** The
+owner's rule: a follow-up asks for every missing detail at once, as a short
+dash list, price-moving fields first, so the customer is never asked twice;
+the three-question cap is gone and the body check lets a bullet be short.
+
 **4.8.2 (built 5 September 2026): a partial answer earns one more ask.**
 The stall guard counted every field on the missing list as "asked once",
 though a follow-up asks at most three; a customer who answered all three
