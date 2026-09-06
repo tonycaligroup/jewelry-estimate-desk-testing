@@ -902,7 +902,7 @@ class CustomerStateResetTests(unittest.TestCase):
         for name, files in (
             ("questions", ["q-0123456789ab.json"]),
             ("approvals", ["jed-0123456789abcdef-0123456789abcdef.json", "jed-0123456789abcdef-0123456789abcdef.email.txt"]),
-            ("briefs", ["00000001-0000-4000-8000-000000000000.json", "rejections-watermark.json"]),
+            ("briefs", ["00000001-0000-4000-8000-000000000000.json", "rejections-watermark.json", "approvals-watermark.json"]),
         ):
             (desk / name).mkdir(exist_ok=True)
             for file in files:
@@ -949,8 +949,10 @@ class CustomerStateResetTests(unittest.TestCase):
                 self.assertEqual([p for p in (desk / name).iterdir() if not p.name.startswith(".")], [], name)
             self.assertEqual(result["removed"]["questions"], 1)
             self.assertEqual(result["removed"]["approvals"], 2)
-            self.assertEqual(result["removed"]["briefs"], 2)
+            self.assertEqual(result["removed"]["briefs"], 3)
             self.assertFalse((desk / "work" / "offer-0123456789abcdef-round2").exists())
+            for name in (brief_registry.watermark_path(desk / "inbox-monitor").name, brief_registry.approvals_watermark_path(desk / "inbox-monitor").name):
+                self.assertTrue(customer_state_reset.BRIEF_FILE_RE.fullmatch(name), name)
             self.assertEqual([p.name for p in (desk / "work").iterdir() if p.is_dir()], [], "every desk-made work folder is gone")
             self.assertTrue((desk / "work" / "cron-binding.json").exists())
             self.assertEqual(
