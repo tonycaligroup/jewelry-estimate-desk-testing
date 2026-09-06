@@ -381,6 +381,22 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.10.0 (built 6 September 2026): the architecture release.**
+ARCHITECTURE-OPTIONS.md A' tier 1, C', D, and F1. The tick reads
+`brief.approved` for the rendering and appointment cards it filed
+(`brief_registry.approved_since_last_poll`) and runs their executors
+itself (`workflow_safe.handle_approved_briefs`) under the same lease,
+journal, and failure question; a price card stays with the session because
+an edited number is invisible in the trail. A rendering runs in
+`render_job.py`, a one-shot command job spawned by the tick in the
+watcher's own shape with a 900-second clock; a job that never finishes
+lapses its lease and counts as an attempt, so the bound and the stuck
+question still hold. The worker agent is retired: `spawn_worker`, the
+worker templates, the agent-turn watcher binding, and their tests are
+gone; a claim the inline path cannot finish is a failure like any other.
+Readiness, the doctor, and every tick summary print the installed
+version; `readiness.py --expect X` fails on a mismatch.
+
 **4.9.2 (built 6 September 2026): one follow-up asks for everything, checked.**
 "A 1 ct engagement ring" got two questions: the gate saw no stone (no
 stone named) and held karat and color back until the metal was known.

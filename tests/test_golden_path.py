@@ -118,6 +118,8 @@ class World:
         self.updates: list[tuple[str, str]] = []
         self.sent: list[dict] = []
         self.renders: list[list[str]] = []
+        self.render_jobs: list[dict] = []
+        self._pending_render_jobs: list[dict] = []
         self.spawned: list[list[str]] = []
         self.other: list[list[str]] = []
         self.busy: list[dict[str, str]] = []
@@ -321,8 +323,19 @@ class World:
         if argv[1:3] == ["cron", "list"]:
             return ok(argv, json.dumps({"jobs": []}))
         if argv[1:3] == ["cron", "create"]:
+            name = flag(argv, "--name") or ""
+            if name.startswith("jed-render-"):
+                import render_job
+
+                parts = shlex.split(flag(argv, "--command") or "")
+                opts = {parts[i]: parts[i + 1] for i in range(len(parts) - 1) if parts[i].startswith("--")}
+                self.render_jobs.append(opts)
+                job_id = f"job-render-{len(self.render_jobs)}"
+                # The job runs later on the pod; here it runs now, with the same fakes.
+                self._pending_render_jobs.append(opts)
+                return ok(argv, json.dumps({"id": job_id, "name": name}))
             self.spawned.append(argv)
-            return ok(argv, json.dumps({"id": "job-unexpected", "name": flag(argv, "--name")}))
+            return ok(argv, json.dumps({"id": "job-unexpected", "name": name}))
         self.other.append(argv)
         return ok(argv, "{}")
 
@@ -524,9 +537,18 @@ class GoldenPathTests(unittest.TestCase):
             patch.object(calendar_query, "list_events", side_effect=world.list_events),
         )
 
+    def run_render_jobs(self, ws: Path, world: World) -> None:
+        """The render jobs the tick spawned, run the way the pod runs them a few seconds later."""
+        import render_job
+
+        while world._pending_render_jobs:
+            opts = world._pending_render_jobs.pop(0)
+            render_job.run(ws, ROOT, opts["--message-id"], opts["--estimate-id"], "openclaw", runner=world.run, judge_runner=world.run)
+
     def tick(self, ws: Path, world: World) -> dict:
         summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t",
                                      judge_runner=world.run)
+        self.run_render_jobs(ws, world)
         self.assertEqual(summary["inline_failures"], 0, summary)
         self.assertEqual(summary["spawn_failures"], 0, summary)
         self.assertEqual(summary["manual_review"], 0, summary)
@@ -983,25 +1005,6 @@ class RenderingGateTests(GoldenPathTests):
             self.assertIn("approval-gated", err.getvalue())
             self.assertEqual(world.sent, [])
 
-    def test_worker_prompt_files_a_card_and_never_sends(self) -> None:
-        import cron_config
-
-        post = cron_config.render_worker_message(Path("/ws"), ROOT, "abcdef0123456789", "jed-0123456789abcdef", "/ws/estimate-desk/work/x", branch="post_estimate") \
-            if "branch" in cron_config.render_worker_message.__code__.co_varnames else (ROOT / "templates" / "worker-post-estimate.txt").read_text(encoding="utf-8")
-        self.assertIn("request-rendering-approval", post)
-        self.assertNotIn("needs no new approval", post)
-        self.assertIn("never email the customer", post)
-        self.assertIn("Never run `send-rendering`", post)
-        # The card-filing command the prompt names parses and dispatches.
-        with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()) as err:
-            code = workflow_safe.main([
-                "request-rendering-approval", "--monitor-root", "/nope/inbox-monitor", "--claim-root", "/nope/claims",
-                "--record-root", "/nope/records", "--shop-profile", "/nope/profile.json", "--message-id", "m9",
-                "--estimate-id", "jed-0123456789abcdef", "--checker", "worker",
-            ])
-        self.assertNotEqual(code, 0)
-        self.assertNotIn("unknown command", err.getvalue())
-        self.assertNotIn("invalid choice", err.getvalue())
 
 
 class WindowGateTests(SideBranchTests):
@@ -2053,4 +2056,57 @@ class DeskExecutesApprovalsTests(SideBranchTests):
             summary = self.tick(ws, world)
             self.assertEqual(summary["approvals"], [], "a price may have been edited; the session confirms it")
             self.assertEqual(world.sent, [])
+        self.run_branch(branch)
+
+
+class SameSenderTests(SideBranchTests):
+    """A known customer writes on a new thread: the owner is asked same or new; 'new' quotes it inline (no worker)."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_new_thread_from_a_known_customer_is_asked_and_new_is_quoted_inline(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            # An inquiry still open on its own thread (details asked, not yet given).
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k"}
+            world.customer_message("f1", "thread-first", "A plain 14k yellow gold band please.\n\nPat", subject="Band")
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), 1)
+            # The same customer opens a second thread about something else.
+            world.spec = {"piece_type": "pendant", "metal": "yellow gold", "metal_karat": "14k", "dimensions": "18 inch chain",
+                          "notes": "plain gold pendant, no stones"}
+            world.customer_message("n1", "thread-second", "Separately, could you quote a plain 14k gold pendant on an 18 inch chain?\n\nPat",
+                                   subject="Pendant")
+            summary = self.tick(ws, world)
+            asked = [n for n in world.notices if not n["file"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertRegex(asked[0]["text"], r"(?i)same|new")
+            self.assertEqual(self.claim(ws, "n1")["status"], "awaiting_owner")
+            cards_before = len(world.cards)
+            answered = self.answer(ws, "new")
+            self.assertEqual(answered["decision"], "new", answered)
+            self.assertEqual(answered.get("pipeline"), "approval_requested", answered)
+            self.assertIsNone(answered.get("worker_job_id"))
+            self.assertEqual(len(world.cards), cards_before + 1, "the new piece got its own price card")
+            self.assertEqual(world.spawned, [])
+            records = sorted((ws / "estimate-desk" / "records").glob("*.json"))
+            self.assertEqual(len(records), 2, "two estimates, one per piece")
         self.run_branch(branch)

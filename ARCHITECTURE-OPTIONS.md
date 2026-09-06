@@ -185,6 +185,11 @@ renderings, a booking, an offer of times. A' therefore lands in two tiers:
 shape: a one-shot command job, isolated session, no announce, a longer
 budget (900 seconds), deleted after its run.
 
+## 5b. Built
+
+4.10.0, 6 September 2026: A' tier 1, C', D, and F1, on the full suite and
+the fault harness. The price-card experiment (tier 2) and E', F2 remain.
+
 ## 6. Decision
 
 Build A' tier 1, C', and D as one architecture change, with F1 in the same

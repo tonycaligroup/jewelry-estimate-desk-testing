@@ -333,12 +333,11 @@ def post_estimate_actions(
         ))
         if not wants_rendering:
             return {"outcome": "appointment_approval_requested", "next": "done"}
-    try:
-        return render_and_send(p, message_id, estimate_id, record, paths, openclaw, command_runner)
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
-        # The worker still has the agent's image tool; let it take this one.
-        return {"outcome": "needs_worker", "branch": "post_estimate", "next_action": next_action,
-                "error": str(exc)[:160]}
+    if settings(p["monitor_root"].resolve().parent).get("render_job", True):
+        # The rendering runs in its own job with its own clock; the tick
+        # spawns it and moves on (ARCHITECTURE-OPTIONS.md C').
+        return {"outcome": "render_job_requested", "next": "spawn_render", "estimate_id": estimate_id}
+    return render_and_send(p, message_id, estimate_id, record, paths, openclaw, command_runner, model=model, judge_runner=judge_runner)
 
 
 def process_claim(

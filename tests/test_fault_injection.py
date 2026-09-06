@@ -68,8 +68,10 @@ class Harness(GoldenPathTests):
     """Drives the desk without the golden path's own assertions, so faults can surface."""
 
     def raw_tick(self, ws: Path, world: World) -> dict:
-        return inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t",
-                                  judge_runner=world.run)
+        summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t",
+                                     judge_runner=world.run)
+        self.run_render_jobs(ws, world)
+        return summary
 
     def raw_execute(self, ws: Path, world: World, card: dict) -> tuple[int, str]:
         parts = shlex.split(card["payload"]["execute"].replace("<Brief ID>", card["brief_id"]))

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -64,73 +65,41 @@ def paths_for(workspace: Path) -> dict[str, Path]:
     }
 
 
-def worker_create_argv(
-    openclaw: str,
-    message_id: str,
-    message: str,
-    owner_target: str,
-) -> list[str]:
-    """Argument array for one worker job; never a shell string."""
+RENDER_JOB_PREFIX = "jed-render-"
+RENDER_JOB_TIMEOUT_SECONDS = 900
+RENDER_JOB_LEASE_SECONDS = 1020
+
+
+def render_job_command(base_dir: Path, workspace: Path, message_id: str, estimate_id: str) -> str:
+    return (f"python3 {base_dir.resolve()}/scripts/render_job.py --workspace {workspace.resolve()} "
+            f"--base-dir {base_dir.resolve()} --message-id {message_id} --estimate-id {estimate_id}")
+
+
+def render_job_create_argv(openclaw: str, workspace: Path, message_id: str, command: str) -> list[str]:
+    """One-shot command job in the watcher's own shape: isolated, no announce, its own clock."""
     return [
-        openclaw,
-        "cron",
-        "create",
-        "--at",
-        "+5s",
-        "--delete-after-run",
-        "--session",
-        "isolated",
-        "--name",
-        f"{cron_config.WORKER_NAME_PREFIX}{message_id[:12]}",
-        "--message",
-        message,
-        "--model",
-        cron_config.MODEL,
-        "--thinking",
-        cron_config.WORKER_THINKING,
-        "--tools",
-        ",".join(cron_config.TOOLS_ALLOW),
-        "--timeout-seconds",
-        str(cron_config.WORKER_TIMEOUT_SECONDS),
-        "--light-context",
-        # A worker has no owner-facing output of its own: approvals, alerts,
-        # and briefs all go through bundled commands. Delivery stays off so
-        # narration or a stray final line can never reach the owner's phone.
-        "--no-deliver",
-        "--json",
+        openclaw, "cron", "create", "--at", "+5s", "--delete-after-run", "--session", "isolated",
+        "--name", f"{RENDER_JOB_PREFIX}{message_id[:12]}", "--command", command,
+        "--command-cwd", str(workspace.resolve()), "--timeout-seconds", str(RENDER_JOB_TIMEOUT_SECONDS), "--json",
     ]
 
 
-def spawn_worker(
-    workspace: Path,
-    base_dir: Path,
-    owner_target: str,
-    openclaw: str,
-    message_id: str,
-    estimate_id: str,
-    work_dir: str,
-    runner: Runner = subprocess.run,
-    branch: str = "intake",
-) -> str:
-    message = cron_config.render_worker_message(
-        workspace, base_dir, message_id, estimate_id, work_dir, branch
-    )
-    completed = runner(
-        worker_create_argv(openclaw, message_id, message, owner_target),
-        check=True,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
+def spawn_render_job(workspace: Path, base_dir: Path, openclaw: str, message_id: str, estimate_id: str,
+                     runner: Runner = subprocess.run) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", message_id or "") or not re.fullmatch(r"jed-[0-9a-f]{16}", estimate_id or ""):
+        raise ValueError("render job needs a plain message id and an estimate id")
+    command = render_job_command(base_dir, workspace, message_id, estimate_id)
+    completed = runner(render_job_create_argv(openclaw, workspace, message_id, command),
+                       check=True, capture_output=True, text=True, shell=False)
     raw = completed.stdout or ""
     try:
         job = json.loads(raw[raw.find("{"):])
     except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError("worker job creation returned no job JSON") from exc
+        raise ValueError("render job creation returned no job JSON") from exc
     job = job.get("job", job)
     job_id = job.get("id")
     if not isinstance(job_id, str) or not job_id:
-        raise ValueError("worker job creation returned no job id")
+        raise ValueError("render job creation returned no job id")
     return job_id
 
 
@@ -151,7 +120,8 @@ def sweep_worker_jobs(openclaw: str, runner: Runner = subprocess.run, now_ms: in
     now = int(time.time() * 1000) if now_ms is None else now_ms
     removed = 0
     for job in jobs:
-        if not isinstance(job, dict) or not str(job.get("name", "")).startswith(cron_config.WORKER_NAME_PREFIX):
+        name = str(job.get("name", "")) if isinstance(job, dict) else ""
+        if not (name.startswith(cron_config.WORKER_NAME_PREFIX) or name.startswith(RENDER_JOB_PREFIX)):
             continue
         if job.get("enabled"):
             continue
@@ -235,7 +205,7 @@ def run_inline_claim(
     when its file is missing, the intake result is reused when it exists,
     and every external effect is journaled by the code it calls.
     """
-    summary = summary if summary is not None else {"workers": [], "spawn_failures": 0, "inline": [], "closed": 0, "manual_review": 0}
+    summary = summary if summary is not None else {"workers": [], "render_jobs": [], "spawn_failures": 0, "inline": [], "closed": 0, "manual_review": 0}
     started = time.monotonic()
     calls_before = len(judge.CALL_LOG)
     claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
@@ -255,6 +225,7 @@ def run_inline_claim(
                 record_root=p["record_root"],
                 message_id=message_id,
                 shop_profile=p["shop_profile"],
+                runner=runner,
             )
         )
         if result.get("next_action") == "done":
@@ -266,37 +237,34 @@ def run_inline_claim(
         workflow_safe.write_private(intake_path, result)
     work_dir = result["work_paths"]["work_dir"]
     inline = pipeline.settings(workspace / "estimate-desk")
-    if inline.get("inline"):
-        done = pipeline.process_claim(
-            workspace, base_dir, message_id, result,
-            model=inline.get("model"), judge_runner=judge_runner, command_runner=runner, openclaw=openclaw,
-        )
-        if done.get("outcome") != "needs_worker":
-            calls = judge.CALL_LOG[calls_before:]
-            summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome"),
-                                      "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls),
-                                      "model_seconds": round(sum(c["seconds"] for c in calls), 2)})
-            return done
-        summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action"),
-                                  **({"error": done["error"]} if done.get("error") else {})})
-    # Hand the claim to a worker job: the worker owns it from here. The
-    # reason stays on the claim so the doctor can say why.
-    reason = (done.get("error") if inline.get("inline") else None) or f"handoff for {done.get('next_action') if inline.get('inline') else 'worker path'}"
-    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, False, handoff_reason=reason)
-    inbox_claim.delegate(p["claim_root"], message_id, claim_token, cron_config.WORKER_LEASE_SECONDS)
-    try:
-        job_id = spawn_worker(
-            workspace, base_dir, owner_target, openclaw, message_id, result["estimate_id"], work_dir,
-            runner=runner, branch=cron_config.worker_branch(result.get("record_status")),
-        )
-    except (OSError, ValueError, subprocess.CalledProcessError):
-        # Leave the claim processing with its lease. Once the lease ends
-        # the stale reconciler resumes it exactly once, and the next tick
-        # spawns again; a second failure becomes manual review.
-        summary["spawn_failures"] += 1
-        return {"outcome": "spawn_failed"}
-    summary["workers"].append({"message_id": message_id, "job_id": job_id})
-    return {"outcome": "worker", "job_id": job_id}
+    if not inline.get("inline"):
+        raise ValueError("inline judgment is switched off in pipeline.json; the desk has no other way to judge a claim")
+    done = pipeline.process_claim(
+        workspace, base_dir, message_id, result,
+        model=inline.get("model"), judge_runner=judge_runner, command_runner=runner, openclaw=openclaw,
+    )
+    if done.get("outcome") == "render_job_requested":
+        # The rendering runs in its own job. Count the spawn as an attempt:
+        # a job that never finishes lapses its lease, the tick retries, and
+        # after the bound the owner is asked.
+        inbox_claim.note_inline_attempt(p["claim_root"], message_id, claim_token,
+                                        "the rendering job started but did not finish", "transient")
+        inbox_claim.delegate(p["claim_root"], message_id, claim_token, RENDER_JOB_LEASE_SECONDS)
+        job_id = spawn_render_job(workspace, base_dir, openclaw, message_id, done.get("estimate_id") or result["estimate_id"], runner=runner)
+        summary["render_jobs"].append({"message_id": message_id, "job_id": job_id})
+        calls = judge.CALL_LOG[calls_before:]
+        summary["inline"].append({"message_id": message_id, "outcome": "render_job_spawned", "job_id": job_id,
+                                  "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls)})
+        return {"outcome": "render_job_spawned", "job_id": job_id}
+    if done.get("outcome") == "needs_worker":
+        # No worker agent exists any more (ARCHITECTURE-OPTIONS.md D): this
+        # is a failure like any other, retried with the bound, then asked.
+        raise judge.JudgmentError(done.get("error") or "the claim could not be finished inline", transient=True)
+    calls = judge.CALL_LOG[calls_before:]
+    summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome"),
+                              "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls),
+                              "model_seconds": round(sum(c["seconds"] for c in calls), 2)})
+    return done
 
 
 def _attempt_inline(
@@ -344,6 +312,7 @@ def tick(
         "swept_jobs": 0,
         "retried": 0,
         "stuck": [],
+        "render_jobs": [],
         "message": "NO_REPLY",
     }
     started = time.monotonic()

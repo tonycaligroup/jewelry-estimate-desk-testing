@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.9.2
+version: 4.10.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -77,16 +77,18 @@ model with thinking off. If Kolo cannot verify the model, stop.
   state, and a durable provider-ID-only discovery queue.
 - `scripts/estimate_record.py`: create, update, and find the private local
   estimate records used as the authoritative inbox-routing index.
-- `scripts/inbox_watcher.py`: the model-free scheduled tick: validate,
-  reconcile, discover, claim, fetch, intake, close mail no customer wrote,
-  and start one worker job per claim that needs judgment.
+- `scripts/inbox_watcher.py`: the scheduled tick: validate, reconcile,
+  read approvals and rejections from the audit trail, discover, claim,
+  fetch, intake, judge each claim inline, and spawn a rendering job when a
+  rendering is due.
+- `scripts/render_job.py`: one rendering in a job of its own, with its own
+  clock: renders, checks, materializes, files the card, parks the claim.
+- `scripts/skill_version.py`: the installed version, printed by readiness,
+  the doctor, and every tick summary.
 - `scripts/owner_questions.py`: plain-English owner questions (a missing
   rate today), one reminder, the answer saved to the rate card.
-- `scripts/cron_config.py`: render the watcher command and the per-claim
-  worker prompt, and bind durable monitor state to the complete
-  behavior-bearing live Kolo cron configuration.
-- `templates/worker-*.txt`: a worker's whole instruction set, the common
-  preamble plus one branch by record status; workers never read SKILL.md.
+- `scripts/cron_config.py`: render the watcher command and bind durable
+  monitor state to the live Kolo cron configuration.
 - `scripts/gmail_classify.py`: from deterministic Gmail headers alone, set
   aside mail no customer wrote (bounces, automatic replies, calendar
   invitations and RSVPs, automated notifications, mailing-list mail, and
@@ -241,24 +243,20 @@ must keep: never replace the cron or reset its activation timestamp or
 discovery watermark, and the Kolo user who installs and activates the skill is
 automatically the approver.
 
-### Watcher and workers
+### Watcher and the rendering job
 
 The scheduled Kolo job is a command, not a model turn. Every tick it runs
-`inbox_watcher.py`, which performs the discovery phase and the deterministic
-front of the queue phase below, closes mail no customer wrote, and leases
-each remaining claim to a one-shot worker job whose prompt is
-`templates/worker-common.txt` plus one branch prompt (intake or
-post-estimate, by record status), with a 900-second clock, the pinned
-model, thinking off, and the safe tool allowlist. The worker begins with
-`workflow_safe.py worker-start` (lease proof, intake result, thread as
-text, `work_paths`), makes one judgment, runs `review-thread` (the review
-plus every deterministic step after it) and at most `price`; it never
-discovers, claims, or reports. If a worker
-dies, its lease lapses, the stale reconciler resumes the claim once, and the
-next tick starts a new worker; `worker-start` says where to resume (a
-`resume` object: send the recorded follow-up, review nothing again;
-`next_action: done`: the send already happened). Watcher stdout is the run
-report or `NO_REPLY`.
+`inbox_watcher.py`, which reads the audit trail for approvals and
+rejections of the cards it filed and acts on them, performs discovery,
+claims one message at a time, and judges each claim inline with a few
+stateless model calls. Nothing runs through a prompt-driven agent: there
+is no worker job. A rendering does not fit the tick's five-minute clock,
+so the tick spawns `render_job.py` as a one-shot command job in its own
+shape (isolated session, no announce, a 900-second clock, deleted after
+its run); the job renders each piece, checks the views, files the card,
+and parks the claim. A claim the tick or a job cannot finish is retried
+with a bound and then becomes one question to the owner. Watcher stdout is
+the run report or `NO_REPLY`; every summary carries the installed version.
 
 ### Cron discovery phase
 
@@ -304,10 +302,9 @@ rate question, the appointment card from live free/busy, the rendering
 from the customer's artwork with its card. Each claim ends processed,
 parked behind a question, or on a card; a claim the tick cannot finish is
 retried with a bound (six tries for a gateway or model hiccup, two for a
-refusal) and then becomes one question to the owner. A worker agent job is
-started only when the inline judgment hands off; it receives
-`templates/worker-common.txt` plus one branch prompt, never this file, and
-it files cards and never emails a customer.
+refusal) and then becomes one question to the owner. No worker agent job
+exists: a rendering runs in `render_job.py`, a command job that files
+cards and never emails a customer, and everything else runs in the tick.
 
 The main session does none of this. It runs the execute line on an
 approved card, runs `answer-question` with the owner's words, and runs
@@ -652,9 +649,13 @@ as consent for something you proposed.
 ### Approved briefs: run the payload's `execute` line
 
 Every approval the desk files (price, renderings, appointment, manual
-review) carries an `execute` field in its execution payload. When Kolo
-delivers the decision as approved, copy that line, replace `<Brief ID>` with
-the Brief ID from the delivered decision, run it, and paste its output. That
+review) carries an `execute` field in its execution payload. For a
+rendering card or an appointment card (booking or offer), do nothing when
+Kolo delivers the approval: the watcher reads approvals from the audit
+trail and runs that line itself within a tick; if you run it anyway it
+finds the first run's journal and does nothing more. For a price card,
+copy that line, replace `<Brief ID>` with the Brief ID from the delivered
+decision, run it, and paste its output. That
 one command re-verifies the bound state, sends or books through the desk's
 own helpers, records the receipt, and reports the brief executed. A repeat is
 a no-op. Rejections need no command from this session: Kolo does not

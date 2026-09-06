@@ -104,8 +104,8 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
                     f"the tick will retry it (attempt {int(claim.get('inline_attempts') or 0) + 1}); last error: {claim.get('last_error') or 'none'}",
                     "nothing; the next tick retries, then asks", level="info")
             else:
-                add("worker_lease_lapsed", f"message {message_id}",
-                    "a worker's lease has lapsed with no result",
+                add("lease_lapsed", f"message {message_id}",
+                    "a run's lease has lapsed with no result",
                     "nothing; the next tick's reconciler resumes it once, then it becomes a review", level="info")
         for key, action in (claim.get("external_actions") or {}).items():
             if isinstance(action, dict) and action.get("status") in {"pending", "uncertain", "verified_unsent"}:
@@ -118,7 +118,7 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
         if isinstance(claim, dict) and claim.get("worker_handoff_reason"):
             add("worker_handoff", f"message {message_id}",
                 f"the tick handed this claim to a worker agent: {claim['worker_handoff_reason']}",
-                "nothing to run; this says why the inline path stepped aside (renderings from a worker are group shots until 4.9.1)",
+                "nothing to run; a record of why the inline path once stepped aside (worker jobs are retired since 4.10.0)",
                 level="info")
     log_path = desk / "run-work" / "tick-log.json"
     entries = _read(log_path) if log_path.exists() else []

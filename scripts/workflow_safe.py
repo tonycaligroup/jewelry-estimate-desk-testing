@@ -1464,24 +1464,9 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
         "worker_job_id": None,
     }
     priced = _price_after_rate_answer(args, workspace, p, message_id, estimate_id)
-    if priced is not None:
-        result.update(priced)
-        return result
-    try:
-        result["worker_job_id"] = inbox_watcher.spawn_worker(
-            workspace,
-            args.base_dir.resolve(),
-            "",
-            args.openclaw or inbox_watcher.default_openclaw(),
-            message_id,
-            estimate_id,
-            str(work_dir),
-            runner=getattr(args, "runner", subprocess.run),
-        )
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
-        # The claim is processing under a lease; when it lapses the watcher's
-        # stale reconciler resumes it and the next tick starts a worker.
-        result["worker_error"] = str(exc)[:200]
+    if priced is None:
+        raise ValueError("inline judgment is switched off in pipeline.json; the desk has no other way to price")
+    result.update(priced)
     return result
 
 
@@ -1695,20 +1680,18 @@ def answer_decision(
         import pipeline  # local import: pipeline imports this module
 
         switch = pipeline.settings(workspace / "estimate-desk")
-        if switch.get("inline"):
-            done = pipeline.process_claim(
-                workspace, args.base_dir.resolve(), message_id, intake_result,
-                model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
-                command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
-            )
-            result["pipeline"] = done.get("outcome")
-            if done.get("outcome") != "needs_worker":
-                return result
-        result["worker_job_id"] = inbox_watcher.spawn_worker(
-            workspace, args.base_dir.resolve(), "", args.openclaw or inbox_watcher.default_openclaw(),
-            message_id, intake_result["estimate_id"], str(work_dir), runner=getattr(args, "runner", subprocess.run),
-            branch=cron_config.worker_branch(intake_result.get("record_status")),
+        if not switch.get("inline"):
+            raise ValueError("inline judgment is switched off in pipeline.json; the desk has no other way to judge")
+        done = pipeline.process_claim(
+            workspace, args.base_dir.resolve(), message_id, intake_result,
+            model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
+            command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
         )
+        if done.get("outcome") == "render_job_requested":
+            done = {"outcome": "render_job_spawned", "job_id": inbox_watcher.spawn_render_job(
+                workspace, args.base_dir.resolve(), args.openclaw or inbox_watcher.default_openclaw(),
+                message_id, intake_result["estimate_id"], runner=getattr(args, "runner", subprocess.run))}
+        result["pipeline"] = done.get("outcome")
         return result
     if question["kind"] == "appointment_next":
         return _answer_appointment_next(args, workspace, p, root, question, outcome)

@@ -63,9 +63,9 @@ every pre-activation inquiry manually.
      --announce --channel kolo --to 'kolo:<owner-chat-id>' --disabled --json
    ```
 
-   Worker jobs are created by the watcher itself with
-   `--delete-after-run`, the pinned model, thinking off, the safe tool
-   allowlist, and a 900-second timeout; never create them by hand. Never
+   Rendering jobs (`jed-render-<id>`) are created by the watcher itself as
+   one-shot command jobs with `--delete-after-run` and a 900-second
+   timeout; never create them by hand. There are no worker agent jobs. Never
    enable or manually run the monitor yet. If a job with that name already
    exists, stop and use the reconfiguration procedure below; never create a
    second job.
