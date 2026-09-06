@@ -1768,7 +1768,9 @@ class PartialAnswerTests(SideBranchTests):
             self.assertEqual(len(world.sent), 1)
             asked = [p for p in world.prompts if "MISSING DETAILS TO ASK FOR" in p][-1]
             order = asked.split("MISSING DETAILS TO ASK FOR: ", 1)[1].split("\n", 1)[0]
-            self.assertTrue(order.startswith("finger size, metal"), order)
+            self.assertTrue(order.startswith("stone origin, stone type"), order)
+            self.assertIn("setting style", order)
+            self.assertIn("metal karat", order, "the whole metal question is asked at once")
             # He answers most of it, not the size or the origin: one more ask, no owner question.
             world.spec = {"piece_type": "engagement ring", "metal": "rose gold", "metal_karat": "18k", "stone_type": "diamond",
                           "stone_carat": "3", "stone_color": "D", "stone_clarity": "flawless", "stone_cut": "ideal",

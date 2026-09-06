@@ -480,6 +480,40 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
     return {"body": body}
 
 
+FIELD_WORDS = {
+    "finger_size": ("size",), "dimensions": ("length", "size", "long", "inch", "mm"),
+    "metal": ("metal", "gold", "platinum", "silver"), "metal_karat": ("karat", "14k", "18k", "10k", "carat gold"),
+    "metal_color": ("yellow", "white", "rose", "color", "colour"), "stone_type": ("stone", "diamond", "sapphire", "gem"),
+    "stone_origin": ("natural", "lab"), "stone_carat": ("carat", "size", "mm", "big"), "stone_color": ("color", "colour", "grade"),
+    "stone_clarity": ("clarity", "grade"), "stone_cut": ("cut", "shape"), "stone_shape": ("shape", "cut"),
+    "setting_style": ("set", "style", "solitaire", "halo", "bezel", "prong"), "piece_type": ("piece", "kind", "type"),
+}
+
+
+def uncovered_fields(body: str, missing_fields: list[str]) -> list[str]:
+    """Missing details the follow-up never mentions. Labels may be 'wedding band: finger size'."""
+    text = body.lower()
+    out = []
+    for label in missing_fields:
+        field = label.split(": ", 1)[1] if ": " in label else label
+        key = field.strip().replace(" ", "_")
+        words = FIELD_WORDS.get(key, (field.strip().replace("_", " "),))
+        if not any(w in text for w in words):
+            out.append(label)
+    return out
+
+
+def check_body_covers(missing_fields: list[str]):
+    def check(value: dict[str, Any]) -> dict[str, Any]:
+        result = check_body(value)
+        left = uncovered_fields(result["body"], missing_fields)
+        if left:
+            raise ValueError("the email must ask about every missing detail; it never mentions: " + "; ".join(left)
+                             + ". Ask for each of them, one bullet each")
+        return result
+    return check
+
+
 def draft_followup(
     digest: dict[str, Any],
     missing_fields: list[str],
@@ -511,7 +545,7 @@ def draft_followup(
         f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
-    return ask_json(prompt, check_body, model, runner, openclaw)
+    return ask_json(prompt, check_body_covers(list(missing_fields)), model, runner, openclaw)
 
 
 LOCAL_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")

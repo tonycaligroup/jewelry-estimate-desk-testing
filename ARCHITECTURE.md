@@ -381,6 +381,15 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.9.2 (built 6 September 2026): one follow-up asks for everything, checked.**
+"A 1 ct engagement ring" got two questions: the gate saw no stone (no
+stone named) and held karat and color back until the metal was known.
+Now a carat or a center-stone piece type implies a stone and its fields
+plus a setting style; a missing metal asks metal, karat, and color at
+once; and the drafted follow-up is refused unless it mentions every
+missing detail (`judge.uncovered_fields`), with one retry and the plain
+fallback listing them all.
+
 **4.9.1 (built 6 September 2026): the tick keeps its own record.** A
 three-piece rendering on the pod fell to the worker agent and nobody
 could say why: the handoff reason lived only in the tick's summary, which

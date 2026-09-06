@@ -24,6 +24,8 @@ NO_KARAT_METALS = {"platinum", "silver", "palladium", "titanium", "tungsten", "s
 RING_PIECES = {"ring", "band", "engagement ring", "wedding band", "signet ring", "eternity band"}
 DIMENSION_PIECES = {"chain", "necklace", "bracelet", "pendant", "anklet", "cuff", "bangle", "earring", "earrings"}
 STONE_KEYS = ("stone_type", "stone_origin", "stone_carat", "stone_color", "stone_clarity", "stone_cut")
+# Pieces that carry a center stone by definition: a carat or a stone is implied even when no stone is named.
+STONE_PIECES = ("engagement ring", "solitaire", "halo", "three stone", "three-stone", "tennis", "eternity", "cocktail ring")
 
 
 def present(value: Any) -> bool:
@@ -48,6 +50,12 @@ def has_stones(spec: dict[str, Any]) -> bool:
         return True
     count = spec.get("stone_count")
     if isinstance(count, (int, float)) and not isinstance(count, bool) and count > 0:
+        return True
+    if present(spec.get("stone_carat")) or present(spec.get("center_stone")) and _text(spec, "center_stone") not in ("no", "none", "false"):
+        # "a 1 ct engagement ring": the carat says there is a stone.
+        return True
+    piece = _text(spec, "piece_type")
+    if piece and any(word in piece for word in STONE_PIECES) and not estimate_record.customer_supplies_stone(spec):
         return True
     return present(spec.get("accent_stones")) or estimate_record.stones_in_words(spec)
 
@@ -76,7 +84,9 @@ def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None
         missing.add("piece_type")
     metal = _text(spec, "metal")
     if not metal:
-        missing.add("metal")
+        # Ask the whole metal question at once: which metal, which karat,
+        # which color. One email, not three.
+        missing.update({"metal", "metal_karat", "metal_color"})
     else:
         karat_in_metal = any(token.rstrip("k").isdigit() for token in metal.replace("-", " ").split())
         needs_karat = not any(word in metal for word in NO_KARAT_METALS)
@@ -112,5 +122,7 @@ def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None
                 continue
             if not present(spec.get(key)):
                 missing.add(key)
+    if has_stones(spec) and not present(spec.get("setting_style")):
+        missing.add("setting_style")
     # Profile policies: setting style when there are stones, ask-always origin.
     return estimate_record.enforce_specification_policies(spec, sorted(missing), shop_profile)
