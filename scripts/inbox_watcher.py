@@ -30,6 +30,7 @@ import inbox_monitor
 import judge
 import kolo_safe
 import pipeline
+import skill_version
 import owner_questions
 import validate_profile
 import workflow_safe
@@ -330,6 +331,7 @@ def tick(
 ) -> dict[str, Any]:
     p = paths_for(workspace)
     summary: dict[str, Any] = {
+        "version": skill_version.installed(base_dir),
         "discovered": 0,
         "claimed": 0,
         "closed": 0,
@@ -366,6 +368,9 @@ def tick(
     # reminder, then waits (WORKFLOW.md 6.10).
     # Kolo says nothing when a card is rejected; the audit trail does.
     summary["rejections"] = workflow_safe.handle_rejected_briefs(workspace, runner=runner)
+    # Approvals of rendering and appointment cards are executed here, not
+    # by the main session (ARCHITECTURE-OPTIONS.md A' tier 1).
+    summary["approvals"] = workflow_safe.handle_approved_briefs(workspace, runner=runner)
     summary["reminders"] = owner_questions.send_due_reminders(
         owner_questions.questions_root(p["monitor_root"]), runner=runner,
         extra_args=kolo_safe.owner_channel_args(p["monitor_root"]),

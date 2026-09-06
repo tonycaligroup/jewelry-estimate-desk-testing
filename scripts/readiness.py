@@ -131,8 +131,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--base-dir", type=Path, required=True)
     parser.add_argument("--openclaw", default="openclaw")
+    parser.add_argument("--expect", default=None, help="the version the owner published; a mismatch is a FAIL")
     args = parser.parse_args(argv)
+    import skill_version
+
+    version = skill_version.installed(args.base_dir.resolve())
+    print(f"version: {version}")
     results = checks(args.workspace.resolve(), args.base_dir.resolve(), args.openclaw)
+    if args.expect:
+        results.insert(0, {"check": "installed version", "status": "PASS" if version == args.expect else "FAIL",
+                           "detail": f"installed {version}, expected {args.expect}"})
     for row in results:
         print(f"{row['status']:4} {row['check']}: {row['detail']}")
     failed = [r for r in results if r["status"] == "FAIL"]

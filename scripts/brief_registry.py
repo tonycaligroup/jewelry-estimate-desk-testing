@@ -103,6 +103,42 @@ def watermark_path(monitor_root: Path) -> Path:
     return root_for(monitor_root) / "rejections-watermark.json"
 
 
+def approvals_watermark_path(monitor_root: Path) -> Path:
+    return root_for(monitor_root) / "approvals-watermark.json"
+
+
+def approved_since_last_poll(
+    monitor_root: Path, runner: Callable[..., Any] | None = None, now: datetime | None = None,
+    kinds: tuple[str, ...] = ("rendering", "appointment"),
+) -> list[dict[str, Any]]:
+    """Approvals of cards the desk filed, new since the previous poll, for the kinds the desk executes itself.
+
+    ARCHITECTURE-OPTIONS.md A' tier 1: a rendering, a booking, or an offer is
+    a yes or no with nothing to edit, so the desk acts on the approval
+    without the main session. A price card may be edited, which the trail
+    does not show, so it stays with the session.
+    """
+    current = now or datetime.now(timezone.utc)
+    path = approvals_watermark_path(monitor_root)
+    try:
+        since = json.loads(path.read_text(encoding="utf-8"))["since"]
+    except (OSError, ValueError, KeyError):
+        since = (current - timedelta(hours=6)).isoformat()
+    pending = {e["brief_id"]: e for e in load_all(monitor_root) if e.get("outcome") == "pending" and e.get("kind") in kinds}
+    if not pending:
+        _write(path, {"since": current.isoformat()})
+        return []
+    events = kolo_safe.audit_events(event_type="brief.approved", from_date=since, runner=runner)
+    found = []
+    for event in events:
+        entry = pending.get(event.get("brief_id"))
+        if entry is None:
+            continue
+        found.append({**entry, "approved_at": event.get("created_at")})
+    _write(path, {"since": (current - timedelta(minutes=1)).isoformat()})
+    return found
+
+
 def rejected_since_last_poll(
     monitor_root: Path, runner: Callable[..., Any] | None = None, now: datetime | None = None,
 ) -> list[dict[str, Any]]:

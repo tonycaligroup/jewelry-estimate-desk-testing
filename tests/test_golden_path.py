@@ -359,6 +359,12 @@ class World:
         self.other.append(argv)
         return ok(argv, "")
 
+    def approve(self, card: dict) -> None:
+        """The owner approves from the phone: the trail records it, nothing reaches the session."""
+        self.events.insert(0, {"event_type": "brief.approved", "brief_id": card["brief_id"], "brief_number": card["number"],
+                               "description": card["title"], "created_at": datetime.now(timezone.utc).isoformat(),
+                               "details": {"source": "web", "status": "approved", "previous_status": "pending"}})
+
     def reject(self, card: dict, note: str) -> None:
         self.events.insert(0, {"event_type": "brief.rejected", "brief_id": card["brief_id"], "brief_number": card["number"],
                                "description": card["title"], "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1602,7 +1608,8 @@ class DoctorTests(SideBranchTests):
             self.assertEqual(self._doctor(ws), [])
             import doctor
 
-            self.assertEqual(doctor.report([]), "state: clean")
+            self.assertTrue(doctor.report([]).endswith("state: clean"))
+            self.assertTrue(doctor.report([]).startswith("version: "))
         self.run_branch(branch)
 
     def test_a_parked_claim_whose_question_vanished_is_found_and_requeued(self) -> None:
@@ -1966,3 +1973,84 @@ class TwoPieceTests(SideBranchTests):
             self.assertEqual(len([n for n in world.notices if not n["file"]]), 0, "no question needed along the way")
         self.run_branch(branch)
 
+
+
+class DeskExecutesApprovalsTests(SideBranchTests):
+    """ARCHITECTURE-OPTIONS.md A' tier 1: rendering and appointment approvals are executed by the desk from the trail."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_an_approved_booking_is_booked_by_the_next_tick_and_the_line_is_then_a_no_op(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread, estimate_id = self._estimate_sent(ws, world)
+            wanted = next_weekday(2, 14, 0)
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+            world.customer_message("s2", thread, f"Can we meet {wanted.strftime('%A')} at 2?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "appointment_booking")
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "appointment_booked")
+            self.assertIn((card["brief_id"], "executed"), world.updates)
+            sent_before = len(world.sent)
+            # The session runs the line anyway: nothing more happens.
+            result = self.execute(ws, world, card["payload"]["execute"], card)
+            self.assertEqual(result["outcome"], "already_booked", result)
+            self.assertEqual(len(world.sent), sent_before)
+            self.assertEqual(self.tick(ws, world)["approvals"], [], "an approval is acted on once")
+        self.run_branch(branch)
+
+    def test_an_approved_rendering_card_is_sent_by_the_next_tick(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "send_rendering")
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.sent[-1]["attachments"]), 2)
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_a_price_card_approval_is_left_to_the_session(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_diamond_melee"] = 600.0
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+            world.spec = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                          "setting_style": "bead set", "accent_stones": "small lab-grown diamonds", "stone_type": "diamond",
+                          "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS"}
+            world.customer_message("p1", "thread-price", "Quote please.\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["approvals"], [], "a price may have been edited; the session confirms it")
+            self.assertEqual(world.sent, [])
+        self.run_branch(branch)

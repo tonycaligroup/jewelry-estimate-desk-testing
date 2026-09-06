@@ -146,6 +146,46 @@ def handle_rejected_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
     return handled
 
 
+def handle_approved_briefs(workspace: Path, runner: Any = subprocess.run) -> list[dict[str, Any]]:
+    """Every tick: rendering and appointment cards the owner approved, executed here.
+
+    The same executors the session would run, with the same lease, journal,
+    and failure question; if the session runs the line too, the second run
+    finds the first one's journal and does nothing more. Price cards are
+    not touched (an edited number is invisible in the trail; WORKFLOW 6.4).
+    """
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(workspace)
+    handled: list[dict[str, Any]] = []
+    for entry in brief_registry.approved_since_last_poll(p["monitor_root"], runner=runner):
+        kind, estimate_id, message_id, brief_id = entry["kind"], entry["estimate_id"], entry["message_id"], entry["brief_id"]
+        argv: list[str] | None = None
+        try:
+            if kind == "rendering":
+                argv = ["send-approved-rendering", "--workspace", str(workspace), "--estimate-id", estimate_id,
+                        "--message-id", message_id, "--brief-id", brief_id]
+            elif kind == "appointment":
+                approval = read_object(approval_store_path(p["monitor_root"], estimate_id, message_id))
+                command = "book-approved-appointment" if approval.get("action_type") == "appointment_booking" else "send-approved-times"
+                argv = [command, "--workspace", str(workspace), "--estimate-id", estimate_id,
+                        "--message-id", message_id, "--brief-id", brief_id]
+            if argv is None:
+                continue
+            buffer, errors = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
+                code = main(argv)
+            printed = buffer.getvalue().strip()
+            brief_registry.mark(p["monitor_root"], brief_id, "executed" if code == 0 else "failed",
+                                None if code == 0 else errors.getvalue().strip()[:300])
+            handled.append({"brief_id": brief_id, "kind": kind, "estimate_id": estimate_id, "command": argv[0],
+                            "outcome": "executed" if code == 0 else "failed",
+                            **({"result": json.loads(printed)} if code == 0 and printed.startswith("{") else {})})
+        except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+            handled.append({"brief_id": brief_id, "kind": kind, "error": str(exc)[:160]})
+    return handled
+
+
 def _attach_answer_command(root: Path, monitor_root: Path, question: dict[str, Any]) -> dict[str, Any]:
     if not question.get("answer_command"):
         question["answer_command"] = owner_questions.answer_command(

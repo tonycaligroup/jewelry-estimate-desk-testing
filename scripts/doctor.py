@@ -264,10 +264,13 @@ def requeue(workspace: Path, message_id: str, token: str | None = None, opener: 
 
 
 def report(findings: list[dict[str, Any]]) -> str:
+    import skill_version
+
+    head = f"version: {skill_version.installed()}"
     repairs = [f for f in findings if f["level"] == "repair"]
     if not findings:
-        return "state: clean"
-    lines = [f"state: {len(repairs)} to repair, {len(findings) - len(repairs)} informational"]
+        return head + "\nstate: clean"
+    lines = [head, f"state: {len(repairs)} to repair, {len(findings) - len(repairs)} informational"]
     for f in findings:
         lines.append(f"{'REPAIR' if f['level'] == 'repair' else 'INFO  '} {f['code']} | {f['subject']} | {f['detail']}")
         lines.append(f"       -> {f['repair']}")
