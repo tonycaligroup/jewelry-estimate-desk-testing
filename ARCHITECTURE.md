@@ -381,6 +381,22 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.9.0 (built 6 September 2026): more than one piece in one email.**
+MULTI-PIECE-PLAN.md, all six batches. The specification may carry
+`pieces` (two or more objects, each with its own fields; shared facts at
+the top level), read by the extractor and dropped under two.
+`estimate_record.pieces_of` is the one place the merge rule lives. The
+gate names missing fields `pieces.<i>.<field>`; the follow-up asks under
+each piece; the cost skeleton has a metal line, a labor line, and stone
+lines per piece with the piece in every label; the quantities call answers
+per piece; `price` fills line by line (and refuses the flat arguments on a
+multi-piece sheet); missing rates are asked once per rate; the summary,
+card title, assumptions, and estimate email name each piece with one
+total; renderings are one plan and two views per piece on four slots, a
+matching set shares its design language, previews and the checker name
+the piece, and the reply carries up to four images. One piece is unchanged
+on every path; the two-piece scenario runs the whole way to a booking.
+
 **4.8.5 (built 5 September 2026): every customer email carries an HTML
 part.** A phone's mail app broke plain-text paragraphs into ragged lines
 that the desk had not written. `gmail_reply.build_reply` now sends

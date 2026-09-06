@@ -39,6 +39,10 @@ without saying what metal, what size, or what stone, I email them those
 questions. **No prices.** Just the questions, so they are answering while
 you are still at the bench.
 
+If a customer asks for two pieces in one email, say an engagement ring in
+one size and a band in another, you get one card with a line for each
+piece and one total, and the renderings show each piece.
+
 For meetings, you tell me your hours once ("weekdays 10 to 5, half an
 hour each") and I check your actual calendar every time, so I cannot put
 two people in the same slot. When a customer names a time that is free,

@@ -1948,5 +1948,19 @@ class TwoPieceTests(SideBranchTests):
             self.execute(ws, world, render["payload"]["execute"], render)
             self.assertEqual(len(world.sent[-1]["attachments"]), 4)
             self.assertEqual(self.claim(ws, "t2")["status"], "processed")
+            # And a meeting, booked as usual, with the summary naming both pieces.
+            wanted = next_weekday(2, 14, 0)
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+            world.customer_message("t3", "thread-two", f"Could we meet {wanted.strftime('%A')} at 2 to see them?\n\nPat")
+            self.tick(ws, world)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking", book["payload"])
+            self.assertIn("engagement ring", book["payload"]["piece"])
+            self.assertIn("wedding band", book["payload"]["piece"])
+            result = self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(result["outcome"], "appointment_booked", result)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertEqual(len([n for n in world.notices if not n["file"]]), 0, "no question needed along the way")
         self.run_branch(branch)
 

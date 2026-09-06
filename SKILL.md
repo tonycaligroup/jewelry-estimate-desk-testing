@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.8.5
+version: 4.9.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -417,7 +417,11 @@ confirmation says the design gets settled at the meeting, and pricing picks
 up whenever the details arrive, by email or after the visit. Every customer
 email reads as the jeweler writing back: it reacts to what the customer
 shared, asks for everything still missing in one short list, and invites
-them in.
+them in. An email that names more than one object (an engagement ring in
+one size and a band in another) is one estimate with a line per piece:
+each piece has its own size, stones, setting, metal and labor lines,
+and renderings; the card and the estimate carry every piece and one
+total; "matching" means one design language, never one size.
 
 Before sending a retail estimate, require all applicable fields:
 

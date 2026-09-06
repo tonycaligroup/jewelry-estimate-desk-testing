@@ -991,6 +991,8 @@ def price(args: argparse.Namespace) -> dict[str, Any]:
                 lines["stone_lines"].append({"stone": key.replace("_", " ") + tag, "rate_key": key,
                                              "quantity": float(carats), "unit_cost": float(stone_catalog[key]["rate"])})
     else:
+        if len(skeleton.get("pieces") or []) > 1:
+            raise ValueError("this estimate has more than one piece; it is priced per piece by the desk's inline path")
         for value, label in ((args.finished_grams, "finished grams"), (args.bench_hours, "bench hours")):
             if value is None or value <= 0:
                 raise ValueError(f"{label} must be a positive number")

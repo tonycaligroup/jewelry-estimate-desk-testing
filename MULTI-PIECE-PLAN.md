@@ -7,7 +7,13 @@ reads it as one piece. This plan makes the specification a list of pieces
 and follows that list through every consumer, without changing a single
 path a one-piece inquiry takes today.
 
-## 0. The rule
+## 0. Status
+
+Built 6 September 2026 as 4.9.0: all six batches, 481 tests, the one-piece
+suite unchanged, the two-piece scenario end to end (follow-up, price, estimate,
+four renderings, booking), the fault harness unchanged at 84 of 84.
+
+## 0a. The rule
 
 A customer who names more than one object gets one estimate with one price
 and one card, in which every piece is its own line: its own type, size,
