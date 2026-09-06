@@ -381,6 +381,22 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.10.3 (built 6 September 2026): a meeting request always gets a card when the calendar has room.**
+Live, "next Tuesday at 2pm" asked on a Sunday resolved to a day past the
+7-day offer window; the free/busy query stopped short of it, every
+neighbour fell outside the query too, and the desk asked the owner
+instead of filing a card. `slots.query_horizon_days` now stretches the
+query to a requested day within `book_out_days` (30), so the customer's
+own day is booked when free; and when nothing is free near a requested
+time the desk falls back to the spread of nearest free slots (an offer
+card) before it ever asks. `resolved_times` is kept on the appointment
+intent so the next such case can be read from the work directory. The
+owner's answer to the no-times question (Brief #26) used to close the
+parked claim as a manual review, which the offer executor refused on
+approval ("claim is not in an allowed state"); the answer now files the
+card under the resumed claim and on the record exactly as the tick does,
+and the claim ends processed.
+
 **4.10.2 (built 6 September 2026): a second run is the same outcome, never a question.**
 Live on Brief #25 the session pasted the rendering line before the tick;
 the tick then found the claim finished and raised the failure question.

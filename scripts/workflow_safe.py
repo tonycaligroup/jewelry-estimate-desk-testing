@@ -323,9 +323,14 @@ def _appointment_approval_details(
     monitor_root: Path | None = None,
 ) -> dict[str, Any]:
     if not {"requested_times", "calendar_availability"} <= set(intent) or not set(intent) <= {
-        "requested_times", "calendar_availability", "availability_note", "mode"
+        "requested_times", "resolved_times", "calendar_availability", "availability_note", "mode"
     }:
         raise ValueError("appointment intent contains missing or unsupported fields")
+    resolved_times = intent.get("resolved_times", [])
+    if not isinstance(resolved_times, list) or len(resolved_times) > 3 or any(
+        not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", value) for value in resolved_times
+    ):
+        raise ValueError("resolved_times must contain at most three YYYY-MM-DDTHH:MM strings")
     mode = intent.get("mode") or "offer"
     if mode not in {"book", "offer"}:
         raise ValueError("appointment intent mode must be book or offer")
@@ -2250,15 +2255,29 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
     approver = activation_binding.load(activation_binding.binding_path(p["monitor_root"]))
     approval_path = out_dir / "appointment-approval.json"
     write_private(approval_path, approval)
-    kolo_safe.run_command(
-        kolo_safe.build_request_appointment_approval(estimate_id, approval_path, approver["session_key"]),
-        runner=runner,
-    )
+    parked = _claim_parked(p, message_id)
+    if parked:
+        # The question was asked without a card (the calendar offered
+        # nothing), so this is the message's first card: file it under the
+        # resumed claim and on the record exactly as the tick would have, and
+        # end the claim processed, still the desk's, for the card's executor.
+        # Closing it as a manual review instead (before 4.10.3) made the
+        # executor refuse the approval (6 September 2026, Brief #26).
+        _resume_parked_claim(p, message_id)
+        kolo_safe.request_appointment_approval_claimed(
+            p["claim_root"], message_id, None, f"appointment_approval:{estimate_id}:{message_id}",
+            estimate_id, approval_path, approver["session_key"], runner=runner,
+        )
+        estimate_record.record_appointment_approval_requested(p["record_root"], estimate_id, message_id, approval)
+    else:
+        kolo_safe.run_command(
+            kolo_safe.build_request_appointment_approval(estimate_id, approval_path, approver["session_key"]),
+            runner=runner,
+        )
     _rows, _reasoning, title = kolo_safe.appointment_card(approval, estimate_id)
     _register_brief(p["monitor_root"], "appointment", title, estimate_id, message_id, runner)
-    if _claim_parked(p, message_id):
-        # The question was asked without a card; the card is now filed.
-        _close_parked_claim(p, message_id, "owner_answered_appointment_question")
+    if parked:
+        finish_processed(p["monitor_root"], p["claim_root"], p["record_root"], message_id)
     result.update({"outcome": "offer_card_filed", "options": [o["label"] for o in options[:3]], "piece": piece})
     return result
 

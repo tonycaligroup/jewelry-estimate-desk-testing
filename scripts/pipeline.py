@@ -288,7 +288,7 @@ def appointment_intent(
         asked, resolved = judged["requested_times"], judged.get("resolved_times", [])
     except judge.JudgmentError:
         asked, resolved = [], []
-    intent: dict[str, Any] = {"requested_times": asked, "calendar_availability": []}
+    intent: dict[str, Any] = {"requested_times": asked, "resolved_times": resolved, "calendar_availability": []}
     if not scheduling.get("calendar") or not slots.parse_windows(scheduling):
         intent["availability_note"] = "no calendar or declared windows configured"
         return intent

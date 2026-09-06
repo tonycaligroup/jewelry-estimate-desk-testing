@@ -222,6 +222,23 @@ def spread_slots(slots_in_order: list[dict[str, str]], is_free: Callable[[dict[s
     return found[:MAX_OPTIONS]
 
 
+def query_horizon_days(scheduling: dict[str, Any], requested: list[str], now: datetime) -> int:
+    """Days of calendar to read: the offer window, stretched to a requested day within `book_out_days`."""
+    zone = ZoneInfo(scheduling.get("timezone") or "UTC")
+    days_ahead = int(scheduling.get("meeting_offer_window_days") or 7)
+    book_out = int(scheduling.get("book_out_days") or 30)
+    horizon = days_ahead
+    for text in requested:
+        try:
+            start = datetime.strptime(str(text), "%Y-%m-%dT%H:%M").replace(tzinfo=zone)
+        except (TypeError, ValueError):
+            continue
+        needed = (start.date() - now.astimezone(zone).date()).days + 1
+        if days_ahead < needed <= max(book_out, days_ahead):
+            horizon = max(horizon, needed)
+    return horizon
+
+
 def preferred_slots(scheduling: dict[str, Any], requested: list[str], now: datetime) -> list[dict[str, str]]:
     """The customer's own resolved times as slots, kept only when inside the windows."""
     zone = ZoneInfo(scheduling.get("timezone") or "UTC")
@@ -269,8 +286,11 @@ def offer_times(
     zone = ZoneInfo(scheduling.get("timezone") or "UTC")
     current = (now or datetime.now(tz=zone)).astimezone(zone)
     days_ahead = int(scheduling.get("meeting_offer_window_days") or 7)
+    # A customer who names a day past the offer window (next Tuesday, asked on
+    # a Sunday) is checked on that day, as far out as the shop books.
+    horizon = query_horizon_days(scheduling, requested or [], current)
     time_min = current.replace(second=0, microsecond=0).isoformat()
-    time_max = (current + timedelta(days=days_ahead)).replace(second=0, microsecond=0).isoformat()
+    time_max = (current + timedelta(days=horizon)).replace(second=0, microsecond=0).isoformat()
     kwargs = {"opener": opener} if opener else {}
     receipt = calendar_query.query_freebusy(time_min, time_max, scheduling["timezone"], calendar_id, token, **kwargs)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -301,14 +321,16 @@ def offer_times(
     elif asked:
         # Scenario 3: asked for a time that is taken; offer times around it.
         free = [s for s in neighbour_slots(scheduling, asked[0], current) if is_free(s)][:MAX_OPTIONS]
-    else:
-        # Scenario 2: no time given; offer a spread across the day and the week.
+    if not free and not (force_offer and asked):
+        # Scenario 2: no time given, or nothing free near the one they named;
+        # offer a spread across the nearest days. The owner gets a card
+        # whenever the calendar has any room at all.
         free = spread_slots(all_window_slots(scheduling, current), is_free)
     free.sort(key=lambda s: s["start"])
     (out_dir / "calendar-candidate-slots.json").write_text(json.dumps(free), encoding="utf-8")
     labelled: list[dict[str, Any]] = []
     if free:
-        options = appointment_options.build_options(receipt, free, scheduling["timezone"], days_ahead, now=current)
+        options = appointment_options.build_options(receipt, free, scheduling["timezone"], horizon, now=current)
         calendar_query.write_private(out_dir / "calendar-options.json", options)
         labelled = options["options"]
     return {

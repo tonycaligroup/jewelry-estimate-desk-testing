@@ -889,6 +889,41 @@ class SideBranchTests(GoldenPathTests):
             self.assertEqual([n for n in world.notices if not n["file"]], [], "a card, no ping")
         self.run_branch(branch)
 
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        """6 September 2026: 'next Tuesday at 2pm' asked on a Sunday fell past the 7-day window; the desk offered nothing."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            wanted = next_weekday(9, 14, 0)
+            world.intents = ["appointment_request"]
+            world.requested = ([f"next {wanted.strftime('%A')} at 2pm"], [local_key(wanted)])
+            world.customer_message("s2", thread, f"Can we meet next {wanted.strftime('%A')} at 2pm?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "appointment_booking", card["payload"])
+            self.assertEqual(card["payload"]["calendar_availability"][0]["start"][:16], local_key(wanted))
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "a card, no question")
+        self.run_branch(branch)
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            wanted = next_weekday(2, 14, 0)
+            world.busy.append({"start": wanted.replace(hour=0).isoformat(), "end": wanted.replace(hour=23, minute=59).isoformat()})
+            for offset in range(1, 8):
+                day = wanted + timedelta(days=offset)
+                world.busy.append({"start": (day - timedelta(hours=2)).isoformat(), "end": (day + timedelta(hours=2)).isoformat()})
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+            world.customer_message("s2", thread, f"Can we meet {wanted.strftime('%A')} at 2?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "appointment_offer", card["payload"])
+            starts = [o["start"][:16] for o in card["payload"]["calendar_availability"]]
+            self.assertTrue(starts, card["payload"])
+            self.assertNotIn(local_key(wanted)[:10], [s[:10] for s in starts], "the fully booked day is not offered")
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "a card, no question")
+        self.run_branch(branch)
+
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         def branch(ws: Path, world: World) -> None:
             thread, _estimate_id = self._estimate_sent(ws, world)
@@ -930,6 +965,15 @@ class SideBranchTests(GoldenPathTests):
             self.assertEqual(answered["outcome"], "offer_card_filed", answered)
             self.assertEqual(world.cards[-1]["kind"], "appointment_offer")
             self.assertEqual(len(world.sent), 1, "still nothing sent without approval")
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed", "the card is filed; the claim is the desk's")
+            # 6 September 2026, Brief #26: approving that card must offer the times, not refuse the claim.
+            card = world.cards[-1]
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.sent), 2, "the times were emailed once")
+            self.assertIn(slot.strftime("%A"), world.sent[-1]["body"])
+            self.assertEqual(self.record(ws, estimate_id)["times_offered"][-1]["options"][0]["start"][:16], local_key(slot))
             self.assertIn(self.claim(ws, "s2")["status"], ("processed", "manual_review"))
             self.assertEqual(self.questions(ws, "open")[-1]["kind"], "appointment_next", "the new card's own question waits")
             self.assertEqual(self.tick(ws, world)["claimed"], 0, "nothing left in the queue")
@@ -1024,6 +1068,12 @@ class WindowGateTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
+        pass
+
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
         pass
 
@@ -1113,6 +1163,12 @@ class OwnStoneAndStallTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
         pass
 
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
@@ -1233,6 +1289,12 @@ class MeetingFirstTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
+        pass
+
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
         pass
 
@@ -1315,6 +1377,12 @@ class CombinedIntentTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
+        pass
+
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
         pass
 
@@ -1385,6 +1453,12 @@ class FailureQuestionTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
         pass
 
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
@@ -1492,6 +1566,12 @@ class StuckClaimTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
+        pass
+
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
         pass
 
@@ -1581,6 +1661,12 @@ class DoctorTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
         pass
 
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
@@ -1761,6 +1847,12 @@ class PartialAnswerTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
+        pass
+
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
         pass
 
@@ -1870,6 +1962,12 @@ class TwoPieceTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
         pass
 
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
@@ -1993,6 +2091,12 @@ class DeskExecutesApprovalsTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
         pass
 
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
@@ -2122,6 +2226,12 @@ class SameSenderTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
         pass
 
     def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
