@@ -1915,3 +1915,38 @@ class TwoPieceTests(SideBranchTests):
             self.assertEqual(len(re.findall(r"\$", body)), 1)
             self.assertIn(f"${float(record['proposed_price']):,.2f}", body)
         self.run_branch(branch)
+
+    def test_two_pieces_render_two_views_each_on_one_card_and_send_four(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {"metal": "yellow gold", "metal_karat": "14k", "notes": "a matching set", "pieces": [
+                {"piece_type": "engagement ring", "finger_size": "6", "stone_type": "diamond", "stone_origin": "lab-grown",
+                 "stone_carat": "2", "stone_shape": "round", "stone_color": "F", "stone_clarity": "VS1", "setting_style": "solitaire",
+                 "center_stone": "yes"},
+                {"piece_type": "wedding band", "finger_size": "10", "notes": "plain, polished, no stones"},
+            ]}
+            world.customer_message("t1", "thread-two", "A matching set: 14k yellow gold engagement ring, size 6, 2 ct round lab-grown "
+                                   "solitaire, and a plain band, size 10.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            card = world.cards[-1]
+            self.execute(ws, world, card["payload"]["execute"], card)
+            world.intents = ["rendering_request"]
+            world.customer_message("t2", "thread-two", "Could you show me renderings of both?\n\nPat", attachments=("logo.png",))
+            self.tick(ws, world)
+            render = world.cards[-1]
+            self.assertEqual(render["kind"], "send_rendering", render)
+            self.assertEqual(len(render["payload"]["images"]), 4, render["payload"])
+            self.assertIn("engagement ring", render["details"]["Checker"])
+            self.assertIn("wedding band", render["details"]["Checker"])
+            previews = [n for n in world.notices if n["file"]]
+            self.assertEqual(len(previews), 4)
+            self.assertIn("(engagement ring)", previews[0]["text"])
+            self.assertIn("(wedding band)", previews[-1]["text"])
+            self.assertEqual(len(world.renders), 4, "two views per piece, no more")
+            self.assertTrue(any("matching set" in flag(argv, "--prompt") for argv in world.renders), "the set flag reaches the render prompts")
+            self.execute(ws, world, render["payload"]["execute"], render)
+            self.assertEqual(len(world.sent[-1]["attachments"]), 4)
+            self.assertEqual(self.claim(ws, "t2")["status"], "processed")
+        self.run_branch(branch)
+

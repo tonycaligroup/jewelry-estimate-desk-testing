@@ -4333,24 +4333,24 @@ class GmailReplyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "JPEG, PNG, or WebP"):
                 gmail_reply.build_reply(self.route(), "Rendering attached.", image)
 
-    def test_rendering_reply_accepts_two_images_but_not_three(self) -> None:
+    def test_rendering_reply_accepts_four_images_but_not_five(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             images = []
-            for index in range(3):
+            for index in range(5):
                 image = Path(directory) / f"rendering-{index}.png"
                 image.write_bytes(b"image-" + str(index).encode("ascii"))
                 images.append(image)
             payload = gmail_reply.build_reply(
-                self.route(), "Two visual illustrations are attached.", images[:2]
+                self.route(), "Four visual illustrations are attached, two per piece.", images[:4]
             )
             padding = "=" * (-len(payload["raw"]) % 4)
             parsed = BytesParser(policy=policy.default).parsebytes(
                 base64.urlsafe_b64decode(payload["raw"] + padding)
             )
-            self.assertEqual(len(list(parsed.iter_attachments())), 2)
-            with self.assertRaisesRegex(ValueError, "at most two"):
+            self.assertEqual(len(list(parsed.iter_attachments())), 4)
+            with self.assertRaisesRegex(ValueError, "at most four"):
                 gmail_reply.build_reply(
-                    self.route(), "Three illustrations are attached.", images
+                    self.route(), "Five illustrations are attached.", images
                 )
 
     def test_missing_original_thread_is_rejected(self) -> None:

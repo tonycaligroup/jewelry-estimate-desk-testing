@@ -1726,8 +1726,8 @@ def record_rendering_sent(
     source_message_id = validate_provider_id(source_message_id, "source_message_id")
     if not reply_body.strip():
         raise ValueError("rendering reply body must not be empty")
-    if not image_paths or len(image_paths) > 2:
-        raise ValueError("rendering delivery requires one or two images")
+    if not image_paths or len(image_paths) > 4:
+        raise ValueError("rendering delivery requires one to four images")
     image_bytes = [path.read_bytes() for path in image_paths]
     if any(not value for value in image_bytes):
         raise ValueError("rendering images must not be empty")

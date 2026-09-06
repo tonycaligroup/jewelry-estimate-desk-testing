@@ -1722,7 +1722,8 @@ RENDERING_NOTE = (
 
 
 def _rendering_images(paths: dict[str, str]) -> list[Path]:
-    return [Path(paths[key]) for key in ("rendering_image_1", "rendering_image_2") if Path(paths[key]).exists()]
+    return [Path(paths[key]) for key in ("rendering_image_1", "rendering_image_2", "rendering_image_3", "rendering_image_4")
+            if key in paths and Path(paths[key]).exists()]
 
 
 def _sha256_file(path: Path) -> str:
@@ -1772,10 +1773,18 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
         )
     except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
         pass
+    labels: dict[int, str] = {}
+    try:
+        report = read_object(Path(paths["work_dir"]) / "rendering-report.json")
+        if len(report.get("pieces") or []) > 1:
+            labels = {int(v["slot"]): str(v.get("piece") or "") for v in report.get("views") or []}
+    except (OSError, ValueError, KeyError, TypeError):
+        labels = {}
     for index, image in enumerate(images, start=1):
+        which = f" ({labels[index]})" if labels.get(index) else ""
         kolo_safe.send_owner_preview(
             args.monitor_root,
-            f"Rendering {index} of {len(images)} for {customer}'s {piece}. An approval card follows; "
+            f"Rendering {index} of {len(images)}{which} for {customer}'s {piece}. An approval card follows; "
             "approve it to email these to the customer.",
             image, runner=runner,
         )

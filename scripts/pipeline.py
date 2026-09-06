@@ -218,7 +218,7 @@ def render_and_send(
     except Exception:  # noqa: BLE001 - artwork is a bonus; a render without it still goes to the owner
         art = None
     try:
-        report = rendering.run(
+        report = rendering.run_pieces(
             record.get("specification") or {}, work_dir / "renders", openclaw, artwork=art,
             context=judge.thread_text(gmail_text.thread_digest(thread, message_id)) if thread else "",
             model=model, runner=command_runner,
@@ -226,13 +226,15 @@ def render_and_send(
     except judge.JudgmentError as exc:
         raise ValueError(f"rendering plan failed: {exc}") from exc
     images: list[Path] = []
-    for view in report["views"][:2]:
+    for view in report["views"][:4]:
         materialized = rendering_materialize.materialize(
             p["monitor_root"], p["claim_root"], message_id, Path(view["image"]), view["slot"]
         )
         images.append(Path(str(materialized["path"])))
+    multi = len(report.get("pieces") or []) > 1
     checker = "; ".join(
-        f"view {v['slot']} " + ("passed" if v["passed"] else "failed " + ", ".join(v["failed"])) + f" ({v['attempts']} attempt{'s' if v['attempts'] != 1 else ''})"
+        f"view {v['slot']}" + (f" ({v.get('piece')})" if multi else "") + " "
+        + ("passed" if v["passed"] else "failed " + ", ".join(v["failed"])) + f" ({v['attempts']} attempt{'s' if v['attempts'] != 1 else ''})"
         for v in report["views"]
     )
     workflow_safe.write_private(work_dir / "rendering-report.json", report)
@@ -242,7 +244,8 @@ def render_and_send(
     return workflow_safe.request_rendering_approval(argparse.Namespace(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
-        runner=command_runner, checker=checker, archetype=report["plan"]["archetype"],
+        runner=command_runner, checker=checker,
+        archetype=", ".join(dict.fromkeys(p["plan"]["archetype"] for p in report.get("pieces") or [{"plan": report["plan"]}])),
     ))
 
 

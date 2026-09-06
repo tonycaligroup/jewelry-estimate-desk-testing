@@ -112,8 +112,8 @@ def build_reply(
         if isinstance(attachment, Path)
         else list(attachment)
     )
-    if len(attachments) > 2:
-        raise ValueError("a rendering reply may contain at most two images")
+    if len(attachments) > 4:
+        raise ValueError("a rendering reply may contain at most four images")
     for index, image in enumerate(attachments, start=1):
         content_type, encoding = mimetypes.guess_type(image.name)
         if encoding is not None or content_type not in {

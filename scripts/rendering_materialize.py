@@ -44,8 +44,8 @@ def materialize(
     slot: int,
     media_root: Path | None = None,
 ) -> dict[str, str | int]:
-    if slot not in {1, 2}:
-        raise ValueError("rendering slot must be 1 or 2")
+    if slot not in {1, 2, 3, 4}:
+        raise ValueError("rendering slot must be 1 to 4")
     # Two trusted sources: a file the Kolo image tool put in its media root,
     # or a file the desk itself rendered into its private work directory.
     media_root_input = media_root or default_media_root()
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--claim-root", type=Path, required=True)
     parser.add_argument("--message-id", required=True)
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--slot", type=int, choices=(1, 2), required=True)
+    parser.add_argument("--slot", type=int, choices=(1, 2, 3, 4), required=True)
     args = parser.parse_args(argv)
     try:
         print(json.dumps(materialize(

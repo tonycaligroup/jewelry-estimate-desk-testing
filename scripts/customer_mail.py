@@ -139,7 +139,8 @@ KIND_BRIEFS = {
     "rendering": (
         "Send the attached design renderings. Say they illustrate the design direction discussed, that the "
         "written specification and the final design they approve control the finished piece, and that they can "
-        "reply with anything they would like changed. No prices."
+        "reply with anything they would like changed. When the facts name more than one piece, say which views "
+        "show which piece. No prices."
     ),
 }
 

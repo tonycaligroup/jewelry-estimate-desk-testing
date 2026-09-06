@@ -207,6 +207,54 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
             "raw": text[:600]}
 
 
+def run_pieces(
+    specification: dict[str, Any],
+    out_dir: Path,
+    openclaw: str = "openclaw",
+    artwork: Path | None = None,
+    context: str = "",
+    model: str | None = None,
+    vision_model: str | None = DEFAULT_VISION_MODEL,
+    image_model: str | None = None,
+    runner: Runner = subprocess.run,
+) -> dict[str, Any]:
+    """One plan and its views per piece (MULTI-PIECE-PLAN.md batch 3); one piece is `run` unchanged.
+
+    Two pieces get two views each; three or four get one each, so a card never
+    carries more than four images. A matching set tells the planner so the
+    pieces share a design language.
+    """
+    import estimate_record  # local import: keeps rendering usable from the lab without the desk
+
+    pieces = estimate_record.pieces_of(specification)
+    if len(pieces) <= 1:
+        report = run(specification, out_dir, openclaw, artwork=artwork, context=context, model=model,
+                     vision_model=vision_model, image_model=image_model, runner=runner)
+        for view in report["views"]:
+            view.setdefault("piece", estimate_record.piece_label(specification, 0))
+        report["pieces"] = [{"label": estimate_record.piece_label(specification, 0), "plan": report["plan"]}]
+        return report
+    views_each = 2 if len(pieces) <= 2 else 1
+    set_note = " The pieces are a matching set: one design language, the same metal finish and motifs, each piece its own size." \
+        if estimate_record.is_set(specification) else ""
+    combined: dict[str, Any] = {"pieces": [], "views": [], "prompts": [], "references": []}
+    slot = 1
+    for index, piece in enumerate(pieces[:4]):
+        label = estimate_record.piece_label(specification, index)
+        one = run({**piece, "notes": (str(piece.get("notes") or "") + set_note).strip()}, out_dir / f"piece-{index + 1}",
+                  openclaw, artwork=artwork, context=context, model=model, vision_model=vision_model,
+                  image_model=image_model, runner=runner, views=views_each)
+        combined["pieces"].append({"label": label, "plan": one["plan"]})
+        combined["prompts"].extend(one["prompts"])
+        combined["references"] = one["references"]
+        for view in one["views"]:
+            combined["views"].append({**view, "slot": slot, "piece": label})
+            slot += 1
+    combined["plan"] = combined["pieces"][0]["plan"]
+    combined["all_passed"] = all(v["passed"] for v in combined["views"])
+    return combined
+
+
 def run(
     specification: dict[str, Any] | str,
     out_dir: Path,
@@ -219,6 +267,7 @@ def run(
     image_model: str | None = None,
     runner: Runner = subprocess.run,
     max_regenerations: int = 1,
+    views: int = 2,
 ) -> dict[str, Any]:
     """Plan, render two views, check each, regenerate a failing one once. Returns the report."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -236,7 +285,7 @@ def run(
         refs.append(Path(artwork))
     if arch.get("exemplar"):
         refs.append(Path(arch["exemplar"]))
-    prompts = build_prompts(plan, specification, artwork is not None, bool(arch.get("exemplar")))
+    prompts = build_prompts(plan, specification, artwork is not None, bool(arch.get("exemplar")))[:max(1, views)]
     report: dict[str, Any] = {"plan": plan, "prompts": prompts, "references": [str(r) for r in refs], "views": []}
 
     def one_view(slot: int, prompt: str) -> dict[str, Any]:
