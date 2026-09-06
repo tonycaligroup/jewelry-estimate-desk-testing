@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable
 
 import cost_components
+import estimate_record
 
 DEFAULT_MODEL = "litellm-fireworks/qwen-3-7-plus"
 CALL_TIMEOUT_SECONDS = 90
@@ -667,6 +668,46 @@ def check_quantities(value: dict[str, Any], fee_catalog: list[str], stone_catalo
     return result
 
 
+def check_piece_quantities(value: dict[str, Any], pieces: list[dict[str, Any]], fee_catalog: list[str],
+                           stone_catalog: list[str]) -> dict[str, Any]:
+    raw = value.get("pieces")
+    if not isinstance(raw, list) or len(raw) != len(pieces):
+        raise ValueError(f"pieces must be a list of exactly {len(pieces)} objects, one per piece in order")
+    checked = []
+    for info, item in zip(pieces, raw):
+        if not isinstance(item, dict):
+            raise ValueError("each piece is an object")
+        one = check_quantities(item, fee_catalog, stone_catalog, bool(info.get("needs_carat")), str(info.get("stone_origin") or ""))
+        one["label"] = str(info.get("label"))
+        checked.append(one)
+    return {"pieces": checked}
+
+
+def choose_quantities_per_piece(
+    specification: dict[str, Any], pieces: list[dict[str, Any]], fee_catalog: list[str], stone_catalog: list[str],
+    typical_weights: dict[str, Any], model: str | None, runner: Runner, openclaw: str | None,
+) -> dict[str, Any]:
+    """One call, one set of numbers per piece (MULTI-PIECE-PLAN.md batch 2)."""
+    merged = estimate_record.pieces_of(specification)
+    menu = [{"label": info["label"], "specification": merged[i] if i < len(merged) else {},
+             "center_carat_needed": bool(info.get("needs_carat"))} for i, info in enumerate(pieces)]
+    prompt = (
+        "You are an experienced bench jeweler estimating quantities for a price quote, deliberately on the "
+        "high side so the shop is never underpaid. This order has more than one piece; give one set of "
+        "numbers per piece, in the order listed. Answer with one JSON object only: "
+        '{"pieces": [{"finished_grams": <number>, "bench_hours": <number>, "center_carat": <number, only where '
+        'center_carat_needed is true>, "fees": [<catalog keys that apply to this piece>], '
+        '"accents": [{"key": <stone catalog key>, "carats": <total carats>}]}, ...]}.\n'
+        "finished_grams: finished metal weight of that piece"
+        + (f"; the shop's typical finished weights by piece type are {json.dumps(typical_weights)}" if typical_weights else "")
+        + ".\nbench_hours: bench labor hours for that piece.\n"
+        f"fees: choose only from these catalog keys, per piece, including every one that piece needs: {fee_catalog}.\n"
+        f"accents: accent or melee stones only if that piece has them, using only these catalog keys: {stone_catalog}; otherwise an empty list.\n\n"
+        f"PIECES TO QUANTIFY: {json.dumps(menu, sort_keys=True)}"
+    )
+    return ask_json(prompt, lambda value: check_piece_quantities(value, pieces, fee_catalog, stone_catalog), model, runner, openclaw)
+
+
 def choose_quantities(
     specification: dict[str, Any],
     fill: dict[str, str],
@@ -676,8 +717,11 @@ def choose_quantities(
     model: str | None = None,
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
+    pieces: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The few numbers a bench jeweler would estimate before pricing, on the high side."""
+    if pieces and len(pieces) > 1:
+        return choose_quantities_per_piece(specification, pieces, fee_catalog, stone_catalog, typical_weights, model, runner, openclaw)
     needs_carat = any(key.startswith("stone_lines[0].quantity") for key in fill)
     metal = cost_components.extract_metal(specification)
     stone = cost_components.extract_center_stone(specification)

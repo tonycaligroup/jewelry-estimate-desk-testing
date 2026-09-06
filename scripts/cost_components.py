@@ -289,6 +289,15 @@ def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[
     if not isinstance(pricing, dict):
         raise ValueError("shop profile is missing its pricing block")
     missing: list[dict[str, Any]] = []
+    for index, piece in enumerate(estimate_record.pieces_of(specification)):
+        for item in _missing_rates_for_piece(piece, index, pricing):
+            if not any(m["rate_kind"] == item["rate_kind"] and m["suggested_key"] == item["suggested_key"] for m in missing):
+                missing.append(item)
+    return missing
+
+
+def _missing_rates_for_piece(specification: dict[str, Any], index: int, pricing: dict[str, Any]) -> list[dict[str, Any]]:
+    missing: list[dict[str, Any]] = []
     metal = extract_metal(specification)
     if metal["metal"] is not None and not _spot_enabled(pricing):
         required = {metal["metal"]}
@@ -306,7 +315,7 @@ def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[
             ]
             missing.append({
                 "rate_kind": "metal_per_gram",
-                "line": "metal_lines[0]",
+                "line": f"metal_lines[{index}]",
                 "suggested_key": "_".join(part for part in parts if part),
                 "description": metal["description"] or metal["metal"],
                 "candidates": candidates,
@@ -326,7 +335,7 @@ def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[
             )
             missing.append({
                 "rate_kind": "stones_per_carat",
-                "line": "stone_lines[0]",
+                "line": f"stone_lines[{index}]",
                 "suggested_key": "_".join([*origin, stone["stone_type"]]),
                 "description": " ".join(w for w in (words, stone["stone_type"]) if w),
                 "candidates": candidates,
@@ -443,95 +452,109 @@ def prepare(
     fill: dict[str, str] = {}
     unresolved: list[dict[str, Any]] = []
     spot_enabled = _spot_enabled(pricing)
-
-    metal = extract_metal(specification)
-    metal_line: dict[str, Any] = {
-        "metal": metal["description"] or "metal (describe)",
-        "rate_key": None,
-        "quantity_grams": None,
-        "unit_cost": None,
-    }
-    if metal["metal"] is None:
-        unresolved.append({
-            "line": "metal_lines[0]",
-            "reason": "no precious metal found in the specification",
-        })
-    elif spot_enabled:
-        spot_price = _require_spot_evidence(spot_evidence, metal["metal"])
-        if metal["purity"] is None:
-            unresolved.append({
-                "line": "metal_lines[0]",
-                "reason": f"karat or purity for {metal['metal']} is not in the specification",
-            })
-        else:
-            metal_line.update({
-                "rate_key": metal["metal"],
-                "spot_price_per_gram": spot_price,
-                "purity": metal["purity"],
-                "unit_cost": round(spot_price * metal["purity"], 2),
-            })
-    else:
-        required = {metal["metal"]}
-        preferred: set[str] = set()
-        if metal["karat"]:
-            preferred |= {f"{metal['karat']}k", str(metal["karat"])}
-        if metal["color"]:
-            preferred.add(metal["color"])
-        key, candidates = match_rate_key(pricing.get("metal_per_gram"), required, preferred)
-        if key is None:
-            unresolved.append({
-                "line": "metal_lines[0]",
-                "reason": "no single metal_per_gram rate matches the specification",
-                "candidates": candidates,
-            })
-        else:
-            metal_line["rate_key"] = key
-            metal_line["unit_cost"] = float(pricing["metal_per_gram"][key])
-    weights = pricing.get("typical_finished_weights")
-    piece = str(specification.get("piece_type") or "").lower()
-    if isinstance(weights, dict) and piece and isinstance(weights.get(piece), (int, float)) and not isinstance(weights.get(piece), bool):
-        metal_line["quantity_grams"] = float(weights[piece])
-        fill["metal_lines[0].quantity_grams"] = (
-            f"prefilled {weights[piece]} g from typical_finished_weights.{piece}; "
-            "adjust only if this design differs"
-        )
-    else:
-        fill["metal_lines[0].quantity_grams"] = "finished grams of metal, estimated high"
-
-    stone = extract_center_stone(specification)
+    pieces = estimate_record.pieces_of(specification)
+    multi = len(pieces) > 1
+    metal_lines: list[dict[str, Any]] = []
     stone_lines: list[dict[str, Any]] = []
-    if stone["stone_type"] is not None:
-        stone_line: dict[str, Any] = {
-            "stone": stone["description"] or stone["stone_type"],
+    labor_lines: list[dict[str, Any]] = []
+    piece_map: list[dict[str, Any]] = []
+    for index, piece in enumerate(pieces):
+        label = estimate_record.piece_label(specification, index) if multi else ""
+        tag = f" ({label})" if multi else ""
+        this = "this piece" if not multi else f"the {label}"
+        metal = extract_metal(piece)
+        metal_line: dict[str, Any] = {
+            "metal": (metal["description"] or "metal (describe)") + tag,
             "rate_key": None,
-            "quantity": stone["carat"],
+            "quantity_grams": None,
             "unit_cost": None,
         }
-        preferred = set(stone["origin"] or ())
-        key, candidates = match_rate_key(
-            center_stone_card(pricing.get("stones_per_carat")), {stone["stone_type"]}, preferred
-        )
-        if key is None:
-            unresolved.append({
-                "line": "stone_lines[0]",
-                "reason": "no single stones_per_carat rate matches the center stone",
-                "candidates": candidates,
-            })
+        m = f"metal_lines[{index}]"
+        if metal["metal"] is None:
+            unresolved.append({"line": m, "reason": f"no precious metal found in the specification{tag}"})
+        elif spot_enabled:
+            spot_price = _require_spot_evidence(spot_evidence, metal["metal"])
+            if metal["purity"] is None:
+                unresolved.append({"line": m, "reason": f"karat or purity for {metal['metal']} is not in the specification{tag}"})
+            else:
+                metal_line.update({
+                    "rate_key": metal["metal"],
+                    "spot_price_per_gram": spot_price,
+                    "purity": metal["purity"],
+                    "unit_cost": round(spot_price * metal["purity"], 2),
+                })
         else:
-            stone_line["rate_key"] = key
-            stone_line["unit_cost"] = float(pricing["stones_per_carat"][key])
-        if stone["carat"] is None:
-            fill["stone_lines[0].quantity"] = "center stone carat weight"
-        stone_lines.append(stone_line)
+            required = {metal["metal"]}
+            preferred: set[str] = set()
+            if metal["karat"]:
+                preferred |= {f"{metal['karat']}k", str(metal["karat"])}
+            if metal["color"]:
+                preferred.add(metal["color"])
+            key, candidates = match_rate_key(pricing.get("metal_per_gram"), required, preferred)
+            if key is None:
+                unresolved.append({"line": m, "reason": f"no single metal_per_gram rate matches the specification{tag}",
+                                   "candidates": candidates})
+            else:
+                metal_line["rate_key"] = key
+                metal_line["unit_cost"] = float(pricing["metal_per_gram"][key])
+        weights = pricing.get("typical_finished_weights")
+        kind = str(piece.get("piece_type") or "").lower()
+        if isinstance(weights, dict) and kind and isinstance(weights.get(kind), (int, float)) and not isinstance(weights.get(kind), bool):
+            metal_line["quantity_grams"] = float(weights[kind])
+            fill[f"{m}.quantity_grams"] = (
+                f"prefilled {weights[kind]} g from typical_finished_weights.{kind}; "
+                "adjust only if this design differs"
+            )
+        else:
+            fill[f"{m}.quantity_grams"] = f"finished grams of metal, estimated high" + (f", for {this}" if multi else "")
+        metal_lines.append(metal_line)
 
-    if stone["stone_type"] is None and not (
-        estimate_record.customer_supplies_stone(specification) and not specification.get("accent_stones")
-    ):
-        for need in missing_accent_rates(specification, pricing):
-            unresolved.append({"line": need["line"], "reason": f"no stones_per_carat rate for {need['description']}",
-                               "candidates": need.get("candidates", [])})
-    labor_line = {"task": "bench labor", "hours": None, "rate": float(bench)}
-    fill["labor_lines[0].hours"] = "bench hours for this piece, estimated high"
+        stone = extract_center_stone(piece)
+        center_index = None
+        if stone["stone_type"] is not None:
+            stone_line: dict[str, Any] = {
+                "stone": (stone["description"] or stone["stone_type"]) + tag,
+                "rate_key": None,
+                "quantity": stone["carat"],
+                "unit_cost": None,
+            }
+            preferred = set(stone["origin"] or ())
+            key, candidates = match_rate_key(
+                center_stone_card(pricing.get("stones_per_carat")), {stone["stone_type"]}, preferred
+            )
+            center_index = len(stone_lines)
+            sl = f"stone_lines[{center_index}]"
+            if key is None:
+                unresolved.append({"line": sl, "reason": f"no single stones_per_carat rate matches the center stone{tag}",
+                                   "candidates": candidates})
+            else:
+                stone_line["rate_key"] = key
+                stone_line["unit_cost"] = float(pricing["stones_per_carat"][key])
+            if stone["carat"] is None:
+                fill[f"{sl}.quantity"] = "center stone carat weight" + (f" for {this}" if multi else "")
+            stone_lines.append(stone_line)
+
+        if stone["stone_type"] is None and not (
+            estimate_record.customer_supplies_stone(piece) and not piece.get("accent_stones")
+        ):
+            for need in missing_accent_rates(piece, pricing):
+                unresolved.append({"line": need["line"], "reason": f"no stones_per_carat rate for {need['description']}{tag}",
+                                   "candidates": need.get("candidates", [])})
+        labor_lines.append({"task": "bench labor" + tag, "hours": None, "rate": float(bench)})
+        fill[f"labor_lines[{index}].hours"] = "bench hours for this piece, estimated high" if not multi else f"bench hours for {this}, estimated high"
+        piece_map.append({"index": index, "label": label or kind or "piece", "metal_line": index, "labor_line": index,
+                          "center_stone_line": center_index, "needs_carat": center_index is not None and stone["carat"] is None,
+                          "stone_origin": str(piece.get("stone_origin") or "")})
+    # The same missing rate for two pieces is one question, not two.
+    seen: set[str] = set()
+    deduped = []
+    for item in unresolved:
+        key = item["reason"].split(" (")[0] + "|" + json.dumps(item.get("candidates", []), sort_keys=True)
+        if key in seen and multi:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    unresolved = deduped
 
     skeleton: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -540,11 +563,12 @@ def prepare(
         "specification": specification,
         "proposed_price": None,
         "cost_components": {
-            "metal_lines": [metal_line],
+            "metal_lines": metal_lines,
             "stone_lines": stone_lines,
-            "labor_lines": [labor_line],
+            "labor_lines": labor_lines,
             "other_hard_cost_lines": [],
         },
+        "pieces": piece_map,
         "fill": fill,
         "unresolved": unresolved,
         "fee_catalog": [

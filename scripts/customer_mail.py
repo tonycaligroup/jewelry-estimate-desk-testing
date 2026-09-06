@@ -115,7 +115,8 @@ KIND_BRIEFS = {
         "that the final price often comes in lower and any saving is passed to them, and that nothing is "
         "committed until they approve the final design. Mention the lead time if one is given, and the date "
         "the estimate is good through. Invite them to reply to set up a time to go over the design. Do not "
-        "list the specification back to them line by line; refer to the piece naturally."
+        "list the specification back to them line by line; refer to the piece naturally. When the facts say "
+        "there is more than one piece, name each piece in a sentence and give the one total for all of them."
     ),
     "confirmation": (
         "Confirm the appointment at exactly the time given (write the time exactly as provided). Say a calendar "

@@ -202,6 +202,11 @@ def summary_of_piece(specification: Any) -> str:
     import cost_components  # local import; cost_components does not depend on this module
 
     spec = specification if isinstance(specification, dict) else {}
+    import estimate_record  # local import; estimate_record does not depend on this module
+
+    pieces = estimate_record.pieces_of(spec)
+    if len(pieces) > 1:
+        return " and ".join(summary_of_piece(piece) for piece in pieces)
     piece = str(spec.get("piece_type") or "").strip().lower()
     metal = cost_components.extract_metal(spec)
     stone = cost_components.extract_center_stone(spec)

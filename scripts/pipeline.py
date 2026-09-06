@@ -483,14 +483,21 @@ def _price_after_review(
     chosen = judge.choose_quantities(
         specification, reviewed["fill"], reviewed["fee_catalog"], reviewed["stone_catalog"],
         reviewed.get("typical_finished_weights") or {}, model, judge_runner, openclaw,
+        pieces=reviewed.get("pieces") or None,
     )
-    priced = workflow_safe.price(_namespace(
-        p, message_id, estimate_id,
-        finished_grams=chosen["finished_grams"], bench_hours=chosen["bench_hours"],
-        center_carat=chosen.get("center_carat"), fees=chosen["fees"],
-        accents=[f"{a['key']}:{a['carats']}" for a in chosen["accents"]],
-        runner=command_runner, judge_runner=judge_runner,
-    ))
+    if "pieces" in chosen:
+        priced = workflow_safe.price(_namespace(
+            p, message_id, estimate_id, finished_grams=None, bench_hours=None, center_carat=None, fees=[], accents=[],
+            pieces=chosen["pieces"], runner=command_runner, judge_runner=judge_runner,
+        ))
+    else:
+        priced = workflow_safe.price(_namespace(
+            p, message_id, estimate_id,
+            finished_grams=chosen["finished_grams"], bench_hours=chosen["bench_hours"],
+            center_carat=chosen.get("center_carat"), fees=chosen["fees"],
+            accents=[f"{a['key']}:{a['carats']}" for a in chosen["accents"]],
+            runner=command_runner, judge_runner=judge_runner,
+        ))
     return {"outcome": "approval_requested", "proposed_price": priced.get("proposed_price"), "next": "done"}
 
 

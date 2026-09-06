@@ -387,6 +387,19 @@ class World:
             return {"requested_times": list(self.requested[0]), "resolved_times": list(self.requested[1])}
         if "A jewelry shop owner wrote when they could meet" in prompt:
             return {"requested_times": ["the owner's times"], "resolved_times": list(self.owner_times)}
+        if "PIECES TO QUANTIFY:" in prompt:
+            menu = json.loads(prompt.split("PIECES TO QUANTIFY: ", 1)[1])
+            out = []
+            for entry in menu:
+                one = self.quantities(prompt)
+                one["finished_grams"] = 4.0 if "band" in entry["label"] else 5.5
+                one["bench_hours"] = 2.0 if "band" in entry["label"] else 4.0
+                spec_words = json.dumps(entry["specification"]).lower()
+                one["accents"] = [a for a in one["accents"] if "lab_grown" in a["key"] and "lab-grown" in spec_words and "accent" in spec_words]
+                if entry.get("center_carat_needed"):
+                    one["center_carat"] = 1.0
+                out.append(one)
+            return {"pieces": out}
         if "estimating quantities for a price quote" in prompt:
             return self.quantities(prompt)
         if "You plan a product rendering" in prompt:
@@ -1828,3 +1841,77 @@ class MultiPieceReadingTests(unittest.TestCase):
         self.assertIn("For the wedding band, what ring size?", fallback)
         # one piece: bare names, as before
         self.assertEqual(spec_gate.missing_required_fields({"piece_type": "wedding band", "metal": "14k yellow gold"}, profile), ["finger_size"])
+
+
+class TwoPieceTests(SideBranchTests):
+    """MULTI-PIECE-PLAN.md batch 2: a ring and a band in one email, one estimate with a line per piece."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def _profile_with_rates(self, ws: Path) -> None:
+        profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+        profile["pricing"]["stones_per_carat"]["lab_grown_diamond"] = 900.0
+        profile["pricing"]["typical_finished_weights"].update({"engagement ring": 5.0, "wedding band": 4.0})
+        (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+
+    def test_ring_and_band_are_asked_priced_and_written_as_two_pieces(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {"metal": "yellow gold", "metal_karat": "14k", "pieces": [
+                {"piece_type": "engagement ring", "stone_type": "diamond", "stone_origin": "lab-grown", "stone_carat": "2",
+                 "stone_shape": "round", "stone_color": "F", "stone_clarity": "VS1", "setting_style": "solitaire", "center_stone": "yes"},
+                {"piece_type": "wedding band", "notes": "plain, polished, no stones"},
+            ]}
+            world.customer_message("t1", "thread-two", "A 14k yellow gold engagement ring with a 2 ct round lab-grown diamond solitaire, "
+                                   "and a plain 14k yellow gold wedding band.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            asked = [p for p in world.prompts if "MISSING DETAILS TO ASK FOR" in p][-1]
+            self.assertIn("engagement ring: finger size", asked)
+            self.assertIn("wedding band: finger size", asked)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(sorted(record["missing_required_fields"]), ["pieces.0.finger_size", "pieces.1.finger_size"])
+            # Both sizes come back: one card, two lines each for metal and labor, one total.
+            world.spec["pieces"][0]["finger_size"] = "6"
+            world.spec["pieces"][1]["finger_size"] = "10"
+            world.customer_message("t2", "thread-two", "The ring is a size 6 and the band a size 10.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"]], [])
+            card = world.cards[-1]
+            self.assertIn("engagement ring", card["title"])
+            self.assertIn("wedding band", card["title"])
+            self.assertRegex(card["title"], r"bench labor \(engagement ring\)")
+            self.assertRegex(card["title"], r"bench labor \(wedding band\)")
+            record = self.record(ws, self.only_estimate(ws))
+            review = record.get("owner_review") or card["payload"].get("owner_review") or {}
+            metal_lines = review.get("metal_costs") or card["payload"].get("owner_review", {}).get("metal_costs") or []
+            self.assertEqual(len(metal_lines), 2, review or card["payload"])
+            expected_cost = 5.5 * 65 + 4.0 * 65 + 1 * 0 + 4.0 * 90 + 2.0 * 90 + 2 * 900 + 2 * (120 + 80)
+            self.assertAlmostEqual(float(review.get("hard_cost_total") or card["payload"]["owner_review"]["hard_cost_total"]), expected_cost, places=2)
+            # The approval sends one estimate naming both pieces with one price.
+            result = self.execute(ws, world, card["payload"]["execute"], card)
+            self.assertEqual(result["outcome"], "estimate_sent", result)
+            body = world.sent[-1]["body"]
+            self.assertEqual(len(re.findall(r"\$", body)), 1)
+            self.assertIn(f"${float(record['proposed_price']):,.2f}", body)
+        self.run_branch(branch)

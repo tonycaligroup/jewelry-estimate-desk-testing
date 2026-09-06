@@ -938,6 +938,7 @@ def review_thread(args: argparse.Namespace) -> dict[str, Any]:
         "fee_catalog": [item["rate_key"] for item in skeleton.get("fee_catalog", [])],
         "stone_catalog": [item["rate_key"] for item in skeleton.get("stone_catalog", [])],
         "typical_finished_weights": pricing.get("typical_finished_weights") or {},
+        "pieces": skeleton.get("pieces") or [],
     }
 
 
@@ -954,38 +955,72 @@ def price(args: argparse.Namespace) -> dict[str, Any]:
     skeleton = read_object(skeleton_path)
     profile = read_object(args.shop_profile)
     lines = skeleton["cost_components"]
-    for value, label in ((args.finished_grams, "finished grams"), (args.bench_hours, "bench hours")):
-        if value is None or value <= 0:
-            raise ValueError(f"{label} must be a positive number")
-    lines["metal_lines"][0]["quantity_grams"] = float(args.finished_grams)
-    lines["labor_lines"][0]["hours"] = float(args.bench_hours)
-    if lines["stone_lines"]:
-        if lines["stone_lines"][0].get("quantity") is None:
-            if args.center_carat is None or args.center_carat <= 0:
-                raise ValueError("center carat is required for this piece")
-            lines["stone_lines"][0]["quantity"] = float(args.center_carat)
     fee_catalog = {item["rate_key"]: item for item in skeleton.get("fee_catalog", [])}
-    for key in args.fees or []:
-        if key not in fee_catalog:
-            raise ValueError(f"unknown fee '{key}'; choose from the fee catalog")
-        lines["other_hard_cost_lines"].append(dict(fee_catalog[key]))
     stone_catalog = {item["rate_key"]: item for item in skeleton.get("stone_catalog", [])}
-    for spec in args.accents or []:
-        key, _, quantity = spec.partition(":")
-        if key not in stone_catalog:
-            raise ValueError(f"unknown accent stone '{key}'; choose from the stone catalog")
-        try:
-            carats = float(quantity)
-        except ValueError as exc:
-            raise ValueError("accent stones are written as rate_key:total_carats") from exc
-        if carats <= 0:
-            raise ValueError("accent stone carats must be positive")
-        lines["stone_lines"].append({
-            "stone": key.replace("_", " "),
-            "rate_key": key,
-            "quantity": carats,
-            "unit_cost": float(stone_catalog[key]["rate"]),
-        })
+    piece_quantities = getattr(args, "pieces", None)
+    if piece_quantities:
+        # One set of numbers per piece (MULTI-PIECE-PLAN.md): each fills its
+        # own metal and labor line, its center stone if one is open, its fees
+        # and accent stones, all labelled so the card reads per piece.
+        piece_map = skeleton.get("pieces") or []
+        if len(piece_quantities) != len(piece_map):
+            raise ValueError(f"expected quantities for {len(piece_map)} piece(s)")
+        for info, chosen in zip(piece_map, piece_quantities):
+            label = str(info.get("label") or "piece")
+            tag = f" ({label})"
+            for value, name in ((chosen.get("finished_grams"), "finished grams"), (chosen.get("bench_hours"), "bench hours")):
+                if value is None or value <= 0:
+                    raise ValueError(f"{name} must be a positive number for the {label}")
+            lines["metal_lines"][info["metal_line"]]["quantity_grams"] = float(chosen["finished_grams"])
+            lines["labor_lines"][info["labor_line"]]["hours"] = float(chosen["bench_hours"])
+            center = info.get("center_stone_line")
+            if center is not None and lines["stone_lines"][center].get("quantity") is None:
+                if chosen.get("center_carat") is None or chosen["center_carat"] <= 0:
+                    raise ValueError(f"center carat is required for the {label}")
+                lines["stone_lines"][center]["quantity"] = float(chosen["center_carat"])
+            for key in chosen.get("fees") or []:
+                if key not in fee_catalog:
+                    raise ValueError(f"unknown fee '{key}'; choose from the fee catalog")
+                lines["other_hard_cost_lines"].append({**fee_catalog[key], "label": fee_catalog[key]["label"] + tag})
+            for accent in chosen.get("accents") or []:
+                key, carats = accent.get("key"), accent.get("carats")
+                if key not in stone_catalog:
+                    raise ValueError(f"unknown accent stone '{key}'; choose from the stone catalog")
+                if not isinstance(carats, (int, float)) or carats <= 0:
+                    raise ValueError("accent stone carats must be positive")
+                lines["stone_lines"].append({"stone": key.replace("_", " ") + tag, "rate_key": key,
+                                             "quantity": float(carats), "unit_cost": float(stone_catalog[key]["rate"])})
+    else:
+        for value, label in ((args.finished_grams, "finished grams"), (args.bench_hours, "bench hours")):
+            if value is None or value <= 0:
+                raise ValueError(f"{label} must be a positive number")
+        lines["metal_lines"][0]["quantity_grams"] = float(args.finished_grams)
+        lines["labor_lines"][0]["hours"] = float(args.bench_hours)
+        if lines["stone_lines"]:
+            if lines["stone_lines"][0].get("quantity") is None:
+                if args.center_carat is None or args.center_carat <= 0:
+                    raise ValueError("center carat is required for this piece")
+                lines["stone_lines"][0]["quantity"] = float(args.center_carat)
+        for key in args.fees or []:
+            if key not in fee_catalog:
+                raise ValueError(f"unknown fee '{key}'; choose from the fee catalog")
+            lines["other_hard_cost_lines"].append(dict(fee_catalog[key]))
+        for spec in args.accents or []:
+            key, _, quantity = spec.partition(":")
+            if key not in stone_catalog:
+                raise ValueError(f"unknown accent stone '{key}'; choose from the stone catalog")
+            try:
+                carats = float(quantity)
+            except ValueError as exc:
+                raise ValueError("accent stones are written as rate_key:total_carats") from exc
+            if carats <= 0:
+                raise ValueError("accent stone carats must be positive")
+            lines["stone_lines"].append({
+                "stone": key.replace("_", " "),
+                "rate_key": key,
+                "quantity": carats,
+                "unit_cost": float(stone_catalog[key]["rate"]),
+            })
     write_private(skeleton_path, skeleton)
     state = cost_components.finalize(skeleton, profile)
     write_private(Path(paths["current_state"]), state)
@@ -2403,17 +2438,36 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
     lead_time = f"Estimated lead time: about {lead} business days from design approval, not a guarantee. " if lead else ""
     valid_through = (date.today() + timedelta(days=valid_days)).strftime("%B %-d, %Y")
     spec = record.get("specification") or {}
-    spec_lines = "\n".join(
-        f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
-        if value not in (None, "", []) and key != "notes"
-    )
+    pieces = estimate_record.pieces_of(spec)
+    if len(pieces) > 1:
+        blocks = []
+        for index, piece in enumerate(pieces):
+            head = estimate_record.piece_label(spec, index).capitalize()
+            body = "\n".join(f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in piece.items()
+                             if value not in (None, "", []) and key not in ("notes", "piece_type"))
+            blocks.append(f"{head}:\n{body}")
+        spec_lines = "\n\n".join(blocks)
+    else:
+        spec_lines = "\n".join(
+            f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
+            if value not in (None, "", []) and key != "notes"
+        )
     fixed = ESTIMATE_NOTE.format(
         piece=owner_questions.summary_of_piece(spec), spec_lines=spec_lines, price=f"{price:,.2f}",
         lead_time=lead_time, valid_through=valid_through, shop=shop,
     )
+    if len(pieces) > 1:
+        specification_words = "; ".join(
+            estimate_record.piece_label(spec, i) + ": " + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in piece.items()
+                                                                     if v not in (None, "", []) and k not in ("notes", "piece_type"))
+            for i, piece in enumerate(pieces)
+        )
+    else:
+        specification_words = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in spec.items() if v not in (None, "", []) and k != "notes")
     facts = {
         "piece": owner_questions.summary_of_piece(spec), "price": f"${price:,.2f}",
-        "specification": ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in spec.items() if v not in (None, "", []) and k != "notes"),
+        **({"pieces": f"{len(pieces)} pieces in this order, priced together; the price is the total for all of them"} if len(pieces) > 1 else {}),
+        "specification": specification_words,
         "lead time": (f"about {lead} business days from design approval, an estimate not a guarantee" if lead else ""),
         "valid_through": valid_through, "shop name": shop,
     }
