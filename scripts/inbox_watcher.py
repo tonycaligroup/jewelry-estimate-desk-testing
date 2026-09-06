@@ -13,6 +13,7 @@ alone. The tick then prints the owner-facing report, or NO_REPLY.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import shutil
 import subprocess
@@ -176,6 +177,27 @@ TRANSIENT_ATTEMPTS = 6
 DETERMINISTIC_ATTEMPTS = 2
 
 
+TICK_LOG_KEEP = 40
+
+
+def keep_summary(workspace: Path, summary: dict[str, Any]) -> None:
+    """The last ticks' summaries, on disk, so a handoff or a deferral is never lost with the process."""
+    try:
+        root = workspace / "estimate-desk" / "run-work"
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = root / "tick-log.json"
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(entries, list):
+                entries = []
+        except (OSError, ValueError):
+            entries = []
+        entries.append({"at": datetime.now(timezone.utc).isoformat(), **{k: v for k, v in summary.items() if k != "message"}})
+        workflow_safe.write_private(path, entries[-TICK_LOG_KEEP:])
+    except (OSError, ValueError):
+        pass
+
+
 def _inline_retry_candidates(p: dict[str, Path]) -> list[str]:
     """Processing claims the tick owns whose run ended without finishing: lapsed lease, no worker."""
     found: list[str] = []
@@ -256,8 +278,10 @@ def run_inline_claim(
             return done
         summary["inline"].append({"message_id": message_id, "outcome": "needs_worker", "next_action": done.get("next_action"),
                                   **({"error": done["error"]} if done.get("error") else {})})
-    # Hand the claim to a worker job: the worker owns it from here.
-    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, False)
+    # Hand the claim to a worker job: the worker owns it from here. The
+    # reason stays on the claim so the doctor can say why.
+    reason = (done.get("error") if inline.get("inline") else None) or f"handoff for {done.get('next_action') if inline.get('inline') else 'worker path'}"
+    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, False, handoff_reason=reason)
     inbox_claim.delegate(p["claim_root"], message_id, claim_token, cron_config.WORKER_LEASE_SECONDS)
     try:
         job_id = spawn_worker(
@@ -438,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.summary is not None:
         workflow_safe.write_private(args.summary, summary)
+    keep_summary(args.workspace.resolve(), summary)
     print(summary["message"])
     return 0
 

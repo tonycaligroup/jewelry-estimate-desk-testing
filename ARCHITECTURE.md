@@ -381,6 +381,15 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.9.1 (built 6 September 2026): the tick keeps its own record.** A
+three-piece rendering on the pod fell to the worker agent and nobody
+could say why: the handoff reason lived only in the tick's summary, which
+the cron job printed as NO_REPLY and dropped. The watcher now keeps the
+last forty tick summaries in `run-work/tick-log.json`, a handoff writes
+its reason on the claim (`worker_handoff_reason`), and the doctor lists
+both. The worker's rendering prompt renders each piece on its own, never a
+group shot.
+
 **4.9.0 (built 6 September 2026): more than one piece in one email.**
 MULTI-PIECE-PLAN.md, all six batches. The specification may carry
 `pieces` (two or more objects, each with its own fields; shared facts at

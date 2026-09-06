@@ -122,6 +122,7 @@ def validate_state(state: Any) -> dict[str, Any]:
         "last_error",
         "last_error_kind",
         "last_error_at",
+        "worker_handoff_reason",
     }
     required = {
         "schema_version",
@@ -644,7 +645,7 @@ def acquire_external_action(
 INLINE_ERROR_KINDS = {"transient", "deterministic"}
 
 
-def mark_inline(root: Path, message_id: str, token: str, inline: bool) -> dict[str, Any]:
+def mark_inline(root: Path, message_id: str, token: str, inline: bool, handoff_reason: str | None = None) -> dict[str, Any]:
     """Say whether the tick itself owns this processing claim (inline) or a worker does."""
     path = claim_path(root, message_id)
     with state_lock(path):
@@ -656,6 +657,8 @@ def mark_inline(root: Path, message_id: str, token: str, inline: bool) -> dict[s
         else:
             for field in ("inline_attempts", "last_error", "last_error_kind", "last_error_at"):
                 state.pop(field, None)
+            if handoff_reason:
+                state["worker_handoff_reason"] = str(handoff_reason)[:300]
         write_state(path, state)
         return state
 

@@ -114,6 +114,20 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
                     f"{key} is {action['status']}: the outcome of that call is not settled",
                     f"{who} checks the provider before doing anything; run it (or the execute line) once more", level="info")
 
+    for message_id, claim in claims.items():
+        if isinstance(claim, dict) and claim.get("worker_handoff_reason"):
+            add("worker_handoff", f"message {message_id}",
+                f"the tick handed this claim to a worker agent: {claim['worker_handoff_reason']}",
+                "nothing to run; this says why the inline path stepped aside (renderings from a worker are group shots until 4.9.1)",
+                level="info")
+    log_path = desk / "run-work" / "tick-log.json"
+    entries = _read(log_path) if log_path.exists() else []
+    for entry in (entries or [])[-10:] if isinstance(entries, list) else []:
+        for item in entry.get("inline") or []:
+            if item.get("outcome") in ("deferred", "needs_worker") and item.get("error"):
+                add("tick_trouble", f"tick {entry.get('at', '?')[:19]} message {item.get('message_id')}",
+                    f"{item['outcome']}: {item['error']}", "nothing to run; recorded for the record", level="info")
+
     for q in open_questions:
         if q.get("kind") not in PARKING_KINDS:
             continue
