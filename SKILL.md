@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.10.1
+version: 4.10.2
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -653,7 +653,10 @@ review) carries an `execute` field in its execution payload. For a
 rendering card or an appointment card (booking or offer), do nothing when
 Kolo delivers the approval: the watcher reads approvals from the audit
 trail and runs that line itself within a tick; if you run it anyway it
-finds the first run's journal and does nothing more. For a price card,
+finds the first run's journal and does nothing more (its output says
+`already_sent`, `already_booked`, or `already_offered`). Never run
+`kolo update-brief` yourself: the line reports the brief, and Kolo refuses a
+second report on the same brief. For a price card,
 copy that line, replace `<Brief ID>` with the Brief ID from the delivered
 decision, run it, and paste its output. That
 one command re-verifies the bound state, sends or books through the desk's

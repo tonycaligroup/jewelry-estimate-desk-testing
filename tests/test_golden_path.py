@@ -50,6 +50,7 @@ import inbox_watcher  # noqa: E402
 import judge  # noqa: E402
 import kolo_safe  # noqa: E402
 import owner_questions  # noqa: E402
+import run_lease  # noqa: E402
 import workflow_safe  # noqa: E402
 from test_runtime import IntakeTests  # noqa: E402
 
@@ -367,7 +368,11 @@ class World:
             return self._after("kolo_audit", ok(argv, json.dumps({"status": "ok", "events": events})))
         if command == "update-brief":
             self._service("kolo_update", argv, "checked")
-            self.updates.append((flag(argv, "--brief-id"), flag(argv, "--status")))
+            update = (flag(argv, "--brief-id"), flag(argv, "--status"))
+            if update[1] == "executed" and update in self.updates:
+                # Kolo refuses a second "executed" on a brief (6 September 2026, Briefs #24 and #25).
+                raise subprocess.CalledProcessError(1, argv, "", "brief is already executed")
+            self.updates.append(update)
             return self._after("kolo_update", ok(argv, ""))
         self.other.append(argv)
         return ok(argv, "")
@@ -2039,6 +2044,54 @@ class DeskExecutesApprovalsTests(SideBranchTests):
             self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
             self.assertEqual(len(world.sent[-1]["attachments"]), 2)
             self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_the_session_runs_the_rendering_line_first_and_the_tick_then_does_nothing(self) -> None:
+        """6 September 2026, Brief #25: the session pasted the line before the tick; the tick must not ask the owner."""
+        def branch(ws: Path, world: World) -> None:
+            thread, estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "send_rendering")
+            world.approve(card)
+            result = self.execute(ws, world, card["payload"]["execute"], card)
+            self.assertEqual(result["outcome"], "rendering_sent", result)
+            sent_before, questions_before = len(world.sent), len(world.notices)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(summary["approvals"][0]["result"]["outcome"], "already_sent", summary)
+            self.assertEqual(len(world.sent), sent_before, "the renderings went out once")
+            self.assertEqual(len(world.notices), questions_before, "no question to the owner")
+            self.assertEqual(world.updates.count((card["brief_id"], "executed")), 1)
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+            self.assertEqual(len(self.record(ws, estimate_id)["rendering_deliveries"]), 1)
+            self.assertEqual(self.tick(ws, world)["approvals"], [], "an approval is acted on once")
+        self.run_branch(branch)
+
+    def test_a_tick_that_finds_the_line_running_waits_and_tries_next_tick(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            world.approve(card)
+            desk = ws.resolve() / "estimate-desk"
+            key = inbox_claim.claim_key("s2")[:16]
+            questions_before = len(world.notices)
+            with run_lease.hold(desk, "send-approved-rendering", key):
+                summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["in_progress"], summary)
+            sent_before = len(world.sent)
+            self.assertEqual(len(world.notices), questions_before, "a run in progress is not a failure")
+            self.assertEqual(len(world.sent), sent_before)
+            self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner")
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.sent[-1]["attachments"]), 2)
+            self.assertEqual(self.tick(ws, world)["approvals"], [], "an approval is acted on once")
         self.run_branch(branch)
 
     def test_a_price_card_approval_is_left_to_the_session(self) -> None:

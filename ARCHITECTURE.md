@@ -381,6 +381,18 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.10.2 (built 6 September 2026): a second run is the same outcome, never a question.**
+Live on Brief #25 the session pasted the rendering line before the tick;
+the tick then found the claim finished and raised the failure question.
+Every executor now returns the earlier run's outcome on a repeat
+(`already_sent` for renderings and estimates, `already_booked`,
+`already_offered`, `already_resolved`) from the record, before it touches
+the claim, and its repeat report to Kolo is tolerated when Kolo refuses a
+second "executed" (seen on Briefs #24 and #25). A run that finds the
+line's lease held by another live run exits with code 3 and asks nobody;
+the tick keeps that approval pending (`approved_at` on the registry
+entry) and tries it again next tick.
+
 **4.10.0 (built 6 September 2026): the architecture release.**
 ARCHITECTURE-OPTIONS.md A' tier 1, C', D, and F1. The tick reads
 `brief.approved` for the rendering and appointment cards it filed

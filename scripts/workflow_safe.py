@@ -176,6 +176,15 @@ def handle_approved_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
             with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
                 code = main(argv)
             printed = buffer.getvalue().strip()
+            if code == LEASE_HELD_EXIT:
+                # The session (or a retry) is running this very line now. Its
+                # own run reports the brief or asks the owner; this approval
+                # stays pending and is tried again next tick.
+                brief_registry.mark(p["monitor_root"], brief_id, "pending", "another run in progress",
+                                    approved_at=entry.get("approved_at") or datetime.now(timezone.utc).isoformat())
+                handled.append({"brief_id": brief_id, "kind": kind, "estimate_id": estimate_id, "command": argv[0],
+                                "outcome": "in_progress"})
+                continue
             brief_registry.mark(p["monitor_root"], brief_id, "executed" if code == 0 else "failed",
                                 None if code == 0 else errors.getvalue().strip()[:300])
             handled.append({"brief_id": brief_id, "kind": kind, "estimate_id": estimate_id, "command": argv[0],
@@ -682,10 +691,7 @@ def resolve_review_approval(args: argparse.Namespace) -> dict[str, Any]:
     else:
         outcome = "already_resolved"
     result = {"action_type": "manual_review", "review_key": args.review_key, "outcome": outcome}
-    kolo_safe.run_command(
-        kolo_safe.build_update_brief(args.brief_id, "executed", result),
-        runner=getattr(args, "runner", subprocess.run),
-    )
+    _report_brief(args, result, getattr(args, "runner", subprocess.run), repeat=outcome == "already_resolved")
     return {**result, "brief_id": args.brief_id, "review_status": (item or {}).get("review_status", "resolved")}
 
 
@@ -1830,6 +1836,19 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
     import inbox_watcher  # local import: inbox_watcher imports this module
 
     p = inbox_watcher.paths_for(args.workspace.resolve())
+    runner = getattr(args, "runner", subprocess.run)
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+    source_hash = estimate_record.sha256_text(args.message_id)
+    for delivery in record.get("rendering_deliveries") or []:
+        if isinstance(delivery, dict) and delivery.get("source_message_id_sha256") == source_hash \
+                and delivery.get("status") == "sent":
+            # The line already ran to the end (the session pasted it before the
+            # tick, or a retry follows a finished run): the same outcome, no
+            # second email, and a repeat report Kolo may refuse is tolerated.
+            result = {"outcome": "already_sent", "images": len(delivery.get("image_sha256") or []),
+                      "record_status": record.get("status")}
+            _report_brief(args, result, runner, repeat=True)
+            return result
     state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], args.message_id))
     if state.get("status") == "processing":
         # An earlier run of this command reopened the claim and died; carry on.
@@ -1862,11 +1881,7 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
         record_output=Path(paths["current_record"]), approved_rendering=approval,
     ))
     result = {"outcome": "rendering_sent", "images": len(images), "record_status": record.get("status"), "email": body_source}
-    if getattr(args, "brief_id", None):
-        kolo_safe.run_command(
-            kolo_safe.build_update_brief(args.brief_id, "executed", result),
-            runner=getattr(args, "runner", subprocess.run),
-        )
+    _report_brief(args, result, runner)
     return result
 
 
@@ -1913,7 +1928,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         chosen = options[index - 1]
     if existing and existing.get("confirmed_start") == chosen["start"]:
         result = {"outcome": "already_booked", "confirmed_start": existing.get("confirmed_start")}
-        _report_brief(args, result, runner)
+        _report_brief(args, result, runner, repeat=True)
         return result
     profile = read_object(p["shop_profile"])
     scheduling = profile.get("scheduling") or {}
@@ -2077,7 +2092,7 @@ def send_approved_times(args: argparse.Namespace) -> dict[str, Any]:
     for existing in record.get("times_offered") or []:
         if isinstance(existing, dict) and existing.get("source_message_id_sha256") == source_hash:
             result = {"outcome": "already_offered", "options": [o.get("label") for o in existing.get("options", [])]}
-            _report_brief(args, result, runner)
+            _report_brief(args, result, runner, repeat=True)
             return result
     options = approval.get("calendar_availability") or []
     if not options:
@@ -2343,6 +2358,9 @@ EXECUTOR_WHAT = {
 }
 
 
+LEASE_HELD_EXIT = 3
+
+
 def _executor_key(args: argparse.Namespace) -> str:
     return inbox_claim.claim_key(getattr(args, "message_id", None) or getattr(args, "estimate_id", "") or "none")[:16]
 
@@ -2442,10 +2460,23 @@ def _answer_command_failed(args: argparse.Namespace, p: dict[str, Path], root: P
     return result
 
 
-def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any) -> None:
+def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any, repeat: bool = False) -> None:
+    """Tell Kolo the brief is executed.
+
+    `repeat` is for an outcome that was already reached by an earlier run
+    (already sent, booked, offered): that run reported the brief, and Kolo
+    refuses a second "executed" on the same brief (seen 6 September 2026 on
+    Briefs #24 and #25), so the refusal is noted in the result, not raised.
+    """
     brief_id = getattr(args, "brief_id", None)
-    if brief_id and brief_id != "<Brief ID>":
+    if not brief_id or brief_id == "<Brief ID>":
+        return
+    try:
         kolo_safe.run_command(kolo_safe.build_update_brief(brief_id, "executed", result), runner=runner)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        if not repeat:
+            raise
+        result["brief_report"] = "already reported by the earlier run: " + str(exc)[:120]
 
 
 ESTIMATE_NOTE = (
@@ -2518,7 +2549,7 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
     route_ownership.validate_record(record)
     if record.get("status") == "estimate_sent":
         result = {"outcome": "already_sent", "price": record.get("proposed_price")}
-        _report_brief(args, result, runner)
+        _report_brief(args, result, runner, repeat=True)
         return result
     if record.get("status") != "pending_approval":
         raise ValueError(f"estimate is {record.get('status')}, not pending_approval")
@@ -2816,6 +2847,12 @@ def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
             try:
                 with run_lease.hold(desk, args.command, _executor_key(args)):
                     record = executors[args.command](args)
+            except run_lease.LeaseHeld as exc:
+                # Not a failure: the other run finishes the work, reports the
+                # brief, or asks the owner itself. Nobody is asked twice.
+                print(json.dumps({"error": str(exc), "in_progress": True, "asked_owner": False}, sort_keys=True),
+                      file=sys.stderr)
+                return LEASE_HELD_EXIT
             except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError, judge.JudgmentError) as exc:
                 if _retry_of is None:
                     try:

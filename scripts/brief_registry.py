@@ -86,7 +86,7 @@ def load_all(monitor_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def mark(monitor_root: Path, brief_id: str, outcome: str, note: str | None = None) -> None:
+def mark(monitor_root: Path, brief_id: str, outcome: str, note: str | None = None, **fields: Any) -> None:
     path = root_for(monitor_root) / f"{brief_id}.json"
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
@@ -96,6 +96,7 @@ def mark(monitor_root: Path, brief_id: str, outcome: str, note: str | None = Non
     entry["decided_at"] = datetime.now(timezone.utc).isoformat()
     if note:
         entry["note"] = note[:400]
+    entry.update(fields)
     _write(path, entry)
 
 
@@ -128,11 +129,14 @@ def approved_since_last_poll(
     if not pending:
         _write(path, {"since": current.isoformat()})
         return []
+    # An approval seen on an earlier poll whose run had to wait (another run
+    # of the same line was in progress) is still pending: act on it again
+    # without asking the trail, whose window has moved on.
+    found = [dict(e) for e in pending.values() if e.get("approved_at")]
     events = kolo_safe.audit_events(event_type="brief.approved", from_date=since, runner=runner)
-    found = []
     for event in events:
         entry = pending.get(event.get("brief_id"))
-        if entry is None:
+        if entry is None or entry.get("approved_at"):
             continue
         found.append({**entry, "approved_at": event.get("created_at")})
     _write(path, {"since": (current - timedelta(minutes=1)).isoformat()})

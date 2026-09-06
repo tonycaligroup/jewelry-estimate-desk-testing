@@ -21,6 +21,10 @@ from typing import Iterator
 DEFAULT_SECONDS = 600
 
 
+class LeaseHeld(ValueError):
+    """Another live run holds this command's lease: wait, do not ask the owner."""
+
+
 def lock_path(desk: Path, command: str, key: str) -> Path:
     safe_key = "".join(c for c in key if c.isalnum() or c in "-_")[:32] or "none"
     return desk / "locks" / f"{command}-{safe_key}.lock"
@@ -58,7 +62,7 @@ def hold(desk: Path, command: str, key: str, seconds: int = DEFAULT_SECONDS) -> 
     except FileExistsError:
         existing = _read(path)
         if not _expired(existing, now):
-            raise ValueError(f"another run of {command} is in progress; wait for it to finish, then run the line again")
+            raise LeaseHeld(f"another run of {command} is in progress; wait for it to finish, then run the line again")
         # The earlier run died; take the lease over.
         path.write_text(body, encoding="utf-8")
     else:

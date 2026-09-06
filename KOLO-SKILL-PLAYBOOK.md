@@ -196,7 +196,11 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   re-derive from it. **reported 3 Sep**
 - `kolo update-brief --brief-id <uuid> --status executed|failed|needs_delegation
   --execution-result <JSON>` closes the loop. A brief filed by mistake cannot
-  be cancelled from the CLI; the owner rejects it. **verified**
+  be cancelled from the CLI; the owner rejects it. **verified** A second
+  `update-brief --status executed` on the same brief fails (the session's
+  own report after the executor had already reported, Briefs #24 and #25,
+  6 Sep 2026): an executor's repeat path must tolerate that refusal.
+  **observed twice 6 Sep**
 - Per-user Approval Rules in the portal include Auto-Expire (never, 4, 12, 24,
   48 hours) and Auto-Approve Low Risk Actions with a spending limit. One Kolo
   instance says no auto-approval exists; the code-verified portal docs say
