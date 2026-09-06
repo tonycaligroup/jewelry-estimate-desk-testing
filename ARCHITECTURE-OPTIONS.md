@@ -143,10 +143,53 @@ retried line with a different answer) are about owner **words**, which the
 workflow says must stay in chat; they are held by the SKILL.md rules
 already in place and by A' cutting the session's traffic to answers only.
 
+## 5a. Answers from the pod, 6 September 2026
+
+Two facts asked of Kolo before building, both answered on the pod.
+
+1. **An approval in the audit trail carries no note and no edit.** The
+   `brief.approved` event's details are exactly `source`, `status`,
+   `previous_status`; a full lifecycle shows submitted, approved, executed,
+   nothing else. If the owner edited the number or wrote a note before
+   approving, the trail does not say so. So the desk cannot tell a clean
+   approval from an edited one by reading the trail.
+2. **A command job has the gateway credential at run time.** The watcher's
+   job definition has no environment block and no agent id, yet a command
+   job that printed `MATON_API_KEY present` got `yes`: the gateway injects
+   the credential when the job runs. A one-shot command job spawned by the
+   tick with the same shape (`kind: command`, `sessionTarget: isolated`,
+   `argv: sh -lc python3 ...`) will reach Gmail, the calendar, and the
+   image tool the way the watcher does. The watcher's own budget is
+   `timeoutSeconds: 300`, which is the kill C' removes from the rendering
+   path.
+
+**What this does to A'.** The workflow (6.4) lets the owner edit the number
+on a price brief, and an edited number must produce a fresh brief. The
+desk cannot see an edit in the trail, so it must not execute a **price**
+card from the trail. Every other card is a yes or no with nothing to edit:
+renderings, a booking, an offer of times. A' therefore lands in two tiers:
+
+- **Tier 1, now:** the desk executes rendering, booking, and offer
+  approvals from the trail. That is where the improvisation incidents were
+  (a hand-sent image, a half-done booking, "which image do you mean").
+- **Tier 2, after one experiment:** the price card. The experiment is the
+  owner editing the number on the next price card before approving, then
+  showing what Kolo delivered to the session and what the trail recorded.
+  If the delivered decision carries the edited payload, the session's
+  rule for a price approval becomes "run the line only when the delivered
+  price equals the card's; otherwise reject and tell the desk to re-price",
+  and the desk keeps its hands off price cards. If an edit turns out to
+  produce its own event or a new brief, tier 2 folds into tier 1.
+
+**What this does to C'.** Builds as written, with the watcher's own job
+shape: a one-shot command job, isolated session, no announce, a longer
+budget (900 seconds), deleted after its run.
+
 ## 6. Decision
 
-Build A', C', and D as one architecture change, with F1 in the same
-release; then E'; then F2. Each step a version, green on the full suite
+Build A' tier 1, C', and D as one architecture change, with F1 in the same
+release; run the price-edit experiment on the pod; then E'; then F2; A'
+tier 2 when the experiment says how. Each step a version, green on the full suite
 and the harness before the next; A' and C' each preceded by their single
 live check on the pod.
 

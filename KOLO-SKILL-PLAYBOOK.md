@@ -362,3 +362,20 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
 - Whether `infer image generate` from the tick can retire the rendering
   worker.
 - Exact SKILL.md and skill-prompt budgets on the platform.
+
+## Verified 6 September 2026 (Tony, via Kolo on the test pod)
+
+- `kolo audit-query --event-type brief.approved` returns events whose
+  `details` are exactly `{"source": "web", "status": "approved",
+  "previous_status": "pending"}`; an approval carries no note and no edited
+  value. A brief's lifecycle in the trail is `brief.submitted` (agent),
+  `brief.approved` (user), `brief.executed` (agent). `--brief-id <id>`
+  filters one brief's events.
+- Command cron jobs have `MATON_API_KEY` at run time even though the stored
+  job definition has no environment block and no `agentId`: a command job
+  printing the variable got `present: yes`. Child processes inherit it.
+- The watcher job's stored shape: `sessionTarget: "isolated"`,
+  `wakeMode: "now"`, `payload: {kind: "command", argv: ["sh", "-lc", "..."],
+  cwd, timeoutSeconds: 300}`, `delivery: {mode: "announce", channel: "kolo",
+  to: "kolo:<session>"}`, schedule `{kind: "cron", expr, tz}`.
+
