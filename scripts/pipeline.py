@@ -99,13 +99,37 @@ FIELD_PRIORITY = (
 
 
 def prioritized(missing: list[str]) -> list[str]:
-    """The fields that move the price first: origin, stone, size; the follow-up asks for all of them, in this order."""
+    """The fields that move the price first: origin, stone, size; the follow-up asks for all of them, in this order.
+
+    Multi-piece names sort by piece first, then by the same field order.
+    """
     rank = {name: index for index, name in enumerate(FIELD_PRIORITY)}
-    return sorted(missing, key=lambda field: (rank.get(field, len(rank)), field))
+
+    def key(name: str):
+        index, field = estimate_record.split_field_name(name)
+        return (index if index is not None else -1, rank.get(field, len(rank)), field)
+
+    return sorted(missing, key=key)
 
 
-def plain_followup(missing: list[str], shop_name: str) -> str:
-    asks = [FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?") for field in missing[:4]]
+def describe_missing(specification: dict[str, Any], missing: list[str]) -> list[str]:
+    """Missing names as the customer would read them: 'wedding band: finger size'."""
+    labels = []
+    for name in missing:
+        index, field = estimate_record.split_field_name(name)
+        words = field.replace("_", " ")
+        labels.append(f"{estimate_record.piece_label(specification, index)}: {words}" if index is not None else words)
+    return labels
+
+
+def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None) -> str:
+    asks = []
+    for name in missing[:8]:
+        index, field = estimate_record.split_field_name(name)
+        question = FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?")
+        if index is not None:
+            question = f"for the {estimate_record.piece_label(specification or {}, index)}, {question}"
+        asks.append(question)
     lines = "\n".join(f"- {q[0].upper() + q[1:]}" for q in asks) or "- Is there anything else we should know?"
     return (
         "Hello,\n\nThank you for reaching out. To put together an accurate estimate, could you share:\n\n"
@@ -122,13 +146,19 @@ def _send_followup(
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
     missing = prioritized(missing)
     try:
-        drafted = judge.draft_followup(digest, missing, _template_text(base_dir), shop_name, model, judge_runner, openclaw)
+        record_now = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        specification = record_now.get("specification") or {}
+    except (OSError, ValueError):
+        specification = {}
+    try:
+        drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
+                                       shop_name, model, judge_runner, openclaw)
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
         # The model could not write a proper question twice; a plain one
         # still moves the inquiry, and the owner sees nothing odd.
-        drafted = {"body": plain_followup(missing, shop_name)}
+        drafted = {"body": plain_followup(missing, shop_name, specification)}
     body_path = Path(paths["customer_reply"])
     body_path.parent.mkdir(parents=True, exist_ok=True)
     body_path.write_text(drafted["body"] + "\n", encoding="utf-8")

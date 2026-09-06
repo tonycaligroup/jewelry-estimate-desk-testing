@@ -53,9 +53,24 @@ def has_stones(spec: dict[str, Any]) -> bool:
 
 
 def missing_required_fields(spec: dict[str, Any], shop_profile: dict[str, Any] | None) -> list[str]:
-    """Required keys the specification does not satisfy, plus profile policies."""
+    """Required keys the specification does not satisfy, plus profile policies.
+
+    A multi-piece specification (MULTI-PIECE-PLAN.md) is gated piece by
+    piece; its missing names are `pieces.<i>.<field>`. One piece keeps bare
+    names and the code path it always had.
+    """
     if not isinstance(spec, dict):
         raise ValueError("specification must be an object")
+    pieces = estimate_record.pieces_of(spec)
+    if len(pieces) > 1:
+        names: list[str] = []
+        for index, piece in enumerate(pieces):
+            names.extend(f"{estimate_record.PIECE_PREFIX}{index}.{field}" for field in _missing_for_piece(piece, shop_profile))
+        return names
+    return _missing_for_piece(spec, shop_profile)
+
+
+def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None) -> list[str]:
     missing: set[str] = set()
     if not present(spec.get("piece_type")):
         missing.add("piece_type")

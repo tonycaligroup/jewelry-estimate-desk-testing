@@ -1755,7 +1755,7 @@ class PartialAnswerTests(SideBranchTests):
             self.assertEqual(len(world.sent), 1)
             asked = [p for p in world.prompts if "MISSING DETAILS TO ASK FOR" in p][-1]
             order = asked.split("MISSING DETAILS TO ASK FOR: ", 1)[1].split("\n", 1)[0]
-            self.assertTrue(order.startswith("finger_size, metal"), order)
+            self.assertTrue(order.startswith("finger size, metal"), order)
             # He answers most of it, not the size or the origin: one more ask, no owner question.
             world.spec = {"piece_type": "engagement ring", "metal": "rose gold", "metal_karat": "18k", "stone_type": "diamond",
                           "stone_carat": "3", "stone_color": "D", "stone_clarity": "flawless", "stone_cut": "ideal",
@@ -1776,3 +1776,55 @@ class PartialAnswerTests(SideBranchTests):
             self.assertEqual(pipeline.prioritized(["setting_style", "finger_size", "stone_origin", "metal"]),
                              ["stone_origin", "finger_size", "metal", "setting_style"])
         self.run_branch(branch)
+
+
+class MultiPieceReadingTests(unittest.TestCase):
+    """MULTI-PIECE-PLAN.md batch 1: two pieces are read, gated, and asked about as two pieces; one piece is unchanged."""
+
+    def test_pieces_are_merged_with_shared_facts_and_one_piece_is_untouched(self) -> None:
+        spec = {"metal": "yellow gold", "metal_karat": "14k", "notes": "matching set",
+                "pieces": [{"piece_type": "engagement ring", "finger_size": "6", "stone_type": "diamond", "stone_origin": "lab-grown",
+                            "stone_carat": "2", "stone_shape": "round", "setting_style": "solitaire"},
+                           {"piece_type": "wedding band", "finger_size": "10", "metal_color": "rose"}]}
+        pieces = estimate_record.pieces_of(spec)
+        self.assertEqual(len(pieces), 2)
+        self.assertEqual(pieces[0]["metal"], "yellow gold")
+        self.assertEqual(pieces[1]["metal_color"], "rose", "a piece overrides a shared fact")
+        self.assertNotIn("notes", pieces[0])
+        self.assertEqual(estimate_record.piece_label(spec, 1), "wedding band")
+        self.assertTrue(estimate_record.is_set(spec))
+        one = {"piece_type": "ring", "metal": "14k white gold", "pieces": [{"piece_type": "ring"}]}
+        self.assertEqual(estimate_record.pieces_of(one), [{"piece_type": "ring", "metal": "14k white gold"}])
+        self.assertFalse(estimate_record.is_multi_piece(one))
+        self.assertEqual(estimate_record.split_field_name("pieces.1.finger_size"), (1, "finger_size"))
+        self.assertEqual(estimate_record.split_field_name("finger_size"), (None, "finger_size"))
+
+    def test_the_extractor_keeps_two_pieces_and_folds_one(self) -> None:
+        two = judge.check_specification({"specification": {"metal": "yellow gold", "pieces": [
+            {"piece_type": "engagement ring", "finger_size": "6"}, {"piece_type": "wedding band", "finger_size": "10"}]}})
+        self.assertEqual([p["piece_type"] for p in two["specification"]["pieces"]], ["engagement ring", "wedding band"])
+        one = judge.check_specification({"specification": {"metal": "yellow gold", "pieces": [{"piece_type": "ring", "finger_size": "6"}]}})
+        self.assertNotIn("pieces", one["specification"])
+        self.assertEqual(one["specification"]["finger_size"], "6")
+
+    def test_the_gate_names_each_piece_and_the_follow_up_reads_them(self) -> None:
+        import pipeline
+        import spec_gate
+
+        profile = {"defaults": {"stone_origin": "ask_always"}}
+        spec = {"metal": "yellow gold", "metal_karat": "14k",
+                "pieces": [{"piece_type": "engagement ring", "stone_type": "diamond", "stone_carat": "2", "stone_shape": "round",
+                            "setting_style": "solitaire"},
+                           {"piece_type": "wedding band"}]}
+        missing = spec_gate.missing_required_fields(spec, profile)
+        self.assertEqual(sorted(missing), ["pieces.0.finger_size", "pieces.0.stone_clarity", "pieces.0.stone_color",
+                                           "pieces.0.stone_origin", "pieces.1.finger_size"])
+        ordered = pipeline.prioritized(missing)
+        self.assertEqual(ordered[0], "pieces.0.stone_origin")
+        labels = pipeline.describe_missing(spec, ordered)
+        self.assertEqual(labels[0], "engagement ring: stone origin")
+        self.assertEqual(labels[-1], "wedding band: finger size")
+        fallback = pipeline.plain_followup(ordered, "Kolo Jewelers", spec)
+        self.assertIn("For the wedding band, what ring size?", fallback)
+        # one piece: bare names, as before
+        self.assertEqual(spec_gate.missing_required_fields({"piece_type": "wedding band", "metal": "14k yellow gold"}, profile), ["finger_size"])

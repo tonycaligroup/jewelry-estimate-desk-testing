@@ -32,7 +32,7 @@ SPEC_KEYS = (
     "stone_cut", "stone_count", "center_stone", "accent_stones", "finger_size", "dimensions",
     "setting_style", "finish", "engraving", "event_date", "budget",
     "customer_supplied_materials", "certificate", "reference_images",
-    "scheduling_intent", "notes",
+    "scheduling_intent", "notes", "pieces",
 )
 TRIAGE_KINDS = {
     "estimate_request", "not_a_quote_request", "vendor_or_marketing",
@@ -242,14 +242,11 @@ def triage(digest: dict[str, Any], model: str | None = None, runner: Runner = su
     return ask_json(prompt, check_triage, model, runner, openclaw)
 
 
-def check_specification(value: dict[str, Any]) -> dict[str, Any]:
-    spec = value.get("specification")
-    if not isinstance(spec, dict):
-        raise ValueError("specification must be an object")
+def _clean_fields(spec: dict[str, Any], allow_pieces: bool) -> dict[str, Any]:
     clean: dict[str, Any] = {}
     placeholders = {"", "n/a", "not specified", "unspecified", "unknown", "tbd", "none", "null"}
     for key, raw in spec.items():
-        if key not in SPEC_KEYS:
+        if key not in SPEC_KEYS or key == "pieces":
             continue
         if isinstance(raw, bool):
             continue
@@ -264,6 +261,24 @@ def check_specification(value: dict[str, Any]) -> dict[str, Any]:
         text = _string(raw, 200)
         if text and text.lower() not in placeholders:
             clean[key] = text
+    if allow_pieces and isinstance(spec.get("pieces"), list):
+        pieces = [_clean_fields(p, False) for p in spec["pieces"] if isinstance(p, dict)]
+        pieces = [p for p in pieces if p][:4]
+        if len(pieces) >= 2:
+            # Two or more objects asked for: each is its own piece. One
+            # entry is not a list; its facts belong at the top level.
+            clean["pieces"] = pieces
+        elif len(pieces) == 1:
+            for key, value in pieces[0].items():
+                clean.setdefault(key, value)
+    return clean
+
+
+def check_specification(value: dict[str, Any]) -> dict[str, Any]:
+    spec = value.get("specification")
+    if not isinstance(spec, dict):
+        raise ValueError("specification must be an object")
+    clean = _clean_fields(spec, True)
     if not clean:
         raise ValueError("specification has no usable fields")
     return {"specification": clean}
@@ -290,6 +305,11 @@ def extract_specification(
         "\"jeweler's choice\" when they explicitly leave it to you; never invent one. "
         "When the customer explicitly leaves color, clarity, cut, finish, or the carat weight or stone size to the jeweler "
         "(\"whatever you think\", \"work it out from the logo\", \"your call\"), write \"jeweler's choice\" for that key. "
+        "When the customer asks for more than one object (an engagement ring and a wedding band, two bands, "
+        "earrings and a pendant), put the facts they share at the top level (usually the metal) and list each "
+        "object under pieces with its own piece_type, finger_size or dimensions, stones, and setting_style, "
+        "even when they call it a matching set; a halo, accent stones, or an engraving on one piece are not a "
+        "second piece. Leave pieces out for a single object. "
         "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
         "Never include prices, costs, or anything the SHOP messages said. "
         "scheduling_intent is the customer's own words when the message being handled asks to meet, come in, "
@@ -349,6 +369,11 @@ def triage_and_extract(
         "customer_supplied_materials names anything the customer already owns and wants used (\"my mother's "
         "diamond\", \"reset my stone\"); when the stone is theirs, still fill stone_type and any shape or size they "
         "gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "
+        "When the customer asks for more than one object (an engagement ring and a wedding band, two bands, "
+        "earrings and a pendant), put the facts they share at the top level (usually the metal) and list each "
+        "object under pieces with its own piece_type, finger_size or dimensions, stones, and setting_style, "
+        "even when they call it a matching set; a halo, accent stones, or an engraving on one piece are not a "
+        "second piece. Leave pieces out for a single object. "
         "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
         "Never include prices, costs, or anything the SHOP messages said.\n\n"
         f"THREAD:\n{thread_text(digest)}"

@@ -432,7 +432,14 @@ def mark_jewelers_choice(root: Path, estimate_id: str, source_message_id: str, f
             raise ValueError("only an estimate still awaiting specifications can skip details")
         specification = dict(record.get("specification") or {})
         for field in fields:
-            specification[str(field)] = "jeweler's choice"
+            index, bare = split_field_name(str(field))
+            if index is None:
+                specification[bare] = "jeweler's choice"
+            else:
+                pieces = [dict(p) if isinstance(p, dict) else {} for p in specification.get("pieces") or []]
+                if 0 <= index < len(pieces):
+                    pieces[index][bare] = "jeweler's choice"
+                    specification["pieces"] = pieces
         record["specification"] = specification
         record["missing_required_fields"] = sorted(
             f for f in (record.get("missing_required_fields") or []) if f not in set(fields)
@@ -684,6 +691,70 @@ def stones_in_words(specification: Any) -> bool:
     if any(word in text for word in ("no stones", "without stones", "no diamonds", "no gems", "plain band")):
         return False
     return any(word in text for word in STONE_WORDS_IN_TEXT)
+
+
+# Facts stated once for the whole order apply to every piece unless a piece says otherwise.
+SHARED_KEYS = (
+    "metal", "metal_karat", "metal_color", "finish", "budget", "event_date", "scheduling_intent",
+    "customer_supplied_materials", "reference_images", "certificate", "quantity",
+)
+PIECE_PREFIX = "pieces."
+
+
+def pieces_of(specification: Any) -> list[dict[str, Any]]:
+    """The pieces in a specification: [spec] for one piece, one merged dict per entry otherwise.
+
+    MULTI-PIECE-PLAN.md 2. A specification without `pieces` (or with fewer
+    than two) is one piece and is returned untouched, so every one-piece
+    path sees exactly what it saw before. Otherwise each piece is the
+    shared top-level facts overlaid by the piece's own.
+    """
+    if not isinstance(specification, dict):
+        return [{}]
+    raw = specification.get("pieces")
+    if not isinstance(raw, list) or len([p for p in raw if isinstance(p, dict)]) < 2:
+        return [{k: v for k, v in specification.items() if k != "pieces"}]
+    shared = {k: v for k, v in specification.items() if k in SHARED_KEYS and v not in (None, "", [])}
+    merged = []
+    for piece in raw:
+        if isinstance(piece, dict):
+            merged.append({**shared, **{k: v for k, v in piece.items() if v not in (None, "", [])}})
+    return merged
+
+
+def is_multi_piece(specification: Any) -> bool:
+    return isinstance(specification, dict) and len(pieces_of(specification)) > 1
+
+
+def piece_label(specification: Any, index: int) -> str:
+    """'engagement ring', 'wedding band', or 'piece 2'."""
+    pieces = pieces_of(specification)
+    if 0 <= index < len(pieces):
+        kind = str(pieces[index].get("piece_type") or "").strip().lower()
+        if kind:
+            return kind
+    return f"piece {index + 1}"
+
+
+def is_set(specification: Any) -> bool:
+    """The customer asked for matching pieces: one design language across them."""
+    if not isinstance(specification, dict):
+        return False
+    text = " ".join(str(specification.get(k) or "").lower() for k in ("notes", "setting_style", "piece_type"))
+    for piece in specification.get("pieces") or []:
+        if isinstance(piece, dict):
+            text += " " + " ".join(str(piece.get(k) or "").lower() for k in ("notes", "setting_style", "piece_type"))
+    return any(word in text for word in ("matching", "a set", "bridal set", "to match", "same design", "coordinating"))
+
+
+def split_field_name(name: str) -> tuple[int | None, str]:
+    """'pieces.1.finger_size' -> (1, 'finger_size'); 'finger_size' -> (None, 'finger_size')."""
+    if isinstance(name, str) and name.startswith(PIECE_PREFIX):
+        rest = name[len(PIECE_PREFIX):]
+        index, _, field = rest.partition(".")
+        if index.isdigit() and field:
+            return int(index), field
+    return None, str(name)
 
 
 SUPPLIED_STONE_WORDS = (
