@@ -2163,6 +2163,20 @@ def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:
     else:
         reopened = inbox_monitor.reopen_item(p["monitor_root"], args.message_id, p["claim_root"], cron_config.WORKER_LEASE_SECONDS)
         paths = reopened["work_paths"]
+    try:
+        return _send_approved_rendering(args, p, paths, runner)
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError, judge.JudgmentError):
+        # The send did not happen: the claim goes back behind its card, so
+        # the tick does not re-render it; the owner's "retry" runs this line.
+        try:
+            token = inbox_claim.authoritative_claim_token(p["claim_root"], args.message_id)
+            inbox_monitor.park_item(p["monitor_root"], args.message_id, p["claim_root"], token, "rendering_approval")
+        except (OSError, ValueError):
+            pass
+        raise
+
+
+def _send_approved_rendering(args: argparse.Namespace, p: dict[str, Path], paths: dict[str, str], runner: Any) -> dict[str, Any]:
     approval = read_object(Path(paths["work_dir"]) / "rendering-approval.json")
     if approval.get("estimate_id") != args.estimate_id or approval.get("gmail_message_id") != args.message_id:
         raise ValueError("rendering approval does not match this estimate and message")

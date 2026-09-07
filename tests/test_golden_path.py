@@ -128,6 +128,7 @@ class World:
         self.other: list[list[str]] = []
         self.busy: list[dict[str, str]] = []
         self.design_change: list[str] = []
+        self.describe_argv: list[list[str]] = []
         self.calendar_events: dict[str, dict] = {}
         self.created_events: list[dict] = []
         self.deleted_events: list[str] = []
@@ -318,11 +319,14 @@ class World:
             self._service("image", argv, "checked")
             output = Path(flag(argv, "--output"))
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(PNG)
+            # Every render is a different image, as on the pod: a revision must
+            # replace the slot files, never be refused as "different data".
+            output.write_bytes(PNG + len(self.renders).to_bytes(4, "big"))
             self.renders.append(argv)
             return self._after("image", ok(argv, json.dumps({"ok": True, "outputs": [{"path": str(output)}]})))
         if argv[1:4] == ["infer", "image", "describe"]:
             self._service("image_describe", argv, "checked")
+            self.describe_argv.append(list(argv))
             ids = re.findall(r"^- (\w+):", flag(argv, "--prompt") or "", re.MULTILINE)
             text = json.dumps({"answers": {i: "yes" for i in ids}, "notes": {}})
             return ok(argv, json.dumps({"ok": True, "outputs": [{"text": text}]}))
@@ -2252,6 +2256,9 @@ class TwoPieceTests(SideBranchTests):
             self.assertEqual(fresh["details"]["Revised"], "make the band wider and flatter")
             self.assertEqual(len(fresh["payload"]["images"]), 4)
             self.assertEqual(fresh["payload"]["images"][:2], first["payload"]["images"][:2], "the ring's views are kept as they were")
+            self.assertNotEqual(fresh["payload"]["images"][2:], first["payload"]["images"][2:], "the band's views are new images")
+            work = ws / "estimate-desk" / "work"
+            self.assertTrue(list(work.rglob("rendering-3-r1.png")), "the passed-on image is kept as history")
             self.assertEqual(len([n for n in world.notices if n["file"]]), previews_before + 4, "four previews again")
             self.assertEqual(self.claim(ws, "t2")["status"], "awaiting_owner")
             record = self.record(ws, self.only_estimate(ws))
@@ -2348,6 +2355,10 @@ class TwoPieceTests(SideBranchTests):
             self.assertIn("(engagement ring)", previews[0]["text"])
             self.assertIn("(wedding band)", previews[-1]["text"])
             self.assertEqual(len(world.renders), 4, "two views per piece, no more")
+            describes = [c for c in world.calls if c == "image_describe"]
+            self.assertTrue(describes, "every view is graded")
+            self.assertTrue(all("litellm/kolo-best-available" in " ".join(argv) for argv in world.describe_argv),
+                            "the checker names its model; the job environment's default is never trusted")
             self.assertTrue(any("matching set" in flag(argv, "--prompt") for argv in world.renders), "the set flag reaches the render prompts")
             self.execute(ws, world, render["payload"]["execute"], render)
             self.assertEqual(len(world.sent[-1]["attachments"]), 4)

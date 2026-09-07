@@ -78,8 +78,11 @@ def render_job_command(base_dir: Path, workspace: Path, message_id: str, estimat
 
 def render_job_create_argv(openclaw: str, workspace: Path, message_id: str, command: str) -> list[str]:
     """One-shot command job in the watcher's own shape: isolated, no announce, its own clock."""
+    # --best-effort-deliver: the job's own delivery step (it has no chat
+    # target) must never mark a finished job errored, or --delete-after-run
+    # does not fire and the job sits in the owner's routines list.
     return [
-        openclaw, "cron", "create", "--at", "+5s", "--delete-after-run", "--session", "isolated",
+        openclaw, "cron", "create", "--at", "+5s", "--delete-after-run", "--best-effort-deliver", "--session", "isolated",
         "--name", f"{RENDER_JOB_PREFIX}{message_id[:12]}", "--command", command,
         "--command-cwd", str(workspace.resolve()), "--timeout-seconds", str(RENDER_JOB_TIMEOUT_SECONDS), "--json",
     ]
@@ -132,7 +135,11 @@ def sweep_worker_jobs(openclaw: str, runner: Runner = subprocess.run, now_ms: in
             age_ms = now - int(last)
         except (TypeError, ValueError):
             continue
-        if age_ms < SWEEP_AFTER_SECONDS * 1000:
+        # A finished one-shot job (it ran and errored, or ran and could not
+        # deliver) is removed on the very next tick; the owner's routines
+        # list never shows the desk's leftovers. Anything else waits an hour.
+        finished = str(state.get("lastRunStatus") or job.get("lastRunStatus") or "").lower() in {"error", "ok", "success", "done"}
+        if not finished and age_ms < SWEEP_AFTER_SECONDS * 1000:
             continue
         job_id = job.get("id")
         if not isinstance(job_id, str) or not job_id:

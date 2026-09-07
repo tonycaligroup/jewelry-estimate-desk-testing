@@ -26,7 +26,11 @@ import judge
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 ARCHETYPE_DIR = Path(__file__).resolve().parent.parent / "templates" / "render"
-DEFAULT_VISION_MODEL = None  # the pod default (text+image capable); override with --vision-model
+# The model that grades the views, named explicitly: a one-shot command job
+# resolved the environment's default to a model the instance had no right to
+# use (403, 6 September 2026), while this one is the model the pod's own
+# image tool reports. The profile may pin another (rendering.vision_model).
+DEFAULT_VISION_MODEL = "litellm/kolo-best-available"
 _CHECK_LOCK = threading.Lock()
 DESCRIBE_TRIES = 3
 DESCRIBE_PAUSE_SECONDS = 3

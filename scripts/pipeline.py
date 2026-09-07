@@ -240,15 +240,39 @@ def render_and_send(
         previous = workflow_safe.read_object(report_path) if report_path.exists() else None
         labels = [str(pc.get("label") or "") for pc in (previous or {}).get("pieces") or []]
         only = list(change.get("pieces") or []) or rendering.pieces_named(note, labels)
+    # The vision model that grades the views: the profile may pin one
+    # (rendering.vision_model); otherwise the desk's default, which is the
+    # model the pod's own image tool reports, never the job environment's
+    # guess (a one-shot job resolved a model the instance had no right to
+    # use, 6 September 2026).
+    try:
+        profile_now = workflow_safe.read_object(p["shop_profile"]) if p.get("shop_profile") else {}
+    except (OSError, ValueError):
+        profile_now = {}
+    vision_model = str(((profile_now.get("rendering") or {}).get("vision_model") or "")).strip() or rendering.DEFAULT_VISION_MODEL
     try:
         report = rendering.run_pieces(
             record.get("specification") or {}, work_dir / "renders", openclaw, artwork=art,
             context=judge.thread_text(gmail_text.thread_digest(thread, message_id)) if thread else "",
-            model=model, runner=command_runner, change=note, only=only, previous=previous,
+            model=model, runner=command_runner, change=note, only=only, previous=previous, vision_model=vision_model,
         )
     except judge.JudgmentError as exc:
         raise ValueError(f"rendering plan failed: {exc}") from exc
     images: list[Path] = []
+    # The slot files are write-once (a different image in a slot is refused).
+    # A revision replaces the images the owner passed on, and a run after a
+    # crash replaces what the dead run left; either way the previous file is
+    # kept beside the slot as history, never sent, never lost.
+    label = f"r{int(change.get('round') or 2) - 1}" if note else "prev"
+    for slot in range(1, 5):
+        slot_path = Path(paths.get(f"rendering_image_{slot}") or "")
+        if slot_path.is_file():
+            archived = slot_path.with_name(f"{slot_path.stem}-{label}{slot_path.suffix}")
+            index = 1
+            while archived.exists():
+                index += 1
+                archived = slot_path.with_name(f"{slot_path.stem}-{label}-{index}{slot_path.suffix}")
+            slot_path.rename(archived)
     for view in report["views"][:4]:
         materialized = rendering_materialize.materialize(
             p["monitor_root"], p["claim_root"], message_id, Path(view["image"]), view["slot"]

@@ -8325,11 +8325,11 @@ class RenderingGateTests(unittest.TestCase):
             Path(work["rendering_image_2"]).write_bytes(png + b"1")
             # The record must be in a sent state for a rendering; simulate an approved claim closing instead.
             # (send_rendering's own validations are covered elsewhere.)
+            # A refused send parks the claim back behind its card by itself (4.12.2), so
+            # the tick never re-renders it and the owner's "retry" runs the line again.
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual((state["status"], state["reason_code"]), ("awaiting_owner", "rendering_approval"))
             with patch.object(workflow_safe, "send_rendering", return_value={"status": "estimate_sent"}) as send:
-                # The claim was reopened by the failed attempt above; park it again so reopen works.
-                token = inbox_claim.authoritative_claim_token(args.claim_root, "inquiry-1")
-                inbox_claim.finish(args.claim_root, "inquiry-1", token, "awaiting_owner", "rendering_approval")
-                inbox_monitor.reconcile_terminal(args.monitor_root, "inquiry-1", args.claim_root)
                 out = workflow_safe.send_approved_rendering(argparse.Namespace(
                     workspace=ws, estimate_id=estimate_id, message_id="inquiry-1", brief_id="01a06000-0000-7000-8000-000000000007", runner=runner,
                 ))

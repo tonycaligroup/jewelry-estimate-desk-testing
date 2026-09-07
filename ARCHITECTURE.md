@@ -381,6 +381,25 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.12.2 (built 6 September 2026): what the first live renderings on 4.12 taught.**
+Inside a one-shot render job the vision call resolved the environment's
+default model (`litellm/claude-fable-5`, 403 on the instance) while the
+session's shell resolved `kolo-best-available`; the checker now names
+`litellm/kolo-best-available` (`rendering.DEFAULT_VISION_MODEL`, profile
+override `rendering.vision_model`), retries the call with a pause, checks
+views one at a time, and cards a view it still cannot grade as "not
+machine-checked" instead of asking the owner. Render jobs are created with
+`--best-effort-deliver` (their target-less delivery step used to mark every
+finished job errored, so `--delete-after-run` never fired and the job sat
+in the owner's routines list) and the sweep removes any finished one-shot
+job on the next tick. A revision, or a run after a crash, archives the
+existing slot images (`rendering-N-r1.png`, `-prev`) before filing new
+ones; the slot files are write-once and refused the new bytes ("rendering
+destination already contains different data"), which the suite missed
+because the fake rendered identical bytes; it now renders distinct ones.
+A refused rendering send parks the claim back behind its card so the tick
+never re-renders it.
+
 **4.12.0 (built 6 September 2026): everything still open, as one system (RELEASE-PLAN-4.12.md).**
 A rejected rendering card asks `rendering_next`; the owner's words become
 `rendering-change.json`, `rendering.run_pieces(change, only, previous)`

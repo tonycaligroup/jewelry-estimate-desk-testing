@@ -45,6 +45,15 @@ def validate_profile(data: Any) -> dict[str, Any]:
         elif rehearsal_block.get("enabled") and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", str(rehearsal_block.get("address") or "")):
             errors.append("rehearsal.enabled needs rehearsal.address, the address the rehearsal inquiries come from")
 
+    rendering_block = data.get("rendering")
+    if rendering_block is not None:
+        if not isinstance(rendering_block, dict):
+            errors.append("rendering must be an object")
+        else:
+            vision = rendering_block.get("vision_model")
+            if vision is not None and not re.match(r"^[a-z0-9_.-]+/[A-Za-z0-9_.:-]+$", str(vision)):
+                errors.append("rendering.vision_model must be provider/model, for example litellm/kolo-best-available")
+
     mode = _read_path(data, "shop.mode")
     if mode is not None and mode != "retailer":
         # WORKFLOW.md: retail only. A missing mode means retailer.
