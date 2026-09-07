@@ -381,6 +381,19 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.12.5 (built 6 September 2026): a reopened estimate reads its message afresh, and quoted text never counts.**
+Live, the "change" re-read flagged `confirm.customer_stone` from the shop's
+own words quoted under the customer's reply ("I have attached ..." matched
+the loose phrase "i have a"), and `pending_followup` then took the first
+review of the message (the old post-estimate one) instead of the new one,
+so the desk went to price against an incomplete review and failed
+("approval request lacks a matching complete thread review").
+`reading_check.own_words` drops quoted lines and everything after an
+"On ... wrote:" marker; the own-stone phrases are specific again;
+`pending_followup` reads the latest review; `followup_stalled` counts asks
+within the current revision only. The change scenario now uses a quoted
+reply.
+
 **4.12.4 (built 6 September 2026): an owner answer never carries the heavy work.**
 "change", "second piece", "same", and "new" used to run the re-read and the
 price inside `answer-question`, that is inside the chat session's command,

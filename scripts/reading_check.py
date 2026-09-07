@@ -38,12 +38,27 @@ _NATURAL_WORDS = ("natural diamond", "natural stone", "mined diamond", "earth-mi
 _OWN_STONE_WORDS = estimate_record.SUPPLIED_STONE_WORDS
 
 
+_QUOTE_START_RE = re.compile(r"^\s*(on .{0,200}wrote:|-{2,}\s*original message\s*-{2,}|from:\s.*)$", re.I)
+
+
+def own_words(body: str) -> str:
+    """The customer's own lines: nothing quoted from an earlier email counts."""
+    kept: list[str] = []
+    for line in str(body or "").splitlines():
+        if _QUOTE_START_RE.match(line.strip()):
+            break
+        if line.lstrip().startswith(">"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _customer_text(digest: dict[str, Any]) -> str:
     parts = []
     for message in digest.get("messages") or []:
         if message.get("sent_by") == "shop":
             continue
-        parts.append(str(message.get("body") or ""))
+        parts.append(own_words(message.get("body") or ""))
     return "\n".join(parts).lower()
 
 

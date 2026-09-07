@@ -64,6 +64,20 @@ class ReadingCheckTests(unittest.TestCase):
         self.assertEqual(reading_check.compare(digest("A signet ring.", shop="What size 6 or size 10 would you like?"),
                                                {"piece_type": "signet ring", "finger_size": "8"}), [])
 
+    def test_quoted_shop_text_under_a_reply_never_counts(self) -> None:
+        """6 September 2026: "I have attached the design renderings" quoted under a reply read as the customer's own stone."""
+        body = ("Actually, can we change it to 14k rose gold, keeping everything else the same?\n\nTony\n\n"
+                "On Sun, Sep 6, 2026 at 8:39 PM <shop@example.com> wrote:\n"
+                "> Hi Tony, I have attached the design renderings you requested. Reset your\n"
+                "> expectations on lead time; my grandmother's ring took six weeks.\n")
+        spec = {"piece_type": "men's wedding band", "metal": "rose gold", "metal_karat": "14k", "stone_type": "diamond",
+                "stone_origin": "lab-grown"}
+        self.assertEqual(reading_check.compare(digest(body), spec), [])
+        self.assertEqual(reading_check.own_words(body).strip().splitlines()[-1], "Tony")
+        # The customer's own line above the quote still counts.
+        own = "I would like to reset my grandmother's diamond.\n\nOn Sun wrote:\n> anything"
+        self.assertEqual([d["topic"] for d in reading_check.compare(digest(own), spec)], ["customer_stone"])
+
     def test_names_and_questions(self) -> None:
         self.assertTrue(reading_check.is_confirm("confirm.piece_count"))
         self.assertFalse(reading_check.is_confirm("finger_size"))

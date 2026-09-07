@@ -1343,7 +1343,10 @@ class OwnStoneAndStallTests(SideBranchTests):
             thread, estimate_id = self._estimate_sent(ws, world)
             first_sent = dict(self.record(ws, estimate_id)["estimate_delivery"])
             world.design_change = ["metal_karat", "metal_color"]
-            world.customer_message("s2", thread, "Actually, could we do it in 18k rose gold instead?\n\nPat")
+            world.customer_message("s2", thread, "Actually, could we do it in 18k rose gold instead?\n\nPat\n\n"
+                                   "On Sun, Sep 6, 2026 at 6:45 PM shop@example.com wrote:\n"
+                                   "> Hi Pat, I have attached the design renderings you requested; the written\n"
+                                   "> specification controls the piece. Reset your expectations for lead time.\n")
             summary = self.tick(ws, world)
             asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
             self.assertEqual(len(asked), 1, (summary, asked, [(q["kind"], q["status"], q.get("delivery")) for q in self.questions(ws)], self.claim(ws, "s2")["status"]))

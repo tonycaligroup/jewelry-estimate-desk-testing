@@ -408,10 +408,12 @@ def followup_stalled(record: dict[str, Any], source_message_id: str, missing: li
     if not missing or record.get("status") != "awaiting_specs":
         return []
     source_hash = sha256_text(source_message_id)
+    revision = int(record.get("revision") or 0)
     earlier_reviews = [
         review for review in record.get("thread_reviews", [])
         if isinstance(review, dict) and review.get("source_message_id_sha256") != source_hash
         and review.get("outcome") == "awaiting_specs" and isinstance(review.get("missing_required_fields"), list)
+        and int(review.get("revision") or 0) >= revision  # a reopened estimate starts its asks afresh
     ]
     if not earlier_reviews or not (record.get("spec_gate_reply") or record.get("followup_replies")):
         return []
@@ -497,10 +499,12 @@ def pending_followup(record: dict[str, Any], source_message_id: str) -> dict[str
     if record.get("status") != "awaiting_specs":
         return None
     source_hash = sha256_text(source_message_id)
+    # The latest review of this message: a reopened estimate reads the same
+    # message again, and the earlier (post-estimate) review is history.
     review = next(
         (
             item
-            for item in record.get("thread_reviews", [])
+            for item in reversed(record.get("thread_reviews", []))
             if isinstance(item, dict)
             and item.get("source_message_id_sha256") == source_hash
         ),
@@ -786,7 +790,8 @@ SUPPLIED_STONE_WORDS = (
     "my stone", "my diamond", "my own", "our own", "her stone", "her diamond", "his stone", "his diamond",
     "mother's", "mothers", "father's", "fathers", "grandmother's", "grandmothers", "grandma's", "grandpa's",
     "family stone", "family diamond", "heirloom", "existing stone", "existing diamond", "the stone i have",
-    "i have a", "i have the", "i already have", "reset", "re-set", "remount", "re-mount", "reuse", "re-use",
+    "i have a diamond", "i have a stone", "i have the diamond", "i have the stone", "i already have",
+    "reset my", "reset her", "reset his", "reset the stone", "reset the diamond", "re-set", "remount", "re-mount", "reuse", "re-use",
     "customer supplied", "customer-supplied", "supplied by the customer", "their own stone", "own stone",
 )
 
