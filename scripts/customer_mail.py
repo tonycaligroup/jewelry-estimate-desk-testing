@@ -96,6 +96,8 @@ def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[st
                 raise ValueError("the estimate must say, in your own words: " + "; ".join(missing))
             if facts.get("valid_through") and facts["valid_through"] not in body:
                 raise ValueError(f"the estimate must say it is good through {facts['valid_through']}")
+            if facts.get("updated") and "updated" not in body.lower():
+                raise ValueError("this is an updated estimate after the customer's change; the email must say so")
         else:
             if customer_content_guard.DOLLAR_AMOUNT_RE.search(body):
                 raise ValueError("this email must not mention any dollar amount")

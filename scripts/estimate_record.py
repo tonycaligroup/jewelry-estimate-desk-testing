@@ -188,6 +188,17 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                 record = preserve_append_only(existing, record, field)
             existing_delivery = existing.get("estimate_delivery")
             proposed_delivery = record.get("estimate_delivery")
+            revised = int(record.get("revision") or 0) > int(existing.get("revision") or 0)
+            if revised:
+                # A reopened estimate (WORKFLOW.md 6.8): the sent estimate and its
+                # binding moved into estimate_history; check they are all there.
+                history = record.get("estimate_history") or []
+                archived = history[-1] if history and isinstance(history[-1], dict) else {}
+                if existing_delivery is not None and archived.get("estimate_delivery") != existing_delivery:
+                    raise ValueError("a revision must archive the sent estimate unchanged")
+                if existing.get("approval_binding_hash") and archived.get("approval_binding_hash") != existing.get("approval_binding_hash"):
+                    raise ValueError("a revision must archive the approval binding unchanged")
+                existing_delivery = None
             if existing_delivery is not None:
                 if (
                     proposed_delivery is not None
@@ -197,7 +208,7 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
                 if proposed_delivery is None:
                     record = dict(record)
                     record["estimate_delivery"] = existing_delivery
-            existing_binding = existing.get("approval_binding_hash")
+            existing_binding = None if revised else existing.get("approval_binding_hash")
             if existing_binding is not None:
                 existing_source = existing.get("approval_source_message_id")
                 proposed_source = record.get("approval_source_message_id")
@@ -609,6 +620,9 @@ def record_thread_review(
         reviews = record.setdefault("thread_reviews", [])
         if not isinstance(reviews, list):
             raise ValueError("thread_reviews must be an array")
+        revision = int(record.get("revision") or 0)
+        if revision:
+            evidence["revision"] = revision
         for existing in reviews:
             if not isinstance(existing, dict):
                 raise ValueError("thread_reviews contains invalid evidence")
@@ -616,6 +630,10 @@ def record_thread_review(
                 existing.get("source_message_id_sha256")
                 != evidence["source_message_id_sha256"]
             ):
+                continue
+            if int(existing.get("revision") or 0) < revision:
+                # A review from before the estimate was reopened (WORKFLOW.md
+                # 6.8) is history; the same message is read again now.
                 continue
             comparable = dict(existing)
             comparable.pop("recorded_at", None)
@@ -1418,6 +1436,55 @@ def record_rendering_revision(root: Path, estimate_id: str, source_message_id: s
         return record
 
 
+REOPEN_KINDS = {"design_change", "second_piece"}
+ARCHIVED_FIELDS = (
+    "estimate_delivery", "approval_binding_hash", "approval_source_message_id", "proposed_price",
+    "internal_cost_sheet", "approved_price", "outbound_provider_message_id", "owner_price",
+    "rejected_approval_bindings", "rendering_revisions",
+)
+
+
+def reopen_for_change(root: Path, estimate_id: str, source_message_id: str, kind: str, note: str = "") -> dict[str, Any]:
+    """After a sent estimate the customer changed the design or added a piece (WORKFLOW.md 6.8).
+
+    The sent estimate is history, never edited: everything bound to it moves
+    into `estimate_history` and the record goes back to awaiting_specs on the
+    same thread, so the gate, the price, and the card run again from the
+    customer's new words. The specification stays as the starting point; the
+    next reading merges the change into it (or adds the piece).
+    """
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    if kind not in REOPEN_KINDS:
+        raise ValueError("kind must be design_change or second_piece")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") not in {"estimate_sent", "appointment_booked", "approved"}:
+            raise ValueError(f"estimate is {record.get('status')}; only a sent estimate can be reopened")
+        archived = {field: record[field] for field in ARCHIVED_FIELDS if field in record}
+        archived.update({
+            "revision": int(record.get("revision") or 0),
+            "specification": record.get("specification"),
+            "reopened_by_sha256": sha256_text(source_message_id),
+            "reopened_for": kind,
+            "note": str(note or "")[:400],
+            "reopened_at": datetime.now(timezone.utc).isoformat(),
+        })
+        history = record.setdefault("estimate_history", [])
+        if not isinstance(history, list):
+            raise ValueError("estimate_history must be an array")
+        history.append(archived)
+        for field in ARCHIVED_FIELDS:
+            record.pop(field, None)
+        record["revision"] = int(record.get("revision") or 0) + 1
+        record["reopened_for"] = kind
+        record["missing_required_fields"] = []
+        record["status"] = "awaiting_specs"
+        write_object(path, record)
+        return record
+
+
 def rejected_bindings(record: dict[str, Any]) -> set[str]:
     """Binding hashes of price cards the owner rejected before naming a price."""
     value = record.get("rejected_approval_bindings")
@@ -1918,7 +1985,7 @@ def require_processed_evidence(
     matching_review = next(
         (
             item
-            for item in reviews
+            for item in reversed(reviews)
             if isinstance(item, dict)
             and item.get("source_message_id_sha256") == source_hash
         ),

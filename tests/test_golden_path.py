@@ -124,6 +124,7 @@ class World:
         self.spawned: list[list[str]] = []
         self.other: list[list[str]] = []
         self.busy: list[dict[str, str]] = []
+        self.design_change: list[str] = []
         self.calendar_events: dict[str, dict] = {}
         self.created_events: list[dict] = []
         self.deleted_events: list[str] = []
@@ -405,6 +406,9 @@ class World:
                 "small diamonds set along the shoulders, bead set or channel set?\n\nBest,\nKolo Jewelers"
             )}
         if "Classify ONLY the newest customer message" in prompt:
+            if self.design_change:
+                return {"post_estimate_artifact": {"design_change_assessment": "changed",
+                                                   "intents": [], "changed_fields": list(self.design_change)}}
             return {"post_estimate_artifact": {"design_change_assessment": "unchanged",
                                                "intents": list(self.intents), "changed_fields": []}}
         if "copy the customer's own words about timing" in prompt:
@@ -1256,6 +1260,42 @@ class OwnStoneAndStallTests(SideBranchTests):
 
     def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
+
+    def test_a_change_after_the_estimate_reopens_it_and_sends_an_updated_estimate_once(self) -> None:
+        """WORKFLOW.md 6.8: the owner's "change" reopens the gate on the same thread; the old figure is history."""
+        def branch(ws: Path, world: World) -> None:
+            thread, estimate_id = self._estimate_sent(ws, world)
+            first_sent = dict(self.record(ws, estimate_id)["estimate_delivery"])
+            world.design_change = ["metal_karat", "metal_color"]
+            world.customer_message("s2", thread, "Actually, could we do it in 18k rose gold instead?\n\nPat")
+            summary = self.tick(ws, world)
+            asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
+            self.assertEqual(len(asked), 1, (summary, asked, [(q["kind"], q["status"], q.get("delivery")) for q in self.questions(ws)], self.claim(ws, "s2")["status"]))
+            self.assertIn("change", asked[-1]["text"])
+            self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner", summary)
+            self.assertEqual(len(world.sent), 1, "nothing sent on a change the owner has not read")
+            # The owner says it is a change: the record reopens, the new words are read, and the price card follows.
+            world.design_change = []
+            world.spec = {**world.spec, "metal": "rose gold", "metal_karat": "18k", "metal_color": "rose"}
+            answered = self.answer(ws, "change")
+            self.assertEqual(answered["decision"], "design_change", answered)
+            self.assertEqual(answered["revision"], 1)
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["status"], "pending_approval", answered)
+            self.assertEqual(record["revision"], 1)
+            self.assertEqual(record["estimate_history"][-1]["estimate_delivery"], first_sent, "the sent estimate is history, untouched")
+            self.assertEqual(record["specification"]["metal_karat"], "18k")
+            card = world.cards[-1]
+            self.assertIn("18K rose gold", card["title"])
+            self.assertEqual(len(world.sent), 1)
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.sent), 2, "the updated estimate went out once")
+            self.assertIn("updated estimate", world.sent[-1]["body"])
+            self.assertEqual(self.record(ws, estimate_id)["status"], "estimate_sent")
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+        self.run_branch(branch)
 
     def test_two_sizes_read_as_one_piece_are_confirmed_before_any_price(self) -> None:
         """ARCHITECTURE-OPTIONS.md E': the customer names two sizes, the model reads one piece; the follow-up confirms."""

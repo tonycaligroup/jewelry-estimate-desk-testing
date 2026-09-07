@@ -227,6 +227,55 @@ def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runne
     return {"outcome": "asked", "question_id": question["question_id"], "created": created}
 
 
+def _answer_design_change(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
+                          question: dict[str, Any]) -> dict[str, Any]:
+    """The owner says the reply changes the design (WORKFLOW.md 6.8): reopen the estimate on this thread.
+
+    The sent estimate becomes history on the record; the customer's message
+    is read again as part of the inquiry, the gate asks for what the change
+    leaves open or prices it, and a fresh card follows. Same thread, same
+    record, the old figure never re-sent.
+    """
+    import cron_config  # local import keeps module import order unchanged
+    import inbox_watcher  # local import: inbox_watcher imports this module
+    import pipeline  # local import: pipeline imports this module
+
+    message_id = question["gmail_message_id"]
+    estimate_id = question["estimate_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "unclear_reply",
+                              "decision": "design_change"}
+    reopened = _resume_parked_claim(p, message_id)
+    if not Path(reopened["work_paths"]["gmail_message"]).exists():
+        import gmail_fetch  # local import; only needed when the work file was cleaned up
+
+        gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    if record.get("status") in SENT_STATUSES:
+        estimate_record.reopen_for_change(p["record_root"], estimate_id, message_id, "design_change", args.answer)
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, "design_change")
+    work_dir = Path(reopened["work_paths"]["work_dir"])
+    intake_path = work_dir / "intake-result.json"
+    intake_result = read_object(intake_path) if intake_path.exists() else None
+    if not intake_result or intake_result.get("estimate_id") != estimate_id:
+        intake_result = intake(argparse.Namespace(
+            monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+            message_id=message_id, shop_profile=p["shop_profile"],
+        ))
+        write_private(intake_path, intake_result)
+    inbox_claim.delegate(p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
+                         cron_config.WORKER_LEASE_SECONDS)
+    switch = pipeline.settings(workspace / "estimate-desk")
+    done = pipeline.process_claim(
+        workspace, args.base_dir.resolve(), message_id, intake_result,
+        model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
+        command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
+    )
+    result.update({"pipeline": done.get("outcome"), "revision": int(estimate_record.read_object(
+        estimate_record.record_path(p["record_root"], estimate_id)).get("revision") or 0)})
+    return result
+
+
 def _ask_rendering_next(p: dict[str, Path], estimate_id: str, message_id: str, runner: Any) -> dict[str, Any]:
     """The owner rejected a rendering card: ask, in words, what should change (WORKFLOW.md 6.6, 6.10).
 
@@ -1105,6 +1154,7 @@ def review_thread(args: argparse.Namespace) -> dict[str, Any]:
                 message_id=args.message_id,
                 estimate_id=args.estimate_id,
                 record_output=Path(paths["current_record"]),
+                runner=getattr(args, "runner", subprocess.run),
             )
         )
         return {"outcome": "post_estimate_reviewed", **decision, "next": decision["next_action"]}
@@ -1878,6 +1928,8 @@ def answer_decision(
                 message_id, intake_result["estimate_id"], runner=getattr(args, "runner", subprocess.run))}
         result["pipeline"] = done.get("outcome")
         return result
+    if question["kind"] == "unclear_reply" and outcome == "design_change":
+        return _answer_design_change(args, workspace, p, root, question)
     if question["kind"] == "appointment_next":
         return _answer_appointment_next(args, workspace, p, root, question, outcome)
     if question["kind"] == "price_next":
@@ -2723,10 +2775,13 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
             f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
             if value not in (None, "", []) and key != "notes"
         )
+    revised = int(record.get("revision") or 0) > 0
     fixed = ESTIMATE_NOTE.format(
         piece=owner_questions.summary_of_piece(spec), spec_lines=spec_lines, price=f"{price:,.2f}",
         lead_time=lead_time, valid_through=valid_through, shop=shop,
     )
+    if revised:
+        fixed = fixed.replace("Here is where the estimate lands:", "Here is where the updated estimate lands:", 1)
     if len(pieces) > 1:
         specification_words = "; ".join(
             estimate_record.piece_label(spec, i) + ": " + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in piece.items()
@@ -2741,6 +2796,8 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
         "specification": specification_words,
         "lead time": (f"about {lead} business days from design approval, an estimate not a guarantee" if lead else ""),
         "valid_through": valid_through, "shop name": shop,
+        **({"updated": "this is an updated estimate after the customer's change; say so, and that it replaces the earlier figure"}
+           if revised else {}),
     }
     return facts, fixed
 
