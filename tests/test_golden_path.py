@@ -1421,7 +1421,11 @@ class OwnStoneAndStallTests(SideBranchTests):
             self._profile_with_rates(ws)
             thread, estimate_id = self._estimate_sent(ws, world)
             world.design_change = ["pieces"]
-            world.customer_message("s2", thread, "Could you also quote a plain matching band, size 10?\n\nPat")
+            world.customer_message("s2", thread, "Could you also quote a plain matching band, size 10?\n\nPat\n\n"
+                                   "On Sun, Sep 6, 2026 at 6:45 PM shop@example.com wrote:\n"
+                                   "> Thank you for the details on a signet ring. Here is where the estimate lands:\n"
+                                   "> finger size 10, stone origin lab-grown, accent stones 0.2 ct\n"
+                                   "> Estimate: $2,505.00\n> This estimate is good through September 20, 2026.\n")
             self.tick(ws, world)
             self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner")
             world.design_change = []
@@ -2749,7 +2753,9 @@ class SameSenderTests(SideBranchTests):
             # The customer answers in a brand-new thread instead of replying.
             world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7",
                           "dimensions": "4mm wide", "finish": "polished", "notes": "plain band, no stones"}
-            world.customer_message("n1", "thread-second", "Size 7, 4mm wide, polished. Plain, no stones.\n\nPat", subject="My band")
+            world.customer_message("n1", "thread-second", "Size 7, 4mm wide, polished. Plain, no stones.\n\nPat\n\n"
+                                   "On Sun wrote:\n> To put together an accurate estimate, could you share:\n> - What finger size should the ring be?\n",
+                                   subject="My band")
             self.tick(ws, world)
             asked = [n for n in world.notices if not n["file"]]
             self.assertEqual(len(asked), 1, asked)
@@ -2770,6 +2776,37 @@ class SameSenderTests(SideBranchTests):
             self.tick(ws, world)
             self.assertEqual(len(world.sent), 2)
             self.assertEqual(world.sent[-1]["thread_id"], "thread-second", "the estimate goes to the thread the customer is in now")
+            self.assertEqual(self.claim(ws, "n1")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_same_on_a_new_thread_after_the_estimate_books_the_meeting_in_the_new_thread(self) -> None:
+        """The live script: estimate sent, the customer asks to meet from a brand-new thread, owner says same."""
+        def branch(ws: Path, world: World) -> None:
+            _thread, estimate_id = self._estimate_sent(ws, world)
+            wanted = next_weekday(2, 14, 0)
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+            world.customer_message("n1", "thread-new", f"Following up on my ring, can we meet {wanted.strftime('%A')} at 2?\n\nPat\n\n"
+                                   "On Sun wrote:\n> Estimate: $2,505.00\n> This estimate is good through September 20, 2026.\n",
+                                   subject="Following up")
+            self.tick(ws, world)
+            asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertIn("same piece, or a new one", asked[-1]["text"])
+            self.assertEqual(self.claim(ws, "n1")["status"], "awaiting_owner")
+            answered = self.answer(ws, "same")
+            self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)
+            summary = self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "appointment_booking", (summary, card.get("payload")))
+            self.assertEqual(self.record(ws, estimate_id)["route"]["thread_id"], "thread-new")
+            self.assertEqual(len(world.sent), 1, "nothing sent before approval")
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertEqual(world.sent[-1]["thread_id"], "thread-new", "the confirmation goes to the thread the customer is in now")
+            self.assertEqual(self.record(ws, estimate_id)["status"], "appointment_booked")
             self.assertEqual(self.claim(ws, "n1")["status"], "processed")
         self.run_branch(branch)
 
