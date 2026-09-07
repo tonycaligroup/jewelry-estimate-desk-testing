@@ -194,6 +194,13 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   address at claim time and prefixing every card title, subject, and notice
   (`[REHEARSAL]`); Kolo itself has no test mode, so the mark must be the
   skill's. **built 6 Sep, jewelry desk 4.12.0**
+- Inside a cron-run command (the watcher's own environment) `openclaw infer
+  image describe --model litellm/kolo-best-available` works (exit 0, model
+  kolo-best-available); the environment's *default* vision model there
+  resolved to litellm/claude-fable-5 and returned 403. Always name the
+  model. A one-shot job created with `--delete-after-run
+  --best-effort-deliver` removed itself after the run. **verified 7 Sep
+  2026 on the test instance**
 - The chat session's `exec` tool detaches a command after `yieldMs`
   (default 10 s) into a background process the session must then manage
   (`process` poll/log/kill); it does not kill it unless a per-call
