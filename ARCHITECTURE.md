@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.3 (7 September 2026): a second piece never re-prices the piece already quoted.**
+**4.13.4 (built 7 September 2026): a second piece never re-prices the piece already quoted.**
 Live, brief #38 quoted a men's band on 14.5 g, 1.8 ct melee, 5.5 h; the
 second-piece re-price (brief #44) asked the model again and got 8 g, 1.5
 ct, 7 h plus shipping on each piece, so the sent quote moved.

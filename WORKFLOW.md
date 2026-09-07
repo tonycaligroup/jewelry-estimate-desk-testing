@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 7 September 2026 (unpublished, after 4.13.3): a sent estimate is a
+- Built 7 September 2026 (4.13.4): a sent estimate is a
   commitment; when a second piece is added, every piece already quoted keeps
   the grams, hours, center carat, fees and accent stones it was quoted on
   (from the archived cost sheet) and only the new piece is estimated; rates
