@@ -305,7 +305,8 @@ parked behind a question, or on a card; a claim the tick cannot finish is
 retried with a bound (six tries for a gateway or model hiccup, two for a
 refusal) and then becomes one question to the owner. No worker agent job
 and no render job exist: everything, renderings included (one view per
-tick), runs in the tick.
+tick), runs in the tick, and the rendering step files cards and never
+emails a customer; only the approved card's executor sends.
 
 The main session does none of this. It runs the execute line on an
 approved card, runs `answer-question` with the owner's words, and runs
