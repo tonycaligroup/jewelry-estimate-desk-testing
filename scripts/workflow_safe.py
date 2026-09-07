@@ -1514,8 +1514,15 @@ def ask_stuck_claim(p: dict[str, Path], message_id: str, error: str, attempts: i
         "Reply \"retry\" and I will try again, \"skip\" and I will set it aside for you to handle, or \"handle myself\"."
     )
     root = owner_questions.questions_root(p["monitor_root"])
+    # A claim can get stuck more than once (the owner said retry, it failed
+    # again): each time is a new question with its own code. A closed one
+    # must never be reused, or nothing reaches the owner and the claim parks
+    # with no question to resume it (6 September 2026).
+    earlier = [q for q in owner_questions.list_questions(root)
+               if q["kind"] == "stuck_claim" and q["gmail_message_id"].split("#")[0] == message_id and q["status"] != "open"]
+    qid_message = message_id if not earlier else f"{message_id}#round{len(earlier) + 1}"
     created, question = owner_questions.create_decision(
-        root, "stuck_claim", estimate_id, message_id, text, {"error": error[:300], "attempts": attempts},
+        root, "stuck_claim", estimate_id, qid_message, text, {"error": error[:300], "attempts": attempts, "source_message_id": message_id},
     )
     question = _attach_answer_command(root, p["monitor_root"], question)
     if created:
@@ -1528,7 +1535,7 @@ def _answer_stuck_claim(args: argparse.Namespace, workspace: Path, p: dict[str, 
                         question: dict[str, Any], outcome: str) -> dict[str, Any]:
     import inbox_watcher  # local import: inbox_watcher imports this module
 
-    message_id = question["gmail_message_id"]
+    message_id = (question.get("context") or {}).get("source_message_id") or question["gmail_message_id"].split("#")[0]
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "stuck_claim", "decision": outcome}
     if outcome == "retry":
         reopened = _resume_parked_claim(p, message_id)

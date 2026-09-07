@@ -129,6 +129,7 @@ class World:
         self.busy: list[dict[str, str]] = []
         self.design_change: list[str] = []
         self.describe_argv: list[list[str]] = []
+        self.failed_render_jobs: list[str] = []
         self.calendar_events: dict[str, dict] = {}
         self.created_events: list[dict] = []
         self.deleted_events: list[str] = []
@@ -560,7 +561,11 @@ class GoldenPathTests(unittest.TestCase):
 
         while world._pending_render_jobs:
             opts = world._pending_render_jobs.pop(0)
-            render_job.run(ws, ROOT, opts["--message-id"], opts["--estimate-id"], "openclaw", runner=world.run, judge_runner=world.run)
+            try:
+                render_job.run(ws, ROOT, opts["--message-id"], opts["--estimate-id"], "openclaw", runner=world.run, judge_runner=world.run)
+            except (OSError, ValueError, subprocess.CalledProcessError, judge.JudgmentError) as exc:
+                # On the pod the job process exits non-zero; the tick sees the noted attempt.
+                world.failed_render_jobs.append(str(exc)[:200])
 
     def tick(self, ws: Path, world: World) -> dict:
         summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t",
@@ -1269,6 +1274,50 @@ class OwnStoneAndStallTests(SideBranchTests):
 
     def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
+
+    def test_a_second_stuck_gets_a_new_question_and_a_requeue_starts_fresh(self) -> None:
+        """6 September 2026: the second stuck reused a closed code, nothing reached the owner, and a requeue
+        kept the old failure count so the next tick asked instead of trying."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            # The image tool is down: the render job fails every time the tick spawns it.
+            world.fail_next["image"] = 500
+            with patch.object(inbox_watcher, "TRANSIENT_ATTEMPTS", 2), patch.object(rendering, "DESCRIBE_PAUSE_SECONDS", 0):
+                first = None
+                for _ in range(4):
+                    summary = self.tick(ws, world)
+                    if summary["stuck"]:
+                        first = summary["stuck"][0]
+                        break
+                self.assertIsNotNone(first, "the desk asks after the bounded tries")
+                asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
+                first_code = asked[-1]["text"].split("desk-answer ")[-1].strip()[:6]
+                # The owner says retry; the tool is still down; the desk must ask again, with a new code.
+                answered = self.answer(ws, "retry")
+                self.assertEqual(answered["decision"], "retry", answered)
+                second = None
+                for _ in range(4):
+                    summary = self.tick(ws, world)
+                    if summary["stuck"]:
+                        second = summary["stuck"][0]
+                        break
+                self.assertIsNotNone(second, "a second stuck is asked, not parked silently")
+                asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
+                second_code = asked[-1]["text"].split("desk-answer ")[-1].strip()[:6]
+                self.assertNotEqual(first_code, second_code, "a closed question's code is never reused")
+                self.assertEqual([f["code"] for f in doctor.scan(ws) if f["level"] != "info"], [], "an open question resumes the claim")
+                # The doctor's requeue starts fresh: the tool is back, the rendering lands on a card.
+                world.fail_next.clear()
+                self.assertEqual(doctor.requeue(ws, "s2")["outcome"], "requeued")
+                self.assertEqual(self.claim(ws, "s2").get("inline_attempts", 0), 0, "a requeue resets the retry budget")
+                for _ in range(3):
+                    summary = self.tick(ws, world)
+                    if world.cards and world.cards[-1]["kind"] == "send_rendering":
+                        break
+                self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)
+        self.run_branch(branch)
 
     def test_a_vision_check_that_keeps_failing_cards_the_views_unchecked_instead_of_asking(self) -> None:
         """6 September 2026: the describe call failed six jobs in a row and the owner was asked; the images were fine."""

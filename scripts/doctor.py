@@ -82,7 +82,9 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
     open_questions = [q for q in questions if q.get("status") == "open" and not q.get("dormant")]
     open_by_message: dict[str, list[dict[str, Any]]] = {}
     for q in open_questions:
-        open_by_message.setdefault(str(q.get("gmail_message_id")), []).append(q)
+        # A repeat question (a second stuck, a second rejection) carries a
+        # round suffix on its message id; the claim it resumes has none.
+        open_by_message.setdefault(str(q.get("gmail_message_id")).split("#")[0], []).append(q)
 
     claims: dict[str, dict[str, Any] | None] = {}
     for item in items:
@@ -140,7 +142,7 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
     for q in open_questions:
         if q.get("kind") not in PARKING_KINDS:
             continue
-        message_id = str(q.get("gmail_message_id"))
+        message_id = str(q.get("gmail_message_id")).split("#")[0]
         claim = claims.get(message_id)
         path = inbox_claim.claim_path(claim_root, message_id)
         if claim is None and not path.exists():
@@ -236,9 +238,13 @@ def requeue(workspace: Path, message_id: str, token: str | None = None, opener: 
         if claim.get("status") == "awaiting_owner":
             reopened = inbox_monitor.reopen_item(monitor_root, message_id, claim_root, 1)
             token_claim = reopened["claim"]["claim_token"]
+            # A requeue is a fresh start: the failure counter and the last
+            # error go, or the next tick would count the old failures and ask
+            # the stuck question again instead of trying (6 September 2026).
+            inbox_claim.mark_inline(claim_root, message_id, token_claim, False)
             inbox_claim.mark_inline(claim_root, message_id, token_claim, True)
             inbox_claim.release_lease(claim_root, message_id, token_claim)
-            return {"outcome": "requeued", "message_id": message_id, "how": "parked claim reopened; the next tick retries it"}
+            return {"outcome": "requeued", "message_id": message_id, "how": "parked claim reopened with a fresh retry budget; the next tick retries it"}
         if claim.get("status") == "processing":
             if inbox_claim.recovery_lease_active(claim):
                 raise ValueError("a run holds this claim right now; wait for it to finish")

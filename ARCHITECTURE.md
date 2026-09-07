@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.12.3 (built 6 September 2026): a requeue starts fresh; a repeat stuck question has its own code.**
+After the owner's requeue the claim kept `inline_attempts` at the
+deterministic limit, so the next tick asked the stuck question instead of
+trying; that question reused the code of one already answered, nothing
+reached the chat, and the claim parked with no open question.
+`doctor.requeue` now clears the counter and the last error;
+`ask_stuck_claim` numbers repeat questions (`<message>#roundN`, source id
+in the context); the doctor and the stuck answer map a round code back to
+its message. The test harness lets an in-process render job fail the way
+the pod's job exits, so the scenario reproduces.
+
 **4.12.2 (built 6 September 2026): what the first live renderings on 4.12 taught.**
 Inside a one-shot render job the vision call resolved the environment's
 default model (`litellm/claude-fable-5`, 403 on the instance) while the
