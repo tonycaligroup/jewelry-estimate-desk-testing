@@ -578,7 +578,8 @@ class GoldenPathTests(unittest.TestCase):
 
     def answer(self, ws: Path, text: str) -> dict:
         with patch("sys.stdout", io.StringIO()) as stdout, patch("sys.stderr", io.StringIO()) as stderr:
-            code = workflow_safe.main(["answer-question", "--workspace", str(ws), "--base-dir", str(ROOT), "--answer", text])
+            code = workflow_safe.main(["answer-question", "--workspace", str(ws), "--base-dir", str(ROOT), "--answer", text,
+                                       "--openclaw", "openclaw"])
         printed = stdout.getvalue()
         self.assertEqual(code, 0, printed + stderr.getvalue())
         return json.loads(printed)
@@ -2074,6 +2075,77 @@ class TwoPieceTests(SideBranchTests):
         profile["pricing"]["stones_per_carat"]["lab_grown_diamond"] = 900.0
         profile["pricing"]["typical_finished_weights"].update({"engagement ring": 5.0, "wedding band": 4.0})
         (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+
+    def _two_piece_rendering_card(self, ws: Path, world: World) -> dict:
+        self._profile_with_rates(ws)
+        world.spec = {"metal": "yellow gold", "metal_karat": "14k", "notes": "a matching set", "pieces": [
+            {"piece_type": "engagement ring", "finger_size": "6", "stone_type": "diamond", "stone_origin": "lab-grown",
+             "stone_carat": "2", "stone_shape": "round", "stone_color": "F", "stone_clarity": "VS1", "setting_style": "solitaire",
+             "center_stone": "yes"},
+            {"piece_type": "wedding band", "finger_size": "10", "notes": "plain, polished, no stones"},
+        ]}
+        world.customer_message("t1", "thread-two", "A matching set: 14k yellow gold engagement ring, size 6, 2 ct round lab-grown "
+                               "solitaire, and a plain band, size 10.\n\nPat")
+        summary = self.tick(ws, world)
+        self.assertTrue(world.cards, summary)
+        world.approve(world.cards[-1])
+        self.tick(ws, world)
+        world.intents = ["rendering_request"]
+        world.customer_message("t2", "thread-two", "Could you show me renderings of both?\n\nPat", attachments=("logo.png",))
+        self.tick(ws, world)
+        card = world.cards[-1]
+        self.assertEqual(card["kind"], "send_rendering", card)
+        self.assertEqual(len(card["payload"]["images"]), 4)
+        return card
+
+    def test_rejected_renderings_ask_what_to_change_and_only_the_named_piece_is_rendered_again(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            first = self._two_piece_rendering_card(ws, world)
+            renders_before, previews_before = len(world.renders), len([n for n in world.notices if n["file"]])
+            world.reject(first, "band looks off")
+            summary = self.tick(ws, world)
+            self.assertEqual([r.get("kind") for r in summary["rejections"]], ["rendering"], summary)
+            asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertIn("engagement ring, wedding band", asked[-1]["text"])
+            self.assertEqual(self.claim(ws, "t2")["status"], "awaiting_owner", "the claim waits behind the question")
+            self.assertEqual(len(world.sent), 1, "nothing sent")
+            answered = self.answer(ws, "make the band wider and flatter")
+            self.assertEqual(answered["outcome"], "re_render_started", answered)
+            self.assertEqual(answered["pieces"], ["wedding band"])
+            self.run_render_jobs(ws, world)
+            self.assertEqual(len(world.renders), renders_before + 2, "only the band's two views are rendered again")
+            self.assertTrue(any("wider and flatter" in flag(argv, "--prompt") for argv in world.renders[-2:]), "the owner's words reach the prompt")
+            fresh = world.cards[-1]
+            self.assertNotEqual(fresh["brief_id"], first["brief_id"])
+            self.assertEqual(fresh["title"], "Send renderings (revision 2): " + fresh["details"]["Piece"][:120 - len("Send renderings (revision 2): ")])
+            self.assertEqual(fresh["details"]["Revised"], "make the band wider and flatter")
+            self.assertEqual(len(fresh["payload"]["images"]), 4)
+            self.assertEqual(fresh["payload"]["images"][:2], first["payload"]["images"][:2], "the ring's views are kept as they were")
+            self.assertEqual(len([n for n in world.notices if n["file"]]), previews_before + 4, "four previews again")
+            self.assertEqual(self.claim(ws, "t2")["status"], "awaiting_owner")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["rendering_revisions"][-1]["pieces"], ["wedding band"])
+            world.approve(fresh)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.sent), 2)
+            self.assertEqual(len(world.sent[-1]["attachments"]), 4)
+            self.assertEqual(self.claim(ws, "t2")["status"], "processed")
+            self.assertEqual(self.tick(ws, world)["approvals"], [])
+        self.run_branch(branch)
+
+    def test_rejected_renderings_then_handle_myself_holds_them(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            first = self._two_piece_rendering_card(ws, world)
+            world.reject(first, "no")
+            self.tick(ws, world)
+            answered = self.answer(ws, "I will handle it myself")
+            self.assertEqual(answered["decision"], "handle_myself")
+            self.assertEqual(self.claim(ws, "t2")["status"], "manual_review")
+            self.assertEqual(len(world.sent), 1)
+            self.assertEqual(self.tick(ws, world)["rejections"], [])
+        self.run_branch(branch)
 
     def test_ring_and_band_are_asked_priced_and_written_as_two_pieces(self) -> None:
         def branch(ws: Path, world: World) -> None:

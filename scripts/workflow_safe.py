@@ -131,10 +131,7 @@ def handle_rejected_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
                     question = _attach_answer_command(root, p["monitor_root"], question)
                     owner_questions.deliver(root, question, runner=runner, extra_args=channel)
             elif kind == "rendering":
-                _close_parked_claim(p, message_id, "owner_rejected_rendering")
-                kolo_safe.run_command(["kolo", "notify-owner", "-m",
-                    f"Renderings for estimate {estimate_id.upper()} are held back; nothing was sent. "
-                    "Tell me what to change if you want new views.", *channel], runner=runner)
+                _ask_rendering_next(p, estimate_id, message_id, runner)
             elif kind == "price":
                 _ask_price_next(p, estimate_id, message_id, runner)
             brief_registry.mark(p["monitor_root"], entry["brief_id"], "rejected", entry.get("note"))
@@ -228,6 +225,76 @@ def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runne
     if created:
         owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
     return {"outcome": "asked", "question_id": question["question_id"], "created": created}
+
+
+def _ask_rendering_next(p: dict[str, Path], estimate_id: str, message_id: str, runner: Any) -> dict[str, Any]:
+    """The owner rejected a rendering card: ask, in words, what should change (WORKFLOW.md 6.6, 6.10).
+
+    The claim stays parked behind the card; the answer re-renders the pieces
+    the owner names and files a fresh card. Asked once per rejection.
+    """
+    root = owner_questions.questions_root(p["monitor_root"])
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    customer = kolo_safe._sender_display(record["route"]["recipient"])
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their piece"
+    labels = [estimate_record.piece_label(record.get("specification") or {}, i)
+              for i in range(len(estimate_record.pieces_of(record.get("specification") or {})))]
+    answered = [q for q in owner_questions.list_questions(root)
+                if q["kind"] == "rendering_next" and q["gmail_message_id"].split("#")[0] == message_id and q["status"] != "open"]
+    round_no = len(answered) + 2
+    qid_message = message_id if round_no == 2 else f"{message_id}#round{round_no}"
+    which = f" Name the piece if not all of them ({', '.join(labels)})." if len(labels) > 1 else ""
+    text = (
+        f"You passed on the renderings for {customer} ({piece}); nothing was sent. "
+        f"Tell me what should change and I will render new views for a fresh card.{which} "
+        "Or say \"handle myself\" and I will hold the renderings and leave the thread to you."
+    )
+    created, question = owner_questions.create_decision(
+        root, "rendering_next", estimate_id, qid_message, text,
+        {"source_message_id": message_id, "round": round_no, "pieces": labels},
+    )
+    question = _attach_answer_command(root, p["monitor_root"], question)
+    if created:
+        owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
+    return {"outcome": "asked", "question_id": question["question_id"], "created": created}
+
+
+def _answer_rendering_next(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
+                           question: dict[str, Any], outcome: str) -> dict[str, Any]:
+    """Apply the owner's answer after a rejected rendering card: re-render, or the thread is theirs."""
+    import cron_config  # local import keeps module import order unchanged
+    import inbox_watcher  # local import: inbox_watcher imports this module
+    import rendering  # local import: only needed to read the owner's words
+
+    runner = getattr(args, "runner", subprocess.run)
+    context = question.get("context") or {}
+    message_id = context.get("source_message_id") or question["gmail_message_id"].split("#")[0]
+    estimate_id = question["estimate_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "rendering_next", "decision": outcome}
+    if outcome == "handle_myself":
+        if _claim_parked(p, message_id):
+            _close_parked_claim(p, message_id, "owner_rejected_rendering")
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        result["note"] = "the renderings are held; the desk leaves this thread to the owner"
+        return result
+    note = " ".join(str(args.answer or "").split())[:400]
+    labels = [str(l) for l in context.get("pieces") or []]
+    named = rendering.pieces_named(note, labels) if len(labels) > 1 else []
+    reopened = _resume_parked_claim(p, message_id)
+    work_dir = Path(reopened["work_paths"]["work_dir"])
+    write_private(work_dir / "rendering-change.json", {"note": note, "pieces": named, "round": int(context.get("round") or 2)})
+    estimate_record.record_rendering_revision(p["record_root"], estimate_id, message_id, note, named or labels)
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    # The rendering runs where every rendering runs: a one-shot job with its
+    # own clock; the claim is leased to it until it files the fresh card.
+    inbox_claim.delegate(p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
+                         cron_config.WORKER_LEASE_SECONDS)
+    job_id = inbox_watcher.spawn_render_job(workspace, args.base_dir.resolve(), args.openclaw or inbox_watcher.default_openclaw(),
+                                            message_id, estimate_id, runner=runner)
+    result.update({"outcome": "re_render_started", "job_id": job_id, "pieces": named or labels, "note": note})
+    return result
 
 
 def _refile_price_card(p: dict[str, Path], estimate_id: str, message_id: str, round_no: int,
@@ -1815,6 +1882,8 @@ def answer_decision(
         return _answer_appointment_next(args, workspace, p, root, question, outcome)
     if question["kind"] == "price_next":
         return _answer_price_next(args, p, root, question, outcome)
+    if question["kind"] == "rendering_next":
+        return _answer_rendering_next(args, workspace, p, root, question, outcome)
     if question["kind"] == "command_failed":
         return _answer_command_failed(args, p, root, question, outcome)
     if question["kind"] == "stuck_claim":
@@ -1898,14 +1967,22 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
         "images": [{"slot": index, "sha256": _sha256_file(image)} for index, image in enumerate(images, start=1)],
         **({"checker": str(getattr(args, "checker", ""))[:200]} if getattr(args, "checker", None) else {}),
         **({"archetype": str(getattr(args, "archetype", ""))[:40]} if getattr(args, "archetype", None) else {}),
+        **({"revised": str(getattr(args, "revised", ""))[:160]} if getattr(args, "revised", None) else {}),
+        **({"revision": int(getattr(args, "revision", 1))} if int(getattr(args, "revision", 1) or 1) > 1 else {}),
         "execute": execute_line(
             args.monitor_root, "send-approved-rendering",
             estimate_id=args.estimate_id, message_id=args.message_id, brief_id="<Brief ID>",
         ),
     }
+    revision = int(getattr(args, "revision", 1) or 1)
     approval_path = Path(paths["work_dir"]) / "rendering-approval.json"
     if approval_path.exists() and read_object(approval_path) != details:
-        raise ValueError("existing rendering approval binding changed")
+        existing = read_object(approval_path)
+        if revision > int(existing.get("revision") or 1):
+            # The owner passed on those views; keep them as history, bind the new ones.
+            write_private(Path(paths["work_dir"]) / f"rendering-approval-r{int(existing.get('revision') or 1)}.json", existing)
+        else:
+            raise ValueError("existing rendering approval binding changed")
     write_private(approval_path, details)
     runner = getattr(args, "runner", subprocess.run)
     customer = kolo_safe._sender_display(record["route"]["recipient"])
@@ -1934,14 +2011,15 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
             image, runner=runner,
         )
     approver = activation_binding.load(activation_binding.binding_path(args.monitor_root))
+    suffix = f":r{revision}" if revision > 1 else ""
     kolo_safe.request_rendering_approval_claimed(
         args.claim_root, args.message_id, token,
-        f"rendering_approval:{args.estimate_id}:{args.message_id}",
+        f"rendering_approval:{args.estimate_id}:{args.message_id}{suffix}",
         args.estimate_id, approval_path, approver["session_key"], runner=runner,
     )
     inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "rendering_approval")
-    _register_brief(args.monitor_root, "rendering", f"Send renderings: {piece}"[:120], args.estimate_id, args.message_id, runner)
-    return {"outcome": "rendering_approval_requested", "images": len(images), "next": "done"}
+    _register_brief(args.monitor_root, "rendering", kolo_safe.rendering_title(details), args.estimate_id, args.message_id, runner)
+    return {"outcome": "rendering_approval_requested", "images": len(images), "next": "done", "revision": revision}
 
 
 def send_approved_rendering(args: argparse.Namespace) -> dict[str, Any]:

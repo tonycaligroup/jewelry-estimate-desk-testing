@@ -319,6 +319,15 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
     return rows, reasoning, title
 
 
+def rendering_title(details: dict[str, Any]) -> str:
+    """The rendering card's title; a revision says so, and the registry matches on it."""
+    piece = str(details.get("piece") or "their estimate")[:120]
+    revision = details.get("revision")
+    if isinstance(revision, int) and revision > 1:
+        return f"Send renderings (revision {revision}): {piece}"[:120]
+    return f"Send renderings: {piece}"[:120]
+
+
 def build_request_rendering_approval(
     estimate_id: str, details: Path, session_key: str, agent_id: str = "main"
 ) -> list[str]:
@@ -341,13 +350,14 @@ def build_request_rendering_approval(
         "Piece": piece,
         "Images": f"{len(images)} view(s), sent to you in chat just before this card",
         **({"Checker": str(details_object.get("checker"))[:200]} if details_object.get("checker") else {}),
+        **({"Revised": str(details_object.get("revised"))[:160]} if details_object.get("revised") else {}),
         "Approve means": "Email these renderings to the customer in their thread, with the note that the written specification controls the piece.",
-        "Reject means": "Nothing is sent; tell the desk what to change if you want new views.",
+        "Reject means": "Nothing is sent; I ask you what should change, or say \"handle myself\".",
         "Estimate": estimate_id,
     }
     return [
         "kolo", "request-approval", "--agent-id", agent_id,
-        "--action", f"Send renderings: {piece}"[:120],
+        "--action", rendering_title(details_object),
         "--reasoning", (
             f"{customer} asked to see the design. The desk generated {len(images)} view(s) of the approved "
             "specification and sent them to you in chat. Approve to email them; reject to hold them."

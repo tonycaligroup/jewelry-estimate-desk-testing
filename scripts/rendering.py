@@ -207,6 +207,24 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
             "raw": text[:600]}
 
 
+def pieces_named(note: str, labels: list[str]) -> list[str]:
+    """The piece labels the owner's words name ("the band", "ring"); none named means every piece."""
+    words = " " + re.sub(r"[^a-z0-9 ]+", " ", (note or "").lower()) + " "
+    named = []
+    for label in labels:
+        tokens = [t for t in re.sub(r"[^a-z0-9 ]+", " ", label.lower()).split() if len(t) > 2 and t not in {"the", "and", "with"}]
+        if any(f" {t} " in words or f" {t}s " in words for t in tokens):
+            named.append(label)
+    return named
+
+
+def _with_change(piece: dict[str, Any], change: str) -> dict[str, Any]:
+    if not change:
+        return piece
+    notes = str(piece.get("notes") or "").strip()
+    return {**piece, "notes": (notes + (" " if notes else "") + f"Owner's revision: {change.strip()}").strip()}
+
+
 def run_pieces(
     specification: dict[str, Any],
     out_dir: Path,
@@ -217,31 +235,53 @@ def run_pieces(
     vision_model: str | None = DEFAULT_VISION_MODEL,
     image_model: str | None = None,
     runner: Runner = subprocess.run,
+    change: str = "",
+    only: list[str] | None = None,
+    previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One plan and its views per piece (MULTI-PIECE-PLAN.md batch 3); one piece is `run` unchanged.
 
     Two pieces get two views each; three or four get one each, so a card never
     carries more than four images. A matching set tells the planner so the
-    pieces share a design language.
+    pieces share a design language. A revision (`change`, the owner's words)
+    re-renders the pieces in `only` (every piece when empty) with the words
+    in the prompt and keeps the other pieces' views from `previous`.
     """
     import estimate_record  # local import: keeps rendering usable from the lab without the desk
 
     pieces = estimate_record.pieces_of(specification)
     if len(pieces) <= 1:
-        report = run(specification, out_dir, openclaw, artwork=artwork, context=context, model=model,
-                     vision_model=vision_model, image_model=image_model, runner=runner)
+        report = run(_with_change(specification, change), out_dir, openclaw, artwork=artwork, context=context,
+                     model=model, vision_model=vision_model, image_model=image_model, runner=runner)
         for view in report["views"]:
             view.setdefault("piece", estimate_record.piece_label(specification, 0))
         report["pieces"] = [{"label": estimate_record.piece_label(specification, 0), "plan": report["plan"]}]
+        if change:
+            report["revision"] = change
         return report
     views_each = 2 if len(pieces) <= 2 else 1
     set_note = " The pieces are a matching set: one design language, the same metal finish and motifs, each piece its own size." \
         if estimate_record.is_set(specification) else ""
+    kept = {}
+    if change and only:
+        for view in (previous or {}).get("views") or []:
+            if view.get("piece") not in only and Path(str(view.get("image") or "")).exists():
+                kept.setdefault(view["piece"], []).append(view)
     combined: dict[str, Any] = {"pieces": [], "views": [], "prompts": [], "references": []}
     slot = 1
     for index, piece in enumerate(pieces[:4]):
         label = estimate_record.piece_label(specification, index)
-        one = run({**piece, "notes": (str(piece.get("notes") or "") + set_note).strip()}, out_dir / f"piece-{index + 1}",
+        if label in kept:
+            previous_plan = next((pc.get("plan") for pc in (previous or {}).get("pieces") or [] if pc.get("label") == label), None)
+            combined["pieces"].append({"label": label, "plan": previous_plan or {}, "kept": True})
+            for view in kept[label]:
+                combined["views"].append({**view, "slot": slot, "piece": label, "kept": True})
+                slot += 1
+            continue
+        piece_spec = {**piece, "notes": (str(piece.get("notes") or "") + set_note).strip()}
+        if change and (not only or label in only):
+            piece_spec = _with_change(piece_spec, change)
+        one = run(piece_spec, out_dir / f"piece-{index + 1}",
                   openclaw, artwork=artwork, context=context, model=model, vision_model=vision_model,
                   image_model=image_model, runner=runner, views=views_each)
         combined["pieces"].append({"label": label, "plan": one["plan"]})
@@ -250,8 +290,10 @@ def run_pieces(
         for view in one["views"]:
             combined["views"].append({**view, "slot": slot, "piece": label})
             slot += 1
-    combined["plan"] = combined["pieces"][0]["plan"]
+    combined["plan"] = next((pc["plan"] for pc in combined["pieces"] if pc.get("plan")), {})
     combined["all_passed"] = all(v["passed"] for v in combined["views"])
+    if change:
+        combined["revision"] = change
     return combined
 
 

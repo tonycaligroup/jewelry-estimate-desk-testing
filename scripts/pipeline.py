@@ -217,11 +217,23 @@ def render_and_send(
         art = found[-1] if found else None
     except Exception:  # noqa: BLE001 - artwork is a bonus; a render without it still goes to the owner
         art = None
+    # A revision: the owner passed on the last views and said what should
+    # change. Only the pieces their words name are rendered again.
+    change_path = work_dir / "rendering-change.json"
+    change = workflow_safe.read_object(change_path) if change_path.exists() else {}
+    note = str(change.get("note") or "").strip()
+    previous = None
+    only: list[str] = []
+    if note:
+        report_path = work_dir / "rendering-report.json"
+        previous = workflow_safe.read_object(report_path) if report_path.exists() else None
+        labels = [str(pc.get("label") or "") for pc in (previous or {}).get("pieces") or []]
+        only = list(change.get("pieces") or []) or rendering.pieces_named(note, labels)
     try:
         report = rendering.run_pieces(
             record.get("specification") or {}, work_dir / "renders", openclaw, artwork=art,
             context=judge.thread_text(gmail_text.thread_digest(thread, message_id)) if thread else "",
-            model=model, runner=command_runner,
+            model=model, runner=command_runner, change=note, only=only, previous=previous,
         )
     except judge.JudgmentError as exc:
         raise ValueError(f"rendering plan failed: {exc}") from exc
@@ -245,7 +257,9 @@ def render_and_send(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
         runner=command_runner, checker=checker,
-        archetype=", ".join(dict.fromkeys(p["plan"]["archetype"] for p in report.get("pieces") or [{"plan": report["plan"]}])),
+        archetype=", ".join(dict.fromkeys(str((pc.get("plan") or {}).get("archetype") or "")
+                                          for pc in report.get("pieces") or [{"plan": report["plan"]}])).strip(", "),
+        revised=note or None, revision=int(change.get("round") or 1) if note else 1,
     ))
 
 

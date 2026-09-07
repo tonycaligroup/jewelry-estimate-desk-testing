@@ -30,7 +30,7 @@ import inbox_monitor
 import owner_questions
 import run_lease
 
-PARKING_KINDS = {"missing_rate", "same_sender", "unclear_reply", "followup_stalled", "stuck_claim"}
+PARKING_KINDS = {"missing_rate", "same_sender", "unclear_reply", "followup_stalled", "stuck_claim", "rendering_next"}
 
 
 def _read(path: Path) -> Any:

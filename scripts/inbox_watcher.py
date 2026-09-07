@@ -89,8 +89,8 @@ def spawn_render_job(workspace: Path, base_dir: Path, openclaw: str, message_id:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", message_id or "") or not re.fullmatch(r"jed-[0-9a-f]{16}", estimate_id or ""):
         raise ValueError("render job needs a plain message id and an estimate id")
     command = render_job_command(base_dir, workspace, message_id, estimate_id)
-    completed = runner(render_job_create_argv(openclaw, workspace, message_id, command),
-                       check=True, capture_output=True, text=True, shell=False)
+    # One seam for every desk subprocess (the tests fake it there too).
+    completed = kolo_safe.run_command(render_job_create_argv(openclaw, workspace, message_id, command), runner=runner)
     raw = completed.stdout or ""
     try:
         job = json.loads(raw[raw.find("{"):])

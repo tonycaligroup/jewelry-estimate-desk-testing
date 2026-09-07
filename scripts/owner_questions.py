@@ -28,9 +28,9 @@ from typing import Any, Callable
 
 SCHEMA_VERSION = 1
 QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed",
-                  "stuck_claim", "price_next"}
+                  "stuck_claim", "price_next", "rendering_next"}
 DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim",
-                  "price_next"}
+                  "price_next", "rendering_next"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -61,6 +61,10 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "appointment_next": {
         "times_given": ("offer", "try", "how about", "suggest", "propose", "these", "give them"),
         "offer_other_times": ("other times", "different times", "new times", "pick again", "something else", "other options"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
+    },
+    "rendering_next": {
+        "change_given": ("change", "make", "wider", "thinner", "bigger", "smaller", "more", "less", "different", "instead", "redo"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },
     "price_next": {
@@ -365,6 +369,9 @@ def match_option(question: dict[str, Any], answer: str) -> str:
     if not hits and question.get("kind") == "appointment_next" and _mentions_a_time(words):
         # The owner typed times: "Tuesday 2pm or Wednesday at 11".
         return "times_given"
+    if question.get("kind") == "rendering_next" and "handle_myself" not in hits and (answer or "").strip():
+        # Any other words are the change the owner wants rendered.
+        return "change_given"
     if question.get("kind") == "price_next" and "handle_myself" not in hits and parse_owner_price(answer) is not None:
         # The owner typed a price: "$2,300" or "file it at 2300".
         return "price_given"

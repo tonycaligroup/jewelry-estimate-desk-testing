@@ -1392,6 +1392,30 @@ RETIREMENT_REASONS = {
 }
 
 
+def record_rendering_revision(root: Path, estimate_id: str, source_message_id: str, note: str, pieces: list[str]) -> dict[str, Any]:
+    """The owner passed on the renderings and said what should change (WORKFLOW.md 6.6)."""
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    if not isinstance(note, str) or not note.strip() or len(note) > 400:
+        raise ValueError("a revision note must be text of at most 400 characters")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        revisions = record.setdefault("rendering_revisions", [])
+        if not isinstance(revisions, list):
+            raise ValueError("rendering_revisions must be an array")
+        revisions.append({
+            "source_message_id_sha256": sha256_text(source_message_id),
+            "note": note.strip(),
+            "pieces": [str(p) for p in pieces],
+            "round": len([r for r in revisions if isinstance(r, dict)
+                          and r.get("source_message_id_sha256") == sha256_text(source_message_id)]) + 2,
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        write_object(path, record)
+        return record
+
+
 def rejected_bindings(record: dict[str, Any]) -> set[str]:
     """Binding hashes of price cards the owner rejected before naming a price."""
     value = record.get("rejected_approval_bindings")

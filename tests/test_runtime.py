@@ -7714,7 +7714,8 @@ class RejectionPollTests(unittest.TestCase):
                         {"event_type": "brief.rejected", "brief_id": "b-2", "details": {}, "created_at": "2026-09-04T01:35:00Z"},
                     ])
                 return subprocess.CompletedProcess(argv, 0, "", "")
-            with patch.object(workflow_safe, "_close_parked_claim") as close:
+            with patch.object(workflow_safe, "_close_parked_claim") as close, \
+                    patch.object(workflow_safe, "_ask_rendering_next", return_value={"outcome": "asked"}) as ask:
                 handled = workflow_safe.handle_rejected_briefs(ws, runner=runner)
             self.assertEqual([h["kind"] for h in handled], ["appointment", "rendering"])
             asked = owner_questions.find(root, dormant["question_id"])
@@ -7722,8 +7723,10 @@ class RejectionPollTests(unittest.TestCase):
             self.assertEqual(asked["delivery"]["status"], "sent")
             notify = [c for c in calls if c[:2] == ["kolo", "notify-owner"]]
             self.assertIn("You passed.", notify[0][3])
-            self.assertIn("held back", notify[1][3])
-            close.assert_called_once()
+            # A rejected rendering card asks what should change (WORKFLOW.md 6.6); the claim stays parked.
+            ask.assert_called_once()
+            self.assertEqual(ask.call_args.args[1:3], ("jed-0123456789abcdef", "m-9"))
+            close.assert_not_called()
             self.assertEqual({e["outcome"] for e in brief_registry.load_all(p["monitor_root"])}, {"rejected"})
             # Second poll: nothing pending, no audit call.
             calls.clear()
