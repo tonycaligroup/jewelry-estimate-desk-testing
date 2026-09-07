@@ -78,6 +78,16 @@ class ReadingCheckTests(unittest.TestCase):
         own = "I would like to reset my grandmother's diamond.\n\nOn Sun wrote:\n> anything"
         self.assertEqual([d["topic"] for d in reading_check.compare(digest(own), spec)], ["customer_stone"])
 
+    def test_a_denied_own_stone_is_not_a_claim(self) -> None:
+        """6 September 2026: "I don't have stone of my own" matched "my own" and the owner was asked."""
+        spec = {"piece_type": "men's wedding band", "metal": "rose gold", "metal_karat": "14k", "stone_type": "diamond",
+                "stone_origin": "lab-grown"}
+        for body in ("I don't have stone of my own. Just the change to 14k rose gold.",
+                     "No stone of my own, same design.",
+                     "We do not have a family diamond to use."):
+            self.assertEqual(reading_check.compare(digest(body), spec), [], body)
+        self.assertEqual([d["topic"] for d in reading_check.compare(digest("I have a diamond of my own to set."), spec)], ["customer_stone"])
+
     def test_names_and_questions(self) -> None:
         self.assertTrue(reading_check.is_confirm("confirm.piece_count"))
         self.assertFalse(reading_check.is_confirm("finger_size"))

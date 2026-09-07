@@ -381,6 +381,12 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.12.7 (built 6 September 2026): a denied own stone is not a claim.**
+"I don't have stone of my own" matched "my own" and the stall guard asked
+the owner; `reading_check._says_own_stone` ignores a phrase preceded (within
+forty characters) by a denial: don't, do not, no, not, never, without,
+rather than.
+
 **4.12.6 (built 6 September 2026): a recorded ask is re-checked before it is honoured.**
 Live, the retry after 4.12.5 honoured the ask a dead 4.12.3 run had
 recorded (the false "confirm your own stone") and emailed it. The dead-spot

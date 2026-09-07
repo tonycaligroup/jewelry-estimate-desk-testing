@@ -118,10 +118,27 @@ def compare(digest: dict[str, Any], specification: dict[str, Any]) -> list[dict[
     elif says_natural and not says_lab and origins and all(o and ("lab" in o or "moissanite" in o) for o in origins):
         add("stone_origin", "natural", ", ".join(sorted(o for o in origins if o)))
 
-    # A stone the customer already owns, read as one the shop supplies.
-    if any(w in text for w in _OWN_STONE_WORDS) and not estimate_record.customer_supplies_stone(specification or {}):
+    # A stone the customer already owns, read as one the shop supplies. A
+    # denial ("I don't have a stone of my own", "no stone of my own") is not
+    # a claim.
+    if _says_own_stone(text) and not estimate_record.customer_supplies_stone(specification or {}):
         add("customer_stone", "a stone of their own", "a stone the shop supplies")
     return out
+
+
+_NEGATION_RE = re.compile(r"(don't|do not|dont|doesn't|does not|didn't|did not|won't|will not|no|not|never|without|rather than)\s")
+
+
+def _says_own_stone(text: str) -> bool:
+    """An own-stone phrase that is not denied in the same breath."""
+    for phrase in _OWN_STONE_WORDS:
+        start = text.find(phrase)
+        while start >= 0:
+            window = text[max(0, start - 40):start]
+            if not _NEGATION_RE.search(window):
+                return True
+            start = text.find(phrase, start + 1)
+    return False
 
 
 def names(disagreements: list[dict[str, str]]) -> list[str]:
