@@ -228,6 +228,65 @@ def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runne
     return {"outcome": "asked", "question_id": question["question_id"], "created": created}
 
 
+def _answer_same_piece(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
+                       question: dict[str, Any]) -> dict[str, Any]:
+    """The owner says a new thread is the same piece (WORKFLOW.md 6.1): the estimate carries on there.
+
+    The record's route moves to the new thread (the old one kept as history)
+    and the message is then read as a reply on that estimate: the gate, the
+    price, or the post-estimate steps continue in the new thread. A record
+    whose price card is pending cannot move (the binding holds the route);
+    that one still hands over to the owner.
+    """
+    import cron_config  # local import keeps module import order unchanged
+    import inbox_watcher  # local import: inbox_watcher imports this module
+    import pipeline  # local import: pipeline imports this module
+
+    message_id = question["gmail_message_id"]
+    estimate_id = (question.get("context") or {}).get("existing_estimate_id") or question["estimate_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "same_sender", "decision": "same"}
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    if record.get("status") not in estimate_record.MOVABLE_STATUSES:
+        _close_parked_claim(p, message_id, "owner_decided_same")
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, "same")
+        result.update({"claim": "owner_decided_same", "note": f"the estimate is {record.get('status')}; its thread cannot move while a card is pending, so the owner takes this thread"})
+        return result
+    reopened = _resume_parked_claim(p, message_id)
+    if not Path(reopened["work_paths"]["gmail_message"]).exists():
+        import gmail_fetch  # local import; only needed when the work file was cleaned up
+
+        gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
+    new_route = read_object(Path(reopened["work_paths"]["route"]))
+    estimate_record.move_route(p["record_root"], estimate_id, new_route, message_id)
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, "same")
+    work_dir = Path(reopened["work_paths"]["work_dir"])
+    (work_dir / "intake-result.json").unlink(missing_ok=True)
+    intake_result = intake(argparse.Namespace(
+        monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+        message_id=message_id, shop_profile=p["shop_profile"],
+    ))
+    write_private(work_dir / "intake-result.json", intake_result)
+    result["intake"] = {k: intake_result.get(k) for k in ("decision", "estimate_id", "next_action", "outcome")}
+    if intake_result.get("next_action") != "review_thread":
+        return result
+    inbox_claim.delegate(p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
+                         cron_config.WORKER_LEASE_SECONDS)
+    switch = pipeline.settings(workspace / "estimate-desk")
+    done = pipeline.process_claim(
+        workspace, args.base_dir.resolve(), message_id, intake_result,
+        model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
+        command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
+    )
+    if done.get("outcome") == "render_job_requested":
+        done = {"outcome": "render_job_spawned", "job_id": inbox_watcher.spawn_render_job(
+            workspace, args.base_dir.resolve(), args.openclaw or inbox_watcher.default_openclaw(),
+            message_id, estimate_id, runner=getattr(args, "runner", subprocess.run))}
+    result.update({"pipeline": done.get("outcome"), "thread_id": new_route.get("thread_id")})
+    return result
+
+
 def _answer_design_change(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
                           question: dict[str, Any], outcome: str = "design_change") -> dict[str, Any]:
     """The owner says the reply changes the design or adds a piece (WORKFLOW.md 6.8): reopen on this thread.
@@ -1355,8 +1414,8 @@ def ask_same_sender(
         f"{who} wrote in a new email thread (\"{new_subject}\") but already has an open estimate "
         f"with us for {old_words}"
         + (f' ("{old_subject}", {existing.get("status", "open").replace("_", " ")})' if old_subject else "")
-        + ". Is this the same piece, or a new one? Reply \"same\" and I will leave that thread to you, "
-        "or \"new\" and I will quote it as a separate estimate."
+        + ". Is this the same piece, or a new one? Reply \"same\" and I will carry that estimate on in the new "
+        "thread, or \"new\" and I will quote it as a separate estimate."
     )
     root = owner_questions.questions_root(args.monitor_root)
     _created, question = owner_questions.create_decision(
@@ -1930,6 +1989,8 @@ def answer_decision(
                 message_id, intake_result["estimate_id"], runner=getattr(args, "runner", subprocess.run))}
         result["pipeline"] = done.get("outcome")
         return result
+    if question["kind"] == "same_sender" and outcome == "same":
+        return _answer_same_piece(args, workspace, p, root, question)
     if question["kind"] == "unclear_reply" and outcome in {"design_change", "second_piece"}:
         return _answer_design_change(args, workspace, p, root, question, outcome)
     if question["kind"] == "appointment_next":

@@ -7102,9 +7102,14 @@ class DecisionQuestionTests(unittest.TestCase):
 
 
 
-    def test_same_sender_same_closes_the_claim_without_a_card(self) -> None:
+    def test_same_sender_same_hands_over_while_a_price_card_is_pending(self) -> None:
+        """'same' moves the estimate to the new thread (golden path); a pending card holds the route, so that case hands over."""
         with tempfile.TemporaryDirectory() as directory:
             ws, args, existing, asked = self.parked_same_sender(directory)
+            path = estimate_record.record_path(args.record_root, existing["estimate_id"])
+            record = estimate_record.read_object(path)
+            record["status"] = "pending_approval"
+            estimate_record.write_object(path, record)
             out = workflow_safe.answer_question(argparse.Namespace(
                 workspace=ws, base_dir=ROOT, question=None, answer="same one, I'll reply", openclaw="openclaw",
                 runner=Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),

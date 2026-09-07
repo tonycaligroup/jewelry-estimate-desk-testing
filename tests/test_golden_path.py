@@ -2612,6 +2612,39 @@ class SameSenderTests(SideBranchTests):
     def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
 
+    def test_same_piece_on_a_new_thread_carries_the_estimate_on_there(self) -> None:
+        """WORKFLOW.md 6.1, owner says "same": the record's thread moves and the reply goes to the new thread."""
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k"}
+            world.customer_message("f1", "thread-first", "A plain 14k yellow gold band please.\n\nPat", subject="Band")
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), 1, "the follow-up asked for the size")
+            estimate_id = self.only_estimate(ws)
+            # The customer answers in a brand-new thread instead of replying.
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7",
+                          "dimensions": "4mm wide", "finish": "polished", "notes": "plain band, no stones"}
+            world.customer_message("n1", "thread-second", "Size 7, 4mm wide, polished. Plain, no stones.\n\nPat", subject="My band")
+            self.tick(ws, world)
+            asked = [n for n in world.notices if not n["file"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertIn("carry that estimate on in the new thread", asked[0]["text"])
+            self.assertEqual(self.claim(ws, "n1")["status"], "awaiting_owner")
+            answered = self.answer(ws, "same")
+            self.assertEqual(answered["decision"], "same", answered)
+            self.assertEqual(answered.get("thread_id"), "thread-second", answered)
+            self.assertEqual(answered.get("pipeline"), "approval_requested", answered)
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["route"]["thread_id"], "thread-second")
+            self.assertEqual(record["route_history"][-1]["route"]["thread_id"], "thread-first")
+            self.assertEqual(record["status"], "pending_approval")
+            self.assertEqual(len(sorted((ws / "estimate-desk" / "records").glob("*.json"))), 1, "one estimate, one piece")
+            world.approve(world.cards[-1])
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), 2)
+            self.assertEqual(world.sent[-1]["thread_id"], "thread-second", "the estimate goes to the thread the customer is in now")
+            self.assertEqual(self.claim(ws, "n1")["status"], "processed")
+        self.run_branch(branch)
+
     def test_new_thread_from_a_known_customer_is_asked_and_new_is_quoted_inline(self) -> None:
         def branch(ws: Path, world: World) -> None:
             # An inquiry still open on its own thread (details asked, not yet given).

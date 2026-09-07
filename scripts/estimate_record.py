@@ -169,7 +169,10 @@ def persist_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
             existing = read_object(path)
             route_ownership.validate_record(existing)
             if existing["route"] != record["route"]:
-                raise ValueError("estimate route is immutable")
+                history = record.get("route_history") or []
+                moved = history and isinstance(history[-1], dict) and history[-1].get("route") == existing["route"]
+                if not moved:
+                    raise ValueError("estimate route is immutable")
             existing_reply = existing.get("spec_gate_reply")
             proposed_reply = record.get("spec_gate_reply")
             if existing_reply is not None:
@@ -556,7 +559,9 @@ def record_thread_review(
         route_ownership.validate_record(record)
         if thread_id != record["route"]["thread_id"]:
             raise ValueError("thread review does not match the owned thread")
-        if record["route"]["gmail_message_id"] not in validated_ids:
+        if record["route"]["gmail_message_id"] not in validated_ids and not record.get("route_history"):
+            # After the owner's "same" moved the estimate to a new thread, the
+            # message that opened it lives in the old one (route_history).
             raise ValueError("thread review must include the initiating Gmail message")
         post_estimate = record["status"] in {
             "estimate_sent",
@@ -1432,6 +1437,61 @@ def record_rendering_revision(root: Path, estimate_id: str, source_message_id: s
                           and r.get("source_message_id_sha256") == sha256_text(source_message_id)]) + 2,
             "at": datetime.now(timezone.utc).isoformat(),
         })
+        write_object(path, record)
+        return record
+
+
+MOVABLE_STATUSES = {"awaiting_specs", "estimate_sent", "appointment_booked", "approved"}
+
+
+def move_route(root: Path, estimate_id: str, new_route: dict[str, Any], source_message_id: str) -> dict[str, Any]:
+    """The same customer continued the same piece in a new email thread (WORKFLOW.md 6.1, owner said "same").
+
+    Every reply from now on goes to the new thread; the old route is kept in
+    `route_history`. A record whose price card is pending keeps its thread
+    (the card's binding holds the route), so that case still hands over.
+    """
+    source_message_id = validate_provider_id(source_message_id, "source_message_id")
+    if not isinstance(new_route, dict):
+        raise ValueError("new_route must be an object")
+    for field in ("thread_id", "gmail_message_id", "recipient"):
+        route_ownership.require_text(new_route.get(field), f"new_route.{field}")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") not in MOVABLE_STATUSES:
+            raise ValueError(f"estimate is {record.get('status')}; its thread cannot move while a card is pending")
+        if new_route.get("recipient", "").lower() != str(record["route"].get("recipient", "")).lower():
+            raise ValueError("the new thread is from a different address; not the same customer")
+        if new_route.get("thread_id") == record["route"].get("thread_id"):
+            return record
+        for other in root.glob("jed-*.json"):
+            if other.name == f"{estimate_id}.json":
+                continue
+            try:
+                other_record = read_object(other)
+            except (OSError, ValueError):
+                continue
+            if (other_record.get("route") or {}).get("thread_id") == new_route.get("thread_id") \
+                    and other_record.get("status") in route_ownership.ACTIVE_STATUSES:
+                raise ValueError("another open estimate already owns that thread")
+        history = record.setdefault("route_history", [])
+        if not isinstance(history, list):
+            raise ValueError("route_history must be an array")
+        history.append({
+            "route": record["route"],
+            "moved_by_sha256": sha256_text(source_message_id),
+            "moved_at": datetime.now(timezone.utc).isoformat(),
+        })
+        # Only the thread and the reply headers move. The initiating message
+        # stays the one that opened the estimate, so ownership and the
+        # evidence rules keep reading the new message as a reply.
+        moved = dict(record["route"])
+        for field in ("thread_id", "original_message_id", "references", "original_subject"):
+            if field in new_route:
+                moved[field] = new_route[field]
+        record["route"] = moved
         write_object(path, record)
         return record
 
