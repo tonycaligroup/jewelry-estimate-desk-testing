@@ -8765,3 +8765,35 @@ class PriceTitleFitTests(unittest.TestCase):
             short = kolo_safe.approval_title(self._details("ring", 1), "jed-1")
         self.assertNotIn("…", short)
         self.assertIn("Assumptions: 18K yellow gold (piece 0) 8g x $106.36; bench labor (piece 0) 7h x $42.00; complex prong setting (piece 0) $40.00", short)
+
+
+class PieceLabelTests(unittest.TestCase):
+    """Live, 7 September 2026: two bands both labelled '(men's wedding band)' on card #46."""
+
+    def test_two_pieces_of_one_kind_are_told_apart_by_what_differs(self) -> None:
+        spec = {"metal": "gold", "metal_karat": 18, "pieces": [
+            {"piece_type": "men's wedding band", "metal_color": "yellow", "finger_size": 10},
+            {"piece_type": "men's wedding band", "metal_color": "rose", "finger_size": 5}]}
+        self.assertEqual(estimate_record.piece_label(spec, 0), "men's wedding band, yellow gold")
+        self.assertEqual(estimate_record.piece_label(spec, 1), "men's wedding band, rose gold")
+        sizes = {"pieces": [{"piece_type": "band", "finger_size": 10}, {"piece_type": "band", "finger_size": 5}]}
+        self.assertEqual(estimate_record.piece_label(sizes, 1), "band, size 5")
+        same = {"pieces": [{"piece_type": "band"}, {"piece_type": "band"}]}
+        self.assertEqual([estimate_record.piece_label(same, i) for i in (0, 1)], ["band 1", "band 2"])
+        distinct = {"pieces": [{"piece_type": "engagement ring"}, {"piece_type": "wedding band"}]}
+        self.assertEqual(estimate_record.piece_label(distinct, 1), "wedding band")
+
+    def test_frozen_lines_still_match_their_piece_with_the_longer_label(self) -> None:
+        spec = {"pieces": [{"piece_type": "band", "metal_color": "yellow", "metal": "gold"},
+                           {"piece_type": "band", "metal_color": "rose", "metal": "gold"}]}
+        sheet = {"metal_lines": [{"metal": "18K gold (band, yellow gold)", "quantity_grams": 12.0, "unit_cost": 100.0},
+                                 {"metal": "18K gold (band, rose gold)", "quantity_grams": 10.0, "unit_cost": 100.0}],
+                 "stone_lines": [{"stone": "melee (band, rose gold)", "quantity": 1.2, "unit_cost": 100.0, "rate_key": "melee"}],
+                 "labor_lines": [{"task": "bench labor (band, yellow gold)", "hours": 5.0, "rate": 42.0},
+                                 {"task": "bench labor (band, rose gold)", "hours": 5.0, "rate": 42.0}],
+                 "other_hard_cost_lines": [{"label": "shipping (band, rose gold)", "total_cost": 50.0, "rate_key": "shipping"}]}
+        record = {"reopened_for": "second_piece", "estimate_history": [{"specification": spec, "internal_cost_sheet": sheet}]}
+        frozen = cost_components_module.prior_quantities(record)
+        self.assertEqual(frozen[0]["accents"], [])
+        self.assertEqual(frozen[1]["accents"], [{"key": "melee", "carats": 1.2}])
+        self.assertEqual(frozen[1]["fees"], ["shipping"])

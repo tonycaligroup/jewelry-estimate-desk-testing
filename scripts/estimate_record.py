@@ -762,13 +762,31 @@ def is_multi_piece(specification: Any) -> bool:
 
 
 def piece_label(specification: Any, index: int) -> str:
-    """'engagement ring', 'wedding band', or 'piece 2'."""
+    """'engagement ring', 'wedding band', or 'piece 2'; two pieces of one kind are told apart by what differs.
+
+    Live, 7 September 2026: a yellow band and a rose band were both labelled
+    "(men's wedding band)" on the card, so the assumption lines could not be
+    told apart. The first differing fact joins the label ("men's wedding
+    band, rose gold"); a still-identical pair is numbered.
+    """
     pieces = pieces_of(specification)
-    if 0 <= index < len(pieces):
-        kind = str(pieces[index].get("piece_type") or "").strip().lower()
-        if kind:
-            return kind
-    return f"piece {index + 1}"
+    if not (0 <= index < len(pieces)):
+        return f"piece {index + 1}"
+    kind = str(pieces[index].get("piece_type") or "").strip().lower()
+    if not kind:
+        return f"piece {index + 1}"
+    twins = [i for i, piece in enumerate(pieces) if str(piece.get("piece_type") or "").strip().lower() == kind]
+    if len(twins) == 1:
+        return kind
+    for key in ("metal_color", "metal", "finger_size", "stone_type", "stone_carat", "setting_style"):
+        values = [str(pieces[i].get(key) or "").strip().lower() for i in twins]
+        mine = values[twins.index(index)]
+        if mine and values.count(mine) == 1:
+            words = mine if key != "finger_size" else f"size {mine}"
+            if key in ("metal_color",) and "gold" not in mine and str(pieces[index].get("metal") or "").lower().find("gold") >= 0:
+                words = f"{mine} gold"
+            return f"{kind}, {words}"
+    return f"{kind} {twins.index(index) + 1}"
 
 
 def is_set(specification: Any) -> bool:

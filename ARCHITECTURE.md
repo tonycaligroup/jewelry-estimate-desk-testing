@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.4 (7 September 2026): twin piece labels.**
+Live case 5 on 4.13.4 passed (brief #46 kept brief #45's band to the cent,
+shipping once, title whole) but both bands were labelled "(men's wedding
+band)". `estimate_record.piece_label` now appends the first differing fact
+among metal colour, metal, finger size, stone type, carat, setting style
+("men's wedding band, rose gold"), or numbers a still-identical pair. Every
+consumer reads the label through that one function (cost lines, the
+frozen-quantities tag match, follow-up bullets, rendering plans and
+`pieces_named`, the owner's per-piece question text), so nothing else
+changed.
+
 **4.13.4 (built 7 September 2026): a second piece never re-prices the piece already quoted.**
 Live, brief #38 quoted a men's band on 14.5 g, 1.8 ct melee, 5.5 h; the
 second-piece re-price (brief #44) asked the model again and got 8 g, 1.5
