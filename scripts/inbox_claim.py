@@ -491,6 +491,10 @@ def reopen(
         state.pop("reason_code", None)
         state["resume_count"] = state.get("resume_count", 0) + 1
         state["retry_count_at_phase"] = 0
+        # Every resume is a fresh start for the tick's retry budget: an owner
+        # answer or a requeue means "try again", not "count the old failures".
+        for field in ("inline_attempts", "last_error", "last_error_kind", "last_error_at"):
+            state.pop(field, None)
         state["last_progress_at"] = current.isoformat()
         state["recovery_lease_expires_at"] = (
             current + timedelta(seconds=lease_seconds)
@@ -546,6 +550,10 @@ def authorize_legacy_resume(
         state["last_progress_at"] = current.isoformat()
         state["resume_count"] = state.get("resume_count", 0) + 1
         state["retry_count_at_phase"] = 0
+        # Every resume is a fresh start for the tick's retry budget: an owner
+        # answer or a requeue means "try again", not "count the old failures".
+        for field in ("inline_attempts", "last_error", "last_error_kind", "last_error_at"):
+            state.pop(field, None)
         state.pop("recovery_lease_expires_at", None)
         write_state(path, state)
         return state

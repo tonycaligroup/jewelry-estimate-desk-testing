@@ -228,7 +228,32 @@ def run_inline_claim(
         # so this is real mail; held untouched until rehearsal is off.
         rehearsal.hold(p["monitor_root"], p["claim_root"], message_id)
         summary["held"] = summary.get("held", 0) + 1
-        return {"message_id": message_id, "outcome": "held_for_live", "seconds": round(time.monotonic() - started, 2)}
+        held = {"message_id": message_id, "outcome": "held_for_live", "seconds": round(time.monotonic() - started, 2)}
+        summary["inline"].append(held)
+        return held
+    step_path = Path(paths["work_dir"]) / workflow_safe.NEXT_STEP_FILE
+    if step_path.exists():
+        # An owner answer left one step for the tick (a price from the
+        # record, a follow-up sent again): run that, not a full read.
+        note = workflow_safe.read_object(step_path) or {}
+        step = str(note.get("action") or "")
+        estimate_id = str(note.get("estimate_id") or "")
+        if not estimate_id:
+            raise ValueError("the next step names no estimate")
+        switch = pipeline.settings(workspace / "estimate-desk")
+        if step == "price_from_record":
+            done = pipeline.price_from_record(workspace, message_id, estimate_id, model=switch.get("model"),
+                                              judge_runner=judge_runner, command_runner=runner, openclaw=openclaw)
+        elif step == "resend_followup":
+            done = pipeline.resend_followup(workspace, base_dir, message_id, estimate_id, model=switch.get("model"),
+                                            judge_runner=judge_runner, command_runner=runner, openclaw=openclaw)
+        else:
+            raise ValueError(f"unknown next step {step!r}")
+        step_path.unlink(missing_ok=True)
+        stepped = {"message_id": message_id, "outcome": done.get("outcome"), "step": step,
+                   "seconds": round(time.monotonic() - started, 2), "model_calls": len(judge.CALL_LOG) - calls_before}
+        summary["inline"].append(stepped)
+        return stepped
     intake_path = Path(paths["work_dir"]) / "intake-result.json"
     if intake_path.exists():
         result = workflow_safe.read_object(intake_path)

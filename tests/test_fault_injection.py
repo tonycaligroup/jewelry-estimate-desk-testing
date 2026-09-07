@@ -124,9 +124,9 @@ class Harness(GoldenPathTests):
                 and len([q for q in self.questions(ws, "open") if q["kind"] == "missing_rate"]) == 1,
             ),
             Action(
-                "owner answers the rate -> price card",
-                lambda ws, world: None,
+                "owner answers the rate -> the tick prices",
                 lambda ws, world: self.raw_answer(ws, "600"),
+                tick,
                 lambda ws, world: self.record(ws, self.only_estimate(ws))["status"] == "pending_approval"
                 and any(c["kind"] == "price_approval" or "send-approved-estimate-brief" in c["payload"].get("execute", "") for c in world.cards),
             ),

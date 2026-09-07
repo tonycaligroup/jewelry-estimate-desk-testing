@@ -50,9 +50,10 @@ def validate_profile(data: Any) -> dict[str, Any]:
         if not isinstance(rendering_block, dict):
             errors.append("rendering must be an object")
         else:
-            vision = rendering_block.get("vision_model")
-            if vision is not None and not re.match(r"^[a-z0-9_.-]+/[A-Za-z0-9_.:-]+$", str(vision)):
-                errors.append("rendering.vision_model must be provider/model, for example litellm/kolo-best-available")
+            for key in ("vision_model", "image_model"):
+                value = rendering_block.get(key)
+                if value is not None and not re.match(r"^[a-z0-9_.-]+/[A-Za-z0-9_.:-]+$", str(value)):
+                    errors.append(f"rendering.{key} must be provider/model, for example litellm/kolo-best-available")
 
     mode = _read_path(data, "shop.mode")
     if mode is not None and mode != "retailer":

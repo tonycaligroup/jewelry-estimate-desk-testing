@@ -249,12 +249,15 @@ def render_and_send(
         profile_now = workflow_safe.read_object(p["shop_profile"]) if p.get("shop_profile") else {}
     except (OSError, ValueError):
         profile_now = {}
-    vision_model = str(((profile_now.get("rendering") or {}).get("vision_model") or "")).strip() or rendering.DEFAULT_VISION_MODEL
+    rendering_settings = profile_now.get("rendering") or {}
+    vision_model = str(rendering_settings.get("vision_model") or "").strip() or rendering.DEFAULT_VISION_MODEL
+    image_model = str(rendering_settings.get("image_model") or "").strip() or None
     try:
         report = rendering.run_pieces(
             record.get("specification") or {}, work_dir / "renders", openclaw, artwork=art,
             context=judge.thread_text(gmail_text.thread_digest(thread, message_id)) if thread else "",
             model=model, runner=command_runner, change=note, only=only, previous=previous, vision_model=vision_model,
+            image_model=image_model,
         )
     except judge.JudgmentError as exc:
         raise ValueError(f"rendering plan failed: {exc}") from exc

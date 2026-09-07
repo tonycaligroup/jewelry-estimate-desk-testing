@@ -678,11 +678,12 @@ class GoldenPathTests(unittest.TestCase):
         self.assertEqual([q["kind"] for q in open_questions], ["missing_rate"])
         rate_key = open_questions[0]["rate"]["rate_key"]
 
-        # 3. The owner answers in words; the desk prices in place and files the brief.
+        # 3. The owner answers in words; the answer is quick, the next tick prices and files the brief.
         answered = self.answer(ws, "600")
         self.assertEqual(answered["value"], 600.0, answered)
-        self.assertIsNone(answered.get("worker_job_id"), "pricing after a rate answer happens inline")
-        self.assertEqual(answered.get("pipeline"), "approval_requested", answered)
+        self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)
+        summary = self.tick(ws, world)
+        self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_from_record", "approval_requested")], summary)
         profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
         self.assertEqual(profile["pricing"]["stones_per_carat"][rate_key], 600.0)
         self.assertEqual(len(world.cards), 1, world.cards)
@@ -1544,7 +1545,9 @@ class OwnStoneAndStallTests(SideBranchTests):
             # "skip": the details become the jeweler's call and the price card follows.
             answered = self.answer(ws, "skip it, price it as you see fit")
             self.assertEqual(answered["decision"], "skip", answered)
-            self.assertEqual(answered.get("pipeline"), "approval_requested", answered)
+            self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_from_record", "approval_requested")], summary)
             record = self.record(ws, estimate_id)
             self.assertEqual(record["status"], "pending_approval")
             self.assertEqual(record["specification"]["stone_shape"], "jeweler's choice")
@@ -1561,7 +1564,10 @@ class OwnStoneAndStallTests(SideBranchTests):
             self.assertEqual(len(world.sent), 1)
             answered = self.answer(ws, "ask again please")
             self.assertEqual(answered["decision"], "ask_again", answered)
-            self.assertEqual(answered.get("pipeline"), "followup_sent", answered)
+            self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("resend_followup", "followup_sent")],
+                             summary)
             self.assertEqual(len(world.sent), 2)
             self.assertIn("?", world.sent[1]["body"])
             self.assertEqual(self.claim(ws, "d2")["status"], "processed")

@@ -228,8 +228,15 @@ def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runne
     return {"outcome": "asked", "question_id": question["question_id"], "created": created}
 
 
-def _hand_to_tick(p: dict[str, Path], message_id: str) -> dict[str, Any]:
+NEXT_STEP_FILE = "next-step.json"
+
+
+def _hand_to_tick(p: dict[str, Path], message_id: str, step: str | None = None, estimate_id: str | None = None) -> dict[str, Any]:
     """Leave the heavy work (a re-read, a price) to the next tick.
+
+    `step` names a pipeline step the tick runs instead of a full read
+    (`price_from_record`, `resend_followup`); the tick deletes the note once
+    the step ran.
 
     An owner's answer runs inside the chat session's command, which the
     session may kill after a while (6 September 2026: a "change" answer
@@ -238,9 +245,12 @@ def _hand_to_tick(p: dict[str, Path], message_id: str) -> dict[str, Any]:
     own clock, does the reading and pricing within two minutes.
     """
     token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+    if step:
+        paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+        write_private(Path(paths["work_dir"]) / NEXT_STEP_FILE, {"action": step, "estimate_id": estimate_id})
     inbox_claim.mark_inline(p["claim_root"], message_id, token, True)
     inbox_claim.release_lease(p["claim_root"], message_id, token)
-    return {"pipeline": "queued_for_tick", "note": "the next tick reads and prices it"}
+    return {"pipeline": "queued_for_tick", "note": "the next tick " + ({"price_from_record": "prices it", "resend_followup": "asks the customer again"}.get(step or "", "reads and prices it"))}
 
 
 def _answer_same_piece(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
@@ -257,7 +267,7 @@ def _answer_same_piece(args: argparse.Namespace, workspace: Path, p: dict[str, P
     import inbox_watcher  # local import: inbox_watcher imports this module
     import pipeline  # local import: pipeline imports this module
 
-    message_id = question["gmail_message_id"]
+    message_id = _question_message_id(question)
     estimate_id = (question.get("context") or {}).get("existing_estimate_id") or question["estimate_id"]
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "same_sender", "decision": "same"}
     record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
@@ -305,7 +315,7 @@ def _answer_design_change(args: argparse.Namespace, workspace: Path, p: dict[str
     import inbox_watcher  # local import: inbox_watcher imports this module
     import pipeline  # local import: pipeline imports this module
 
-    message_id = question["gmail_message_id"]
+    message_id = _question_message_id(question)
     estimate_id = question["estimate_id"]
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "unclear_reply",
                               "decision": outcome}
@@ -375,7 +385,7 @@ def _answer_rendering_next(args: argparse.Namespace, workspace: Path, p: dict[st
 
     runner = getattr(args, "runner", subprocess.run)
     context = question.get("context") or {}
-    message_id = context.get("source_message_id") or question["gmail_message_id"].split("#")[0]
+    message_id = _question_message_id(question)
     estimate_id = question["estimate_id"]
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "rendering_next", "decision": outcome}
     if outcome == "handle_myself":
@@ -435,14 +445,9 @@ def _refile_price_card(p: dict[str, Path], estimate_id: str, message_id: str, ro
     record = estimate_record.record_approval_requested(p["record_root"], estimate_id, message_id, approval)
     title = kolo_safe.approval_title(approval, estimate_id)
     _register_brief(p["monitor_root"], "price", title, estimate_id, message_id, runner)
-    try:
-        paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
-        facts, fixed = estimate_email_facts(record, profile)
-        _prepare_email({"monitor_root": p["monitor_root"], "shop_profile": p["shop_profile"]}, record, message_id, "estimate",
-                       facts, fixed, work_dir / "customer-reply.txt", _digest_from_work(paths, message_id, profile),
-                       getattr(args, "judge_runner", subprocess.run))
-    except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
-        pass
+    # No email draft here: this runs inside the chat session's command, and a
+    # model call there is what the session kills. The executor drafts the
+    # estimate email at send time when none was prepared.
     mirror_record(record, work_dir / "current-record.json")
     return {"outcome": "price_card_filed", "price": record["proposed_price"], "title": title[:120],
             "margin": (record.get("owner_price") or {}).get("margin")}
@@ -454,7 +459,7 @@ def _answer_price_next(args: argparse.Namespace, p: dict[str, Path], root: Path,
     runner = getattr(args, "runner", subprocess.run)
     estimate_id = question["estimate_id"]
     context = question.get("context") or {}
-    message_id = context.get("source_message_id") or question["gmail_message_id"]
+    message_id = _question_message_id(question)
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "price_next", "decision": outcome}
     if outcome == "handle_myself":
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
@@ -474,6 +479,12 @@ def _answer_price_next(args: argparse.Namespace, p: dict[str, Path], root: Path,
         owner_questions.record_decision(root, question, args.answer, outcome)
     result.update(filed)
     return result
+
+
+def _question_message_id(question: dict[str, Any]) -> str:
+    """The Gmail message a question is about; a repeat question carries a round suffix the claim does not."""
+    context = question.get("context") or {}
+    return str(context.get("source_message_id") or str(question.get("gmail_message_id") or "").split("#")[0])
 
 
 def _attach_answer_command(root: Path, monitor_root: Path, question: dict[str, Any]) -> dict[str, Any]:
@@ -1532,7 +1543,7 @@ def _answer_stuck_claim(args: argparse.Namespace, workspace: Path, p: dict[str, 
                         question: dict[str, Any], outcome: str) -> dict[str, Any]:
     import inbox_watcher  # local import: inbox_watcher imports this module
 
-    message_id = (question.get("context") or {}).get("source_message_id") or question["gmail_message_id"].split("#")[0]
+    message_id = _question_message_id(question)
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "stuck_claim", "decision": outcome}
     if outcome == "retry":
         reopened = _resume_parked_claim(p, message_id)
@@ -1683,7 +1694,7 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
         if record.get("status") == "awaiting_specs" and _rate_claim_resumable(p, question):
             # The rate is on the card already; the pricing after it never
             # finished. Price now from the recorded review.
-            message_id, estimate_id = question["gmail_message_id"], question["estimate_id"]
+            message_id, estimate_id = _question_message_id(question), question["estimate_id"]
             _resume_parked_claim(p, message_id)
             priced = _price_after_rate_answer(args, workspace, p, message_id, estimate_id)
             return {"outcome": "replayed", "question_id": question["question_id"], "estimate_id": estimate_id, **(priced or {})}
@@ -1731,7 +1742,7 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
         value,
         owner_questions.answer_provenance(question),
     )
-    message_id = question["gmail_message_id"]
+    message_id = _question_message_id(question)
     estimate_id = question["estimate_id"]
     import cron_config  # local import keeps module import order unchanged
 
@@ -1834,14 +1845,14 @@ def _claim_still_waiting(p: dict[str, Path], question: dict[str, Any]) -> bool:
     if question.get("kind") == "appointment_next":
         return False
     try:
-        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], question["gmail_message_id"]))
+        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], _question_message_id(question)))
     except (OSError, ValueError, json.JSONDecodeError):
         return False
     if state.get("status") == "awaiting_owner":
         return True
     if state.get("status") != "processing":
         return False
-    work_dir = p["monitor_root"].resolve().parent / "work" / inbox_claim.claim_key(question["gmail_message_id"])
+    work_dir = p["monitor_root"].resolve().parent / "work" / inbox_claim.claim_key(_question_message_id(question))
     return not (work_dir / "intake-result.json").exists()
 
 
@@ -1854,7 +1865,7 @@ RESUMABLE_REVIEW_REASONS = frozenset({
 
 def _rate_claim_resumable(p: dict[str, Path], question: dict[str, Any]) -> bool:
     try:
-        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], question["gmail_message_id"]))
+        state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], _question_message_id(question)))
     except (OSError, ValueError, json.JSONDecodeError):
         return False
     if state.get("status") == "awaiting_owner":
@@ -1875,21 +1886,7 @@ def _price_after_rate_answer(args: argparse.Namespace, workspace: Path, p: dict[
     switch = pipeline.settings(workspace / "estimate-desk")
     if not switch.get("inline"):
         return None
-    claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
-    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, True)
-    inbox_claim.delegate(p["claim_root"], message_id, claim_token, inbox_watcher.INLINE_LEASE_SECONDS)
-    try:
-        done = pipeline.price_from_record(
-            workspace, message_id, estimate_id, model=switch.get("model"),
-            judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
-            openclaw=getattr(args, "openclaw", None) or inbox_watcher.default_openclaw(),
-        )
-    except (judge.JudgmentError, OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
-        # Counted on the claim so the same answer, pasted again, replays.
-        inbox_claim.note_inline_attempt(p["claim_root"], message_id, claim_token, str(exc), inbox_watcher._error_kind(exc))
-        raise
-    inbox_claim.mark_inline(p["claim_root"], message_id, claim_token, False)
-    return {"pipeline": done.get("outcome"), "proposed_price": done.get("proposed_price")}
+    return _hand_to_tick(p, message_id, "price_from_record", estimate_id)
 
 
 def _resume_parked_claim(p: dict[str, Path], message_id: str) -> dict[str, Any]:
@@ -1947,7 +1944,7 @@ def answer_decision(
     import inbox_watcher  # local import: inbox_watcher imports this module
 
     outcome = owner_questions.match_option(question, args.answer)
-    message_id = question["gmail_message_id"]
+    message_id = _question_message_id(question)
     result: dict[str, Any] = {
         "outcome": "answered", "question_id": question["question_id"], "kind": question["kind"], "decision": outcome,
     }
@@ -2001,20 +1998,9 @@ def answer_decision(
             owner_questions.record_decision(root, question, args.answer, outcome)
         if outcome == "skip":
             estimate_record.mark_jewelers_choice(p["record_root"], estimate_id, message_id, list(question.get("context", {}).get("repeated") or []))
-            done = pipeline.price_from_record(
-                workspace, message_id, estimate_id, model=switch.get("model"),
-                judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
-                openclaw=openclaw,
-            )
+            result.update(_hand_to_tick(p, message_id, "price_from_record", estimate_id))
         else:
-            done = pipeline.resend_followup(
-                workspace, args.base_dir.resolve(), message_id, estimate_id, model=switch.get("model"),
-                judge_runner=getattr(args, "judge_runner", subprocess.run), command_runner=getattr(args, "runner", subprocess.run),
-                openclaw=openclaw,
-            )
-        result["pipeline"] = done.get("outcome")
-        if done.get("proposed_price") is not None:
-            result["proposed_price"] = done["proposed_price"]
+            result.update(_hand_to_tick(p, message_id, "resend_followup", estimate_id))
         return result
     # Every other outcome: the owner takes the conversation from here.
     reason = f"owner_decided_{outcome}"
@@ -2488,7 +2474,7 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
     import inbox_watcher  # local import: inbox_watcher imports this module
 
     runner = getattr(args, "runner", subprocess.run)
-    message_id = question["gmail_message_id"]
+    message_id = _question_message_id(question)
     estimate_id = question["estimate_id"]
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "appointment_next", "decision": outcome}
     if outcome == "handle_myself":
@@ -2725,9 +2711,15 @@ def _command_failed(args: argparse.Namespace, argv: list[str], exc: BaseExceptio
         "nothing already sent), or \"handle myself\"."
     )
     root = owner_questions.questions_root(p["monitor_root"])
+    # A command can fail again after "retry": each failure is its own
+    # question with its own code; a closed one is never reused.
+    earlier = [q for q in owner_questions.list_questions(root)
+               if q["kind"] == "command_failed" and q["gmail_message_id"].split("#")[0] == message_id
+               and (q.get("context") or {}).get("command") == args.command and q["status"] != "open"]
+    qid_message = message_id if not earlier else f"{message_id}#round{len(earlier) + 1}"
     created, question = owner_questions.create_decision(
-        root, "command_failed", estimate_id, message_id, text,
-        {"argv": list(argv), "command": args.command, "error": error, "brief_id": brief_id},
+        root, "command_failed", estimate_id, qid_message, text,
+        {"argv": list(argv), "command": args.command, "error": error, "brief_id": brief_id, "source_message_id": message_id},
     )
     question = _attach_answer_command(root, p["monitor_root"], question)
     if created:
@@ -2757,7 +2749,7 @@ def _answer_command_failed(args: argparse.Namespace, p: dict[str, Path], root: P
     if outcome == "release":
         released = []
         if context.get("command") == "book-approved-appointment":
-            key = inbox_claim.claim_key(question["gmail_message_id"])[:16]
+            key = inbox_claim.claim_key(_question_message_id(question))[:16]
             event_path = p["monitor_root"].resolve().parent / "work" / f"booking-{key}" / "calendar-event.json"
             saved = read_object(event_path) if event_path.exists() else {}
             record = estimate_record.read_object(estimate_record.record_path(p["record_root"], question["estimate_id"]))
