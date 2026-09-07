@@ -112,18 +112,9 @@ If you would like an adjustment to the look, reply here and tell me what you
 would like changed.
 ```
 
-**Wholesale, add:**
-
-```
-This is an estimate based on previous comparable jobs, to help you close the
-sale. On custom work the price can move once the design is finalized, and the final
-price is often lower than estimated -- we estimate high and pass any savings
-along to you.
-```
-
 Never: jeweler cost assumptions, line items, per-gram, per-carat, component
 costs, costing quantities, vendor or manufacturer names, markup, or margin.
-This applies to retail and wholesale. **"Estimated lead time"** -- never a guaranteed
+**"Estimated lead time"** -- never a guaranteed
 date, never a promise against a wedding, unless the owner said so in writing.
 
 ---

@@ -24,7 +24,7 @@ voice; never drop the substance.
 
 - Jeweler cost assumptions; line items; per-gram, per-carat, or labor rates;
   internal costing quantities; component costs; vendor/manufacturer names;
-  markup; or margin. These remain owner-only for retail and wholesale.
+  markup; or margin. These remain owner-only.
 - A lead time framed as a guarantee.
 - Any number other than the one the owner approved.
 

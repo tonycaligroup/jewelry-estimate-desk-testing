@@ -440,9 +440,9 @@ closed by follow-up changes:
 
 - Renderings are approval-gated since 3 September 2026: the owner sees the
   views in chat and approves a card before anything is emailed.
-- Stage 3 currently books meetings autonomously inside declared windows. This
-  document requires owner approval for every booking at every stage; Stage 3
-  may only offer times.
+- Bookings are card-gated at every stage (verified 6 September 2026): the
+  implementation has no autonomous booking at any trust stage; every booking
+  and every offer of times is a card the owner approves.
 - Questions (6.10) are built for a missing rate, a known sender writing on a
   new thread (same piece or new), and an unclear reply after an estimate
   (second piece, change, accepts, or the owner handles it), 3 September 2026.
@@ -450,7 +450,7 @@ closed by follow-up changes:
   "second piece" answer closes the thread to the owner for now; the desk does
   not yet reopen the gate or open a second estimate on the same thread.
 - Setup no longer asks retail or wholesale (4 September 2026); the profile
-  validator accepts `retailer` only. The implementation still carries wholesale email wording,
-  and a trade markup setting. This document is retail only; those are to be
-  removed. The tests that pin customer wording and phase order
-exist to keep the implementation faithful to this document.
+  validator accepts `retailer` only. The wholesale email wording and the
+  trade markup setting were removed on 6 September 2026. The tests that pin
+  customer wording and phase order exist to keep the implementation faithful
+  to this document.

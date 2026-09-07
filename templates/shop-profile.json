@@ -41,7 +41,6 @@
       "currency": "USD",
       "unit": "gram"
     },
-    "trade_markup_multiplier": null,
     "metal_per_gram": {},
     "stones_per_carat": {},
     "fees": {},
