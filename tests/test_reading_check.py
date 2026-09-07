@@ -88,6 +88,16 @@ class ReadingCheckTests(unittest.TestCase):
             self.assertEqual(reading_check.compare(digest(body), spec), [], body)
         self.assertEqual([d["topic"] for d in reading_check.compare(digest("I have a diamond of my own to set."), spec)], ["customer_stone"])
 
+    def test_reusing_a_band_is_not_a_stone(self) -> None:
+        """7 September 2026: "We would like to reuse the wedding band" asked the customer about a stone of their own."""
+        spec = {"piece_type": "engagement ring", "metal": "rose gold", "metal_karat": "18k", "stone_type": "diamond",
+                "stone_origin": "lab-grown", "stone_carat": "3"}
+        for body in ("We would like a classic 3 ct solitaire in 18k rose gold. We would like to reuse the wedding band. Can you remove it from the original?",
+                     "Please remount it in a new setting.", "Can we reset the ring in yellow gold?", "We have an existing band to match."):
+            self.assertEqual(reading_check.compare(digest(body), spec), [], body)
+        for body in ("Please reuse my mother's diamond.", "Can you reset her stone into this?", "We would like to remount the sapphire we have."):
+            self.assertEqual([d["topic"] for d in reading_check.compare(digest(body), spec)], ["customer_stone"], body)
+
     def test_names_and_questions(self) -> None:
         self.assertTrue(reading_check.is_confirm("confirm.piece_count"))
         self.assertFalse(reading_check.is_confirm("finger_size"))

@@ -129,13 +129,24 @@ def compare(digest: dict[str, Any], specification: dict[str, Any]) -> list[dict[
 _NEGATION_RE = re.compile(r"(don't|do not|dont|doesn't|does not|didn't|did not|won't|will not|no|not|never|without|rather than)\s")
 
 
+# Phrases that name a stone of the customer's own outright.
+_STONE_PHRASES = tuple(p for p in _OWN_STONE_WORDS if any(w in p for w in ("stone", "diamond", "heirloom", "mother", "father", "grandma", "grandpa", "customer")))
+# Verbs and possessives that only mean a stone when a stone word is near
+# them: "reuse the wedding band" is a band, "reset her diamond" is a stone.
+_NEEDS_STONE_NEAR = tuple(p for p in _OWN_STONE_WORDS if p not in _STONE_PHRASES)
+_STONE_NOUNS = ("diamond", "stone", "sapphire", "ruby", "emerald", "gem", "moissanite", "center", "centre", "pearl", "opal")
+
+
 def _says_own_stone(text: str) -> bool:
-    """An own-stone phrase that is not denied in the same breath."""
+    """An own-stone phrase that is not denied in the same breath, and that is about a stone."""
     for phrase in _OWN_STONE_WORDS:
         start = text.find(phrase)
         while start >= 0:
-            window = text[max(0, start - 40):start]
-            if not _NEGATION_RE.search(window):
+            before = text[max(0, start - 40):start]
+            around = text[max(0, start - 40):start + len(phrase) + 40]
+            denied = bool(_NEGATION_RE.search(before))
+            about_a_stone = phrase in _STONE_PHRASES or any(noun in around for noun in _STONE_NOUNS)
+            if not denied and about_a_stone:
                 return True
             start = text.find(phrase, start + 1)
     return False
