@@ -729,8 +729,9 @@ def choose_quantities_per_piece(
 ) -> dict[str, Any]:
     """One call, one set of numbers per piece (MULTI-PIECE-PLAN.md batch 2)."""
     merged = estimate_record.pieces_of(specification)
-    menu = [{"label": info["label"], "specification": merged[i] if i < len(merged) else {},
-             "center_carat_needed": bool(info.get("needs_carat"))} for i, info in enumerate(pieces)]
+    menu = [{"label": info["label"],
+             "specification": merged[info["index"]] if isinstance(info.get("index"), int) and info["index"] < len(merged) else {},
+             "center_carat_needed": bool(info.get("needs_carat"))} for info in pieces]
     prompt = (
         "You are an experienced bench jeweler estimating quantities for a price quote, deliberately on the "
         "high side so the shop is never underpaid. This order has more than one piece; give one set of "
@@ -761,7 +762,17 @@ def choose_quantities(
 ) -> dict[str, Any]:
     """The few numbers a bench jeweler would estimate before pricing, on the high side."""
     if pieces and len(pieces) > 1:
-        return choose_quantities_per_piece(specification, pieces, fee_catalog, stone_catalog, typical_weights, model, runner, openclaw)
+        # A piece already quoted (a "second piece" reopen) keeps the numbers
+        # it was quoted on; the model is asked only about the others.
+        open_pieces = [info for info in pieces if not info.get("prior_quantities")]
+        answered = iter(
+            choose_quantities_per_piece(specification, open_pieces, fee_catalog, stone_catalog, typical_weights, model, runner, openclaw)["pieces"]
+            if open_pieces else []
+        )
+        return {"pieces": [
+            {**info["prior_quantities"], "label": str(info.get("label"))} if info.get("prior_quantities") else next(answered)
+            for info in pieces
+        ]}
     needs_carat = any(key.startswith("stone_lines[0].quantity") for key in fill)
     metal = cost_components.extract_metal(specification)
     stone = cost_components.extract_center_stone(specification)

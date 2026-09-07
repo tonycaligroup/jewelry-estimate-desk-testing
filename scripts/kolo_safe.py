@@ -146,8 +146,29 @@ def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (price, hard, profit)):
         pct = f" ({profit / price * 100:.0f}%)" if price else ""
         tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}" + _assumptions(review)
-    room = TITLE_LIMIT - len(f"Price approval for {who}: ") - len(tail)
-    return TITLE_PREFIX + f"Price approval for {who}: {piece[:max(room, 12)]}{tail}"[:TITLE_LIMIT]
+    head = f"Price approval for {who}: "
+    room = TITLE_LIMIT - len(head)
+    if len(piece) + len(tail) > room:
+        # What the piece is stays whole (it was cut to "with a lab-gro" live,
+        # 7 September 2026); the assumptions give way, cut at a boundary.
+        short = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}" if hard is not None else f", {money}"
+        if len(piece) + len(short) > room:
+            piece = _fit(piece, room - len(short))
+        tail = short + _fit(tail[len(short):], room - len(piece) - len(short)) if tail.startswith(short) else short
+    return TITLE_PREFIX + f"{head}{piece}{tail}"[:TITLE_LIMIT]
+
+
+def _fit(text: str, limit: int) -> str:
+    """Cut text to fit, at the last '; ' or space, marked with an ellipsis; empty when nothing fits."""
+    if len(text) <= limit:
+        return text
+    if limit < 12:
+        return ""
+    cut = text[:limit - 2]
+    boundary = max(cut.rfind("; "), cut.rfind(" "))
+    if boundary > limit // 2:
+        cut = cut[:boundary]
+    return cut.rstrip(" ;,") + " …"
 
 
 TITLE_LIMIT = 700  # Kolo showed a 120-character title in full by SMS; longer is being tested

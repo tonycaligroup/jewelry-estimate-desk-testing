@@ -1593,12 +1593,12 @@ def drop_stale_confirms(root: Path, estimate_id: str, source_message_id: str, ke
 
 
 def carry_prior_facts(record: dict[str, Any], specification: dict[str, Any]) -> dict[str, Any]:
-    """After a reopen for a second piece, the first piece keeps every fact it was priced with.
+    """After a reopen for a second piece, the pieces already quoted keep every fact they were quoted with.
 
-    The model's re-read may return two pieces with the first one thin, or one
-    flat piece (the new one). The prior specification (estimate_history[-1])
-    is authoritative for the first piece: every key it had and the re-read
-    lacks is restored; nothing on the record is ever asked again.
+    The model's re-read may return the prior pieces thin, or one flat piece
+    (the new one). The prior specification (estimate_history[-1]) is
+    authoritative for the first pieces, in order: every key it had and the
+    re-read lacks is restored; nothing on the record is ever asked again.
     """
     if not isinstance(specification, dict) or record.get("reopened_for") != "second_piece":
         return specification
@@ -1606,21 +1606,22 @@ def carry_prior_facts(record: dict[str, Any], specification: dict[str, Any]) -> 
     prior = history[-1].get("specification") if history and isinstance(history[-1], dict) else None
     if not isinstance(prior, dict) or not prior:
         return specification
-    prior_pieces = pieces_of(prior)
-    prior_first = {k: v for k, v in prior_pieces[0].items() if k != "pieces"}
+    prior_pieces = [{k: v for k, v in piece.items() if k != "pieces"} for piece in pieces_of(prior)]
     raw = specification.get("pieces")
-    if not isinstance(raw, list) or len([p for p in raw if isinstance(p, dict)]) < 2:
+    pieces = [dict(p) for p in raw if isinstance(p, dict)] if isinstance(raw, list) else []
+    if len(pieces) <= len(prior_pieces):
+        if len(prior_pieces) != 1 or pieces:
+            return specification
         # One flat piece came back: it is the new one; the first is the prior.
         new_piece = {k: v for k, v in specification.items() if k != "pieces"}
-        if not new_piece.get("piece_type") or new_piece.get("piece_type") == prior_first.get("piece_type"):
+        if not new_piece.get("piece_type") or new_piece.get("piece_type") == prior_pieces[0].get("piece_type"):
             return specification
-        return {"pieces": [prior_first, new_piece]}
-    pieces = [dict(p) for p in raw if isinstance(p, dict)]
-    first = pieces[0]
-    for key, value in prior_first.items():
-        if first.get(key) in (None, "", []) and value not in (None, "", []):
-            first[key] = value
-    return {**specification, "pieces": [first] + pieces[1:]}
+        return {"pieces": [prior_pieces[0], new_piece]}
+    for piece, before in zip(pieces, prior_pieces):
+        for key, value in before.items():
+            if piece.get(key) in (None, "", []) and value not in (None, "", []):
+                piece[key] = value
+    return {**specification, "pieces": pieces}
 
 
 def rejected_bindings(record: dict[str, Any]) -> set[str]:

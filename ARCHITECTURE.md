@@ -381,6 +381,27 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.3 (7 September 2026): a second piece never re-prices the piece already quoted.**
+Live, brief #38 quoted a men's band on 14.5 g, 1.8 ct melee, 5.5 h; the
+second-piece re-price (brief #44) asked the model again and got 8 g, 1.5
+ct, 7 h plus shipping on each piece, so the sent quote moved.
+`cost_components.prior_quantities(record)` reads `estimate_history[-1]`'s
+archived `internal_cost_sheet` while `reopened_for` is `second_piece` and
+returns one quantities answer per prior piece (metal and labor lines by
+index, center lines first in piece order, accents and fees by their
+" (label)" tag; untagged lines belong to the single prior piece);
+`prepare` stores it as `prior_quantities` on the piece map;
+`judge.choose_quantities` asks the model only about the pieces without
+one and splices the answers in order (`choose_quantities_per_piece` takes
+a subset, addressed by `index`). Rates still resolve from today's profile
+in `finalize`. `workflow_safe.price` adds an order-level fee
+(`ORDER_LEVEL_FEE_WORDS`: shipping, postage, courier) once per estimate.
+`kolo_safe.approval_title` keeps the piece words whole and fits the
+assumptions with `_fit` (cut at "; " or a space, ellipsis), where before
+the piece words were sliced to make room ("with a lab-gro").
+`carry_prior_facts` restores facts into every prior piece in order, not
+only the first.
+
 **4.13.3 (built 7 September 2026): a second piece never re-asks what the record knows.**
 Live, the wife's-ring second piece: the extractor put the shared stone
 facts ("diamond, lab-grown, D, ideal") at the top level with two thin

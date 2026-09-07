@@ -430,6 +430,63 @@ def _require_spot_evidence(evidence: Any, metal: str) -> float:
     return float(price)
 
 
+def prior_quantities(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """After "second piece", every piece already quoted keeps the numbers it was quoted on.
+
+    The sent estimate is a commitment (WORKFLOW.md 6.8): its grams, hours,
+    center carat, fees and accent stones come back from the archived cost
+    sheet (`estimate_history[-1]`), one entry per prior piece in order, in
+    the shape of a quantities answer. The model is asked only about the new
+    piece. Rates still come from today's profile. An empty list means
+    nothing is frozen (not a second-piece reopen, or no archived sheet).
+    """
+    if not isinstance(record, dict) or record.get("reopened_for") != "second_piece":
+        return []
+    history = record.get("estimate_history") or []
+    prior = history[-1] if history and isinstance(history[-1], dict) else {}
+    sheet, spec = prior.get("internal_cost_sheet"), prior.get("specification")
+    if not isinstance(sheet, dict) or not isinstance(spec, dict) or not spec:
+        return []
+    pieces = estimate_record.pieces_of(spec)
+    if not pieces:
+        return []
+    labels = [estimate_record.piece_label(spec, i) for i in range(len(pieces))] if len(pieces) > 1 else [""]
+
+    def owner_of(text: Any) -> int | None:
+        if len(labels) == 1:
+            return 0
+        for i, label in enumerate(labels):
+            if str(text).endswith(f" ({label})"):
+                return i
+        return None
+
+    result = [{"finished_grams": None, "bench_hours": None, "center_carat": None, "fees": [], "accents": []}
+              for _ in labels]
+    metal, labor = sheet.get("metal_lines") or [], sheet.get("labor_lines") or []
+    for i in range(len(labels)):
+        if i < len(metal) and isinstance(metal[i], dict):
+            result[i]["finished_grams"] = _number(metal[i].get("quantity_grams"))
+        if i < len(labor) and isinstance(labor[i], dict):
+            result[i]["bench_hours"] = _number(labor[i].get("hours"))
+    # Center lines come first, one per piece with a stone, in piece order;
+    # accent lines follow (that is how `prepare` and `price` build them).
+    with_center = [i for i, piece in enumerate(pieces) if extract_center_stone(piece)["stone_type"] is not None]
+    stones = [line for line in (sheet.get("stone_lines") or []) if isinstance(line, dict)]
+    for i, line in zip(with_center, stones[:len(with_center)]):
+        result[i]["center_carat"] = _number(line.get("quantity"))
+    for line in stones[len(with_center):]:
+        i = owner_of(line.get("stone"))
+        if i is not None and line.get("rate_key") and _number(line.get("quantity")):
+            result[i]["accents"].append({"key": str(line["rate_key"]), "carats": _number(line.get("quantity"))})
+    for line in sheet.get("other_hard_cost_lines") or []:
+        if not isinstance(line, dict) or not line.get("rate_key"):
+            continue
+        i = owner_of(line.get("label"))
+        if i is not None:
+            result[i]["fees"].append(str(line["rate_key"]))
+    return [r for r in result if r["finished_grams"] and r["bench_hours"]]
+
+
 def prepare(
     record: dict[str, Any],
     shop_profile: dict[str, Any],
@@ -545,6 +602,10 @@ def prepare(
         piece_map.append({"index": index, "label": label or kind or "piece", "metal_line": index, "labor_line": index,
                           "center_stone_line": center_index, "needs_carat": center_index is not None and stone["carat"] is None,
                           "stone_origin": str(piece.get("stone_origin") or "")})
+    if multi:
+        # The pieces already quoted keep their numbers; only the new one is estimated.
+        for info, prior in zip(piece_map, prior_quantities(record)):
+            info["prior_quantities"] = prior
     # The same missing rate for two pieces is one question, not two.
     seen: set[str] = set()
     deduped = []

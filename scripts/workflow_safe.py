@@ -1291,6 +1291,14 @@ def review_thread(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+ORDER_LEVEL_FEE_WORDS = ("shipping", "postage", "courier")
+
+
+def _order_level_fee(rate_key: str) -> bool:
+    """A fee the order pays once, not each piece (shipping was charged per piece live, 7 September 2026)."""
+    return any(word in str(rate_key).lower() for word in ORDER_LEVEL_FEE_WORDS)
+
+
 def price(args: argparse.Namespace) -> dict[str, Any]:
     """Fill the skeleton with the worker's quantities, finalize, request approval.
 
@@ -1330,6 +1338,8 @@ def price(args: argparse.Namespace) -> dict[str, Any]:
             for key in chosen.get("fees") or []:
                 if key not in fee_catalog:
                     raise ValueError(f"unknown fee '{key}'; choose from the fee catalog")
+                if _order_level_fee(key) and any(line.get("rate_key") == key for line in lines["other_hard_cost_lines"]):
+                    continue  # one order ships once, however many pieces
                 lines["other_hard_cost_lines"].append({**fee_catalog[key], "label": fee_catalog[key]["label"] + tag})
             for accent in chosen.get("accents") or []:
                 key, carats = accent.get("key"), accent.get("carats")

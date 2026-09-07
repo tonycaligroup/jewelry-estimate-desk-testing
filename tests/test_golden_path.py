@@ -441,7 +441,7 @@ class World:
         raise AssertionError("unexpected model prompt: " + prompt[:300])
 
     def quantities(self, prompt: str) -> dict:
-        fees = [key for key in ("casting", "setting") if re.search(rf"\b{key}\b", prompt)]
+        fees = [key for key in ("casting", "setting", "shipping") if re.search(rf"\b{key}\b", prompt)]
         accents = []
         stone = re.search(r"\b[a-z0-9_]*lab_grown[a-z0-9_]*\b", prompt)
         if stone:
@@ -1467,7 +1467,13 @@ class OwnStoneAndStallTests(SideBranchTests):
         """WORKFLOW.md 6.8 and the multi-piece rule: "second piece" reopens the estimate with two lines and one total."""
         def branch(ws: Path, world: World) -> None:
             self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["fees"]["shipping"] = 50.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
             thread, estimate_id = self._estimate_sent(ws, world)
+            first_title = world.cards[-1]["title"]
+            self.assertIn("14K yellow gold 9.5g", first_title.split("Assumptions: ")[1])
             world.design_change = ["pieces"]
             world.customer_message("s2", thread, "Could you also quote a plain matching band, size 10?\n\nPat\n\n"
                                    "On Sun, Sep 6, 2026 at 6:45 PM shop@example.com wrote:\n"
@@ -1493,6 +1499,16 @@ class OwnStoneAndStallTests(SideBranchTests):
             card = world.cards[-1]
             self.assertIn("wedding band", card["title"])
             self.assertIn("signet ring", card["title"])
+            # The signet ring was quoted on 9.5 g and 3.5 h; adding a band does not re-estimate it
+            # (live, 7 September 2026: 14.5 g became 8 g and the sent quote changed).
+            assumptions = card["title"].split("Assumptions: ")[1]
+            self.assertIn("(signet ring) 9.5g", assumptions, assumptions)
+            self.assertIn("bench labor (signet ring) 3.5h", assumptions)
+            self.assertIn("(wedding band) 4g", assumptions)
+            self.assertIn("bench labor (wedding band) 2h", assumptions)
+            self.assertEqual(assumptions.count("shipping"), 1, "one order ships once: " + assumptions)
+            menus = [json.loads(pr.split("PIECES TO QUANTIFY: ", 1)[1]) for pr in world.prompts if "PIECES TO QUANTIFY:" in pr]
+            self.assertEqual([[e["label"] for e in m] for m in menus], [["wedding band"]], "the model was asked only about the new piece")
             world.approve(card)
             summary = self.tick(ws, world)
             self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)

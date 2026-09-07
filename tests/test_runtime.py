@@ -8674,3 +8674,94 @@ class MultiPieceFactsTests(unittest.TestCase):
         # Nothing happens outside a second-piece reopen.
         self.assertEqual(estimate_record.carry_prior_facts({"reopened_for": "design_change"}, flat), flat)
         self.assertEqual(estimate_record.carry_prior_facts({}, flat), flat)
+
+
+class FrozenPriorPiecesTests(unittest.TestCase):
+    """7 September 2026, live: adding a second piece re-estimated the first (14.5 g became 8 g) and the sent quote changed."""
+
+    def _record(self, spec: dict, sheet: dict) -> dict:
+        return {"reopened_for": "second_piece", "estimate_history": [{"specification": spec, "internal_cost_sheet": sheet}]}
+
+    def test_a_single_piece_sheet_freezes_that_piece(self) -> None:
+        spec = {"piece_type": "men's wedding band", "metal": "gold", "metal_karat": 18, "accent_stones": "melee"}
+        sheet = {"metal_lines": [{"metal": "18K yellow gold", "quantity_grams": 14.5, "unit_cost": 106.36, "rate_key": "18k_yellow_gold"}],
+                 "stone_lines": [{"stone": "lab grown diamond melee", "quantity": 1.8, "unit_cost": 100.0, "rate_key": "lab_grown_diamond_melee"}],
+                 "labor_lines": [{"task": "bench labor", "hours": 5.5, "rate": 42.0}],
+                 "other_hard_cost_lines": [{"label": "cad", "total_cost": 100.0, "rate_key": "cad"},
+                                           {"label": "simple stone setting", "total_cost": 25.0, "rate_key": "simple_stone_setting"}]}
+        frozen = cost_components_module.prior_quantities(self._record(spec, sheet))
+        self.assertEqual(frozen, [{"finished_grams": 14.5, "bench_hours": 5.5, "center_carat": None,
+                                   "fees": ["cad", "simple_stone_setting"],
+                                   "accents": [{"key": "lab_grown_diamond_melee", "carats": 1.8}]}])
+        self.assertEqual(cost_components_module.prior_quantities({"reopened_for": "design_change", "estimate_history": [{"specification": spec, "internal_cost_sheet": sheet}]}), [])
+        self.assertEqual(cost_components_module.prior_quantities({"reopened_for": "second_piece", "estimate_history": [{"specification": spec}]}), [])
+
+    def test_a_two_piece_sheet_freezes_both_by_their_tags(self) -> None:
+        spec = {"metal": "gold", "metal_karat": 14, "pieces": [
+            {"piece_type": "engagement ring", "stone_type": "diamond", "stone_carat": 1, "center_stone": "yes"},
+            {"piece_type": "wedding band", "accent_stones": "melee"}]}
+        sheet = {"metal_lines": [{"metal": "14K gold (engagement ring)", "quantity_grams": 5.0, "unit_cost": 80.0},
+                                 {"metal": "14K gold (wedding band)", "quantity_grams": 4.0, "unit_cost": 80.0}],
+                 "stone_lines": [{"stone": "diamond 1 ct (engagement ring)", "quantity": 1.0, "unit_cost": 300.0, "rate_key": "lab_grown_diamond"},
+                                 {"stone": "lab grown diamond melee (wedding band)", "quantity": 0.2, "unit_cost": 100.0, "rate_key": "lab_grown_diamond_melee"}],
+                 "labor_lines": [{"task": "bench labor (engagement ring)", "hours": 4.0, "rate": 42.0},
+                                 {"task": "bench labor (wedding band)", "hours": 2.0, "rate": 42.0}],
+                 "other_hard_cost_lines": [{"label": "shipping (engagement ring)", "total_cost": 50.0, "rate_key": "shipping"},
+                                           {"label": "cad (wedding band)", "total_cost": 100.0, "rate_key": "cad"}]}
+        frozen = cost_components_module.prior_quantities(self._record(spec, sheet))
+        self.assertEqual(len(frozen), 2)
+        self.assertEqual((frozen[0]["finished_grams"], frozen[0]["bench_hours"], frozen[0]["center_carat"], frozen[0]["fees"], frozen[0]["accents"]),
+                         (5.0, 4.0, 1.0, ["shipping"], []))
+        self.assertEqual((frozen[1]["finished_grams"], frozen[1]["bench_hours"], frozen[1]["center_carat"], frozen[1]["fees"]),
+                         (4.0, 2.0, None, ["cad"]))
+        self.assertEqual(frozen[1]["accents"], [{"key": "lab_grown_diamond_melee", "carats": 0.2}])
+        # Every prior piece keeps its facts on the re-read, in order.
+        thin = {"pieces": [{"piece_type": "engagement ring"}, {"piece_type": "wedding band"}, {"piece_type": "pendant"}]}
+        carried = estimate_record.carry_prior_facts({"reopened_for": "second_piece", "estimate_history": [{"specification": spec}]}, thin)
+        self.assertEqual(carried["pieces"][0]["stone_carat"], 1)
+        self.assertEqual(carried["pieces"][1]["accent_stones"], "melee")
+        self.assertEqual(carried["pieces"][2], {"piece_type": "pendant"})
+
+    def test_the_model_is_asked_only_about_the_open_pieces(self) -> None:
+        pieces = [{"index": 0, "label": "signet ring", "prior_quantities": {"finished_grams": 9.5, "bench_hours": 3.5, "center_carat": None, "fees": ["cad"], "accents": []}},
+                  {"index": 1, "label": "wedding band"}]
+        prompts = []
+
+        def runner(*args, **kwargs):  # noqa: ANN002, ANN003
+            prompts.append(args)
+            return Mock(returncode=0, stdout=json.dumps({"pieces": [{"finished_grams": 4.0, "bench_hours": 2.0, "fees": [], "accents": []}]}), stderr="")
+
+        with patch.object(judge, "ask_json", side_effect=lambda prompt, check, *a: (prompts.append(prompt), check(json.loads(
+                json.dumps({"pieces": [{"finished_grams": 4.0, "bench_hours": 2.0, "fees": [], "accents": []}]}))))[1]):
+            chosen = judge.choose_quantities({"pieces": [{"piece_type": "signet ring"}, {"piece_type": "wedding band"}]}, {}, ["cad"], [], {}, pieces=pieces)
+        self.assertEqual(len(prompts), 1)
+        self.assertIn('"label": "wedding band"', prompts[0])
+        self.assertNotIn('"label": "signet ring"', prompts[0])
+        self.assertEqual(chosen["pieces"][0]["finished_grams"], 9.5)
+        self.assertEqual(chosen["pieces"][0]["label"], "signet ring")
+        self.assertEqual(chosen["pieces"][1]["finished_grams"], 4.0)
+
+
+class PriceTitleFitTests(unittest.TestCase):
+    """Live, 7 September 2026: a long assumptions tail cut the piece words to 'with a lab-gro'."""
+
+    def _details(self, piece_words: str, lines: int) -> dict:
+        review = {"customer_price": 6900.08, "hard_cost_total": 3450.04, "estimated_gross_profit": 3450.04,
+                  "metal_costs": [{"metal": f"18K yellow gold (piece {i})", "quantity_grams": 8, "unit_cost": 106.36} for i in range(lines)],
+                  "labor_costs": [{"task": f"bench labor (piece {i})", "hours": 7, "rate": 42.0} for i in range(lines)],
+                  "other_hard_costs": [{"label": f"complex prong setting (piece {i})", "total_cost": 40.0} for i in range(lines)]}
+        return {"owner_review": review, "route": {"recipient": "tony@meetsimon.ai"},
+                "specification": {"pieces": [{"piece_type": piece_words}, {"piece_type": "band"}]}}
+
+    def test_the_piece_words_stay_whole_and_the_assumptions_give_way(self) -> None:
+        with patch.object(kolo_safe, "_piece_words", return_value="a wedding band in 18K yellow gold and an engagement ring in 18K rose gold with a lab-grown diamond 3 ct"):
+            title = kolo_safe.approval_title(self._details("ring", 12), "jed-1")
+        self.assertLessEqual(len(title), kolo_safe.TITLE_LIMIT)
+        self.assertIn("with a lab-grown diamond 3 ct, quote $6,900.08, cost $3,450.04, profit $3,450.04", title)
+        self.assertTrue(title.endswith(" …"), title)
+        self.assertNotIn("lab-gro,", title)
+        # Nothing to cut: the title is unchanged.
+        with patch.object(kolo_safe, "_piece_words", return_value="a band"):
+            short = kolo_safe.approval_title(self._details("ring", 1), "jed-1")
+        self.assertNotIn("…", short)
+        self.assertIn("Assumptions: 18K yellow gold (piece 0) 8g x $106.36; bench labor (piece 0) 7h x $42.00; complex prong setting (piece 0) $40.00", short)

@@ -726,8 +726,9 @@ rate to use, whether a new thread from a known customer is the same piece or
 a new one ("same" carries the estimate on in the new thread; "new" quotes
 it separately), what an unclear reply meant ("change" reopens the estimate
 on the same thread and re-prices; "second piece" adds a line to it, one
-total, and the first piece keeps every fact it was priced with, so nothing
-on the record is asked again), what to do after a rejected appointment card, what price to file
+total, and the piece already quoted keeps every fact and every quantity it
+was priced with, so nothing on the record is asked or estimated again), what
+to do after a rejected appointment card, what price to file
 after a rejected price card (a dollar figure, or "handle myself"), what
 should change after a rejected rendering card (the owner's words, naming
 the piece for a set, and only that piece is rendered again; or "handle

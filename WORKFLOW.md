@@ -437,6 +437,13 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 7 September 2026 (unpublished, after 4.13.3): a sent estimate is a
+  commitment; when a second piece is added, every piece already quoted keeps
+  the grams, hours, center carat, fees and accent stones it was quoted on
+  (from the archived cost sheet) and only the new piece is estimated; rates
+  come from today's rate card. A fee named shipping, postage or courier is
+  charged once per order, not per piece. A price card's title keeps the
+  piece words whole and shortens the assumptions instead (6.8, 6.3).
 - Built 7 September 2026 (4.13.3): a fact written at the
   top level of a multi-piece reading applies to every piece that lacks it,
   stone facts included, not only metal; after "second piece" the first
