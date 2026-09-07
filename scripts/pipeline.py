@@ -424,6 +424,14 @@ def process_claim(
 
     # Dead-spot guard: a review already said "ask", nothing was sent yet.
     pending = estimate_record.pending_followup(record, message_id)
+    if pending is not None and any(reading_check.is_confirm(f) for f in pending["missing_required_fields"]):
+        # A recorded ask that carries reading checks: run the check again on
+        # the same words before honouring it. A check the current code does
+        # not raise (a dead run's stale reading, an older version) is dropped;
+        # an emptied ask is no ask, and the message goes on to be priced.
+        current = reading_check.names(reading_check.compare(digest, record.get("specification") or {}))
+        record = estimate_record.drop_stale_confirms(p["record_root"], estimate_id, message_id, current)
+        pending = estimate_record.pending_followup(record, message_id)
     if pending is not None:
         return _send_followup(
             p, base_dir, message_id, estimate_id, digest, pending["missing_required_fields"],

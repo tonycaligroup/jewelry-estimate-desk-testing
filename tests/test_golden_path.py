@@ -52,6 +52,7 @@ import judge  # noqa: E402
 import kolo_safe  # noqa: E402
 import owner_questions  # noqa: E402
 import readiness  # noqa: E402
+import reading_check  # noqa: E402
 import rendering  # noqa: E402
 import run_lease  # noqa: E402
 import workflow_safe  # noqa: E402
@@ -1274,6 +1275,40 @@ class OwnStoneAndStallTests(SideBranchTests):
 
     def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
+
+    def test_a_stale_confirm_left_by_a_dead_run_is_dropped_before_the_customer_is_asked(self) -> None:
+        """6 September 2026: a dead run had recorded "confirm your own stone" from quoted shop text; the retry
+        emailed that question. The retry must re-run the check first and price when nothing is left."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {
+                "piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                "setting_style": "bead set", "engraving": "our logo on the face",
+                "accent_stones": "small lab-grown diamonds along the shoulders",
+                "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS",
+            }
+            world.customer_message("s1", "thread-stale", "Please quote a 14k yellow gold signet ring, size 10, logo on the face, "
+                                   "small lab-grown diamonds G VS bead set on the shoulders.\n\nPat\n\n"
+                                   "On Sun wrote:\n> I have attached the design renderings you requested.\n")
+            # The dead run: it read the quoted text as the customer's, recorded the ask, and died before sending.
+            with patch.object(reading_check, "compare", return_value=[{"name": "confirm.customer_stone", "topic": "customer_stone",
+                                                                        "said": "x", "read": "y", "question": reading_check.QUESTIONS["customer_stone"]}]), \
+                    patch.object(workflow_safe, "send_spec_followup", side_effect=Crash("killed before the send")):
+                with self.assertRaises(Crash):
+                    inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t", judge_runner=world.run)
+            estimate_id = self.only_estimate(ws)
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["missing_required_fields"], ["confirm.customer_stone"], "the stale ask is on the record")
+            self.assertEqual(world.sent, [], "nothing was sent by the dead run")
+            # The retry, on fixed code: the check is re-run on the same words, the stale line goes, the price card comes.
+            state = self.claim(ws, "s1")
+            inbox_claim.release_lease(ws / "estimate-desk" / "inbox-claims", "s1", state["claim_token"])
+            with patch.object(inbox_watcher, "STALE_AFTER_SECONDS", 1):
+                summary = self.tick(ws, world)
+            self.assertEqual(world.sent, [], "the customer is never asked the stale question")
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertNotIn("confirm.", json.dumps(self.record(ws, estimate_id)["missing_required_fields"]))
+        self.run_branch(branch)
 
     def test_a_second_stuck_gets_a_new_question_and_a_requeue_starts_fresh(self) -> None:
         """6 September 2026: the second stuck reused a closed code, nothing reached the owner, and a requeue

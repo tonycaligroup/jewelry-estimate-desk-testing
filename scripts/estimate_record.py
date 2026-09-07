@@ -1550,6 +1550,42 @@ def reopen_for_change(root: Path, estimate_id: str, source_message_id: str, kind
         return record
 
 
+def drop_stale_confirms(root: Path, estimate_id: str, source_message_id: str, keep: list[str]) -> dict[str, Any]:
+    """A recorded "ask" carried reading checks the current check no longer raises: drop them.
+
+    The review was written by a run that died (or by an older version of the
+    check); the retry re-runs the check on the same words before it honours
+    the ask. Only `confirm.*` names not in `keep` go; a real missing field
+    stays. An emptied review becomes specs_complete, and the retry prices.
+    """
+    source_hash = sha256_text(validate_provider_id(source_message_id, "source_message_id"))
+    keep_set = {str(k) for k in keep}
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        changed = False
+        for review in record.get("thread_reviews", []):
+            if not isinstance(review, dict) or review.get("source_message_id_sha256") != source_hash \
+                    or review.get("outcome") != "awaiting_specs":
+                continue
+            before = list(review.get("missing_required_fields") or [])
+            after = [f for f in before if not (str(f).startswith("confirm.") and f not in keep_set)]
+            if after != before:
+                review["missing_required_fields"] = after
+                review["stale_confirms_dropped"] = [f for f in before if f not in after]
+                if not after:
+                    review["outcome"] = "specs_complete"
+                changed = True
+        if changed:
+            record["missing_required_fields"] = sorted(
+                f for f in (record.get("missing_required_fields") or [])
+                if not (str(f).startswith("confirm.") and f not in keep_set)
+            )
+            write_object(path, record)
+        return record
+
+
 def rejected_bindings(record: dict[str, Any]) -> set[str]:
     """Binding hashes of price cards the owner rejected before naming a price."""
     value = record.get("rejected_approval_bindings")

@@ -381,6 +381,15 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.12.6 (built 6 September 2026): a recorded ask is re-checked before it is honoured.**
+Live, the retry after 4.12.5 honoured the ask a dead 4.12.3 run had
+recorded (the false "confirm your own stone") and emailed it. The dead-spot
+guard in `pipeline.process_claim` now re-runs `reading_check.compare` on
+the same words before honouring an ask that carries `confirm.*` names;
+`estimate_record.drop_stale_confirms` removes the ones the current check
+does not raise (an emptied ask becomes specs_complete) and the message goes
+on to be priced. A real missing field is never dropped.
+
 **4.12.5 (built 6 September 2026): a reopened estimate reads its message afresh, and quoted text never counts.**
 Live, the "change" re-read flagged `confirm.customer_stone` from the shop's
 own words quoted under the customer's reply ("I have attached ..." matched
