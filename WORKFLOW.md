@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 7 September 2026 (unpublished, after 4.13.2): a fact written at the
+- Built 7 September 2026 (4.13.3): a fact written at the
   top level of a multi-piece reading applies to every piece that lacks it,
   stone facts included, not only metal; after "second piece" the first
   piece keeps every fact it was priced with, and a reading that came back

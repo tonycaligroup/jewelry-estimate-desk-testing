@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.2 (7 September 2026): a second piece never re-asks what the record knows.**
+**4.13.3 (built 7 September 2026): a second piece never re-asks what the record knows.**
 Live, the wife's-ring second piece: the extractor put the shared stone
 facts ("diamond, lab-grown, D, ideal") at the top level with two thin
 pieces under them, and `pieces_of` shared only the metal keys, so the gate
