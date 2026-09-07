@@ -1351,6 +1351,22 @@ class OwnStoneAndStallTests(SideBranchTests):
                 self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)
         self.run_branch(branch)
 
+    def test_a_rendering_between_views_is_in_flight_and_the_owner_hears_nothing(self) -> None:
+        """7 September 2026, rehearsal: every rendering tick announced "1 claimed item(s) still processing"."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            first = self.one_tick(ws, world)
+            self.assertEqual([i["outcome"] for i in first["inline"]], ["rendering_in_progress"], first)
+            self.assertEqual(first["message"], "NO_REPLY", "a rendering between views is in flight, not unsettled")
+            second = self.one_tick(ws, world)
+            self.assertEqual([i["outcome"] for i in second["inline"]], ["rendering_approval_requested"], second)
+            self.assertEqual(second["message"], "NO_REPLY")
+            self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" not in n["text"]], [],
+                             "no notice that is neither a question nor a preview")
+        self.run_branch(branch)
+
     def test_a_vision_check_that_keeps_failing_cards_the_views_unchecked_instead_of_asking(self) -> None:
         """6 September 2026: the describe call failed six jobs in a row and the owner was asked; the images were fine."""
         def branch(ws: Path, world: World) -> None:

@@ -889,6 +889,15 @@ def list_manual_reviews(root: Path) -> list[dict[str, Any]]:
     )
 
 
+HANDOFF_FILES = ("rendering-progress.json", "next-step.json")
+
+
+def handed_to_next_tick(root: Path, message_id: str) -> bool:
+    """True when the claim's work folder carries work the next tick picks up by design."""
+    work_dir = root.resolve().parent / "work" / inbox_claim.claim_key(message_id)
+    return any((work_dir / name).is_file() for name in HANDOFF_FILES)
+
+
 def run_report(
     root: Path,
     claim_root: Path | None = None,
@@ -923,8 +932,11 @@ def run_report(
             if (
                 item["processing_status"] == "processing"
                 and state.get("status") == "processing"
-                and inbox_claim.recovery_lease_active(state)
+                and (inbox_claim.recovery_lease_active(state) or handed_to_next_tick(root, item["gmail_message_id"]))
             ):
+                # Leased to a run, or left for the next tick on purpose (a
+                # rendering between views, a step an owner answer queued):
+                # in flight, not unsettled. The owner hears nothing.
                 delegated += 1
             for field in inbox_claim.NOTIFICATION_FIELDS:
                 notification = state.get(field)
