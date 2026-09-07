@@ -1308,7 +1308,7 @@ class SafeCliTests(unittest.TestCase):
             self.assertEqual(details["Proposed price"], "$4,200.00")
             self.assertEqual(details["Estimate"], state["estimate_id"])
             self.assertIn("Send this price", details["Approve means"])
-            self.assertTrue(argv[argv.index("--action") + 1].startswith("Price approval: "))
+            self.assertTrue(argv[argv.index("--action") + 1].startswith("Price approval for "))
             self.assertEqual(payload["owner_review"]["estimated_gross_profit"], 1_100)
             self.assertEqual(
                 payload["owner_review"]["visibility"],
@@ -7235,11 +7235,11 @@ class CommandTravelsWithTheDecisionTests(unittest.TestCase):
         self.assertEqual(offer["action_type"], "appointment_offer")
         self.assertIn("send-approved-times", offer["execute"])
         rows, reasoning, title = kolo_safe.appointment_card(details, record["estimate_id"])
-        self.assertTrue(title.startswith("Book appointment:"))
+        self.assertTrue(title.startswith("Book ") and "They asked for:" in title, title)
         self.assertNotIn("Option 1", rows)
         self.assertIn("tell the desk here what you want", rows["Reject means"])
         rows2, _r, title2 = kolo_safe.appointment_card(offer, record["estimate_id"])
-        self.assertTrue(title2.startswith("Offer meeting times:"))
+        self.assertTrue(title2.startswith("Offer times to ") and "Options:" in title2, title2)
         self.assertIn("Option 2", rows2)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "records"
@@ -7633,7 +7633,7 @@ class AppointmentScenarioTests(unittest.TestCase):
             self.assertEqual(out["options"], ["2026-09-08T14:00:00-07:00", "2026-09-09T11:00:00-07:00"])
             send.assert_not_called()
             argv = next(c.args[0] for c in runner.call_args_list if c.args[0][:2] == ["kolo", "request-approval"])
-            self.assertTrue(argv[argv.index("--action") + 1].startswith("Offer meeting times:"))
+            self.assertTrue(argv[argv.index("--action") + 1].startswith("Offer times to "))
             payload = json.loads(argv[argv.index("--execution-payload") + 1])
             self.assertEqual(payload["action_type"], "appointment_offer")
             self.assertIn("send-approved-times", payload["execute"])
@@ -7825,7 +7825,7 @@ class BriefTitleTests(unittest.TestCase):
             "owner_review": {"customer_price": 3945.6, "hard_cost_total": 2100.0, "estimated_gross_profit": 1845.6},
         }
         title = kolo_safe.approval_title(details, "jed-0123456789abcdef")
-        self.assertTrue(title.startswith("Price approval: an engagement ring"))
+        self.assertTrue(title.startswith("Price approval for ") and ": an engagement ring" in title, title)
         self.assertIn("quote $3,945.60, cost $2,100.00, profit $1,845.60 (47%)", title)
         self.assertLessEqual(len(title), kolo_safe.TITLE_LIMIT)
         # The whole cost sheet rides in the title so an SMS carries every assumption.

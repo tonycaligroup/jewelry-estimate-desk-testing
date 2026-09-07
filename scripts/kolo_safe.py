@@ -124,6 +124,9 @@ def _piece_words(specification: Any) -> str:
 
 
 TITLE_PREFIX = ""  # "[REHEARSAL] " while rehearsal mode is on (rehearsal.apply)
+# The title is all an SMS delivery shows ("Approval needed (Brief #N):
+# <title> Reply APPROVE or REJECT"), so every card's title carries what the
+# owner needs to decide from the phone: who, what, the times, the checks.
 
 
 def approval_title(details: dict[str, Any], estimate_id: str) -> str:
@@ -135,14 +138,16 @@ def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     # The title is all an SMS delivery shows ("Approval needed (Brief #N):
     # <title> Reply APPROVE or REJECT"), so the owner-only cost and profit
     # ride in it. Only the owner receives it.
+    route = details.get("route") if isinstance(details.get("route"), dict) else {}
+    who = _sender_display(str(route.get("recipient") or "")) or "the customer"
     tail = f", {money}"
     hard = review.get("hard_cost_total")
     profit = review.get("estimated_gross_profit")
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (price, hard, profit)):
         pct = f" ({profit / price * 100:.0f}%)" if price else ""
         tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}" + _assumptions(review)
-    room = TITLE_LIMIT - len("Price approval: ") - len(tail)
-    return TITLE_PREFIX + f"Price approval: {piece[:max(room, 12)]}{tail}"[:TITLE_LIMIT]
+    room = TITLE_LIMIT - len(f"Price approval for {who}: ") - len(tail)
+    return TITLE_PREFIX + f"Price approval for {who}: {piece[:max(room, 12)]}{tail}"[:TITLE_LIMIT]
 
 
 TITLE_LIMIT = 700  # Kolo showed a 120-character title in full by SMS; longer is being tested
@@ -294,7 +299,7 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
         rows["Time"] = when
         rows["Approve means"] = f"Book {when} on your calendar, invite the customer, and confirm in their email thread."
         rows["Reject means"] = reject
-        title = f"Book appointment: {piece}, {when}"[:120]
+        title = f"Book {_sender_display(customer)}: {piece}, {when}. They asked for: {asked_text}."[:TITLE_LIMIT]
         reasoning = (
             f"{customer} asked to meet ({asked_text}). That time is free on your calendar inside your "
             "declared windows. Approve to book it; reject and then tell the desk here what to do."
@@ -304,7 +309,8 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
             rows[f"Option {index}"] = str(slot.get("label") or slot.get("start") or "")[:120]
         rows["Approve means"] = "Email these times to the customer and let them pick one. Nothing is booked yet."
         rows["Reject means"] = reject
-        title = f"Offer meeting times: {piece}"[:120]
+        labels = "; ".join(str(slot.get("label") or slot.get("start") or "") for slot in options[:3])
+        title = f"Offer times to {_sender_display(customer)}: {piece}. Options: {labels}. They asked for: {asked_text}."[:TITLE_LIMIT]
         why = str(details.get("availability_note") or "").strip()
         reasoning = (
             f"{customer} asked to meet ({asked_text}). "
@@ -317,19 +323,25 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
         rows["Times I can offer"] = f"none ({reason})"
         rows["Approve means"] = "Nothing; the desk needs times from you. Reject, and it will ask."
         rows["Reject means"] = reject
-        title = f"Appointment request: {piece}"[:120]
+        title = f"{_sender_display(customer)} asked to meet about {piece}: {reason}. Reject, then tell me times."[:TITLE_LIMIT]
         reasoning = f"{customer} asked to meet ({asked_text}). {reason}."
-    title = (TITLE_PREFIX + title)[:120]
+    title = (TITLE_PREFIX + title)[:TITLE_LIMIT]
     return rows, reasoning, title
 
 
 def rendering_title(details: dict[str, Any]) -> str:
-    """The rendering card's title; a revision says so, and the registry matches on it."""
-    piece = str(details.get("piece") or "their estimate")[:120]
+    """The rendering card's title: who, what, how the views checked, and the revision if any."""
+    piece = str(details.get("piece") or "their estimate")[:160]
+    who = _sender_display(str(details.get("customer_email") or "")) or "the customer"
     revision = details.get("revision")
-    if isinstance(revision, int) and revision > 1:
-        return (TITLE_PREFIX + f"Send renderings (revision {revision}): {piece}")[:120]
-    return (TITLE_PREFIX + f"Send renderings: {piece}")[:120]
+    head = f"Send renderings (revision {revision}) to {who}: {piece}" if isinstance(revision, int) and revision > 1 \
+        else f"Send renderings to {who}: {piece}"
+    parts = [head]
+    if details.get("checker"):
+        parts.append(f"Checker: {str(details['checker'])[:200]}")
+    if details.get("revised"):
+        parts.append(f"Revised: {str(details['revised'])[:160]}")
+    return (TITLE_PREFIX + ". ".join(parts) + ".")[:TITLE_LIMIT]
 
 
 def build_request_rendering_approval(

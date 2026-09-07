@@ -2370,7 +2370,9 @@ class TwoPieceTests(SideBranchTests):
             self.assertTrue(any("wider and flatter" in flag(argv, "--prompt") for argv in world.renders[-2:]), "the owner's words reach the prompt")
             fresh = world.cards[-1]
             self.assertNotEqual(fresh["brief_id"], first["brief_id"])
-            self.assertEqual(fresh["title"], "Send renderings (revision 2): " + fresh["details"]["Piece"][:120 - len("Send renderings (revision 2): ")])
+            self.assertTrue(fresh["title"].startswith("Send renderings (revision 2) to pat@example.net: "), fresh["title"])
+            self.assertIn("Revised: make the band wider and flatter", fresh["title"], "the SMS shows the revision")
+            self.assertIn("Checker: view 1", fresh["title"], "the SMS shows how the views checked")
             self.assertEqual(fresh["details"]["Revised"], "make the band wider and flatter")
             self.assertEqual(len(fresh["payload"]["images"]), 4)
             self.assertEqual(fresh["payload"]["images"][:2], first["payload"]["images"][:2], "the ring's views are kept as they were")
@@ -2707,7 +2709,7 @@ class RehearsalTests(SideBranchTests):
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
             card = world.cards[-1]
-            self.assertTrue(card["title"].startswith("[REHEARSAL] Price approval:"), card["title"])
+            self.assertTrue(card["title"].startswith("[REHEARSAL] Price approval for "), card["title"])
             world.approve(card)
             self.tick(ws, world)
             self.assertEqual(len(world.sent), 1)
@@ -2719,7 +2721,7 @@ class RehearsalTests(SideBranchTests):
             summary = self.tick(ws, world)
             self.assertEqual([i["message_id"] for i in summary["inline"]], ["real1"], summary)
             self.assertNotIn("REHEARSAL", json.dumps(summary["notes"]))
-            self.assertTrue(world.cards[-1]["title"].startswith("Price approval:"), world.cards[-1]["title"])
+            self.assertTrue(world.cards[-1]["title"].startswith("Price approval for "), world.cards[-1]["title"])
             self.assertEqual(readiness.checks(ws, ROOT, "openclaw", runner=world.run)[0]["check"], "shop profile")
         self.run_branch(branch)
 

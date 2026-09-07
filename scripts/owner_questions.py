@@ -221,6 +221,19 @@ def only_open(root: Path) -> dict[str, Any]:
     return open_questions[0]
 
 
+PAIRED = ("earrings", "cufflinks", "cuff links", "studs", "hoops", "huggies")
+
+
+def _with_article(piece: str) -> str:
+    """'a pendant', 'an anklet', 'a pair of earrings', 'wedding bands' (never 'an earrings')."""
+    words = piece.strip().lower()
+    if any(words == p or words.endswith(" " + p) for p in PAIRED):
+        return f"a pair of {words}"
+    if words.endswith("s") and not words.endswith("ss"):
+        return words
+    return f"{'an' if words[:1] in tuple('aeiou') else 'a'} {words}"
+
+
 def summary_of_piece(specification: Any) -> str:
     """'a pendant in 14K white gold with a lab-grown sapphire 0.75 ct'."""
     import cost_components  # local import; cost_components does not depend on this module
@@ -234,7 +247,7 @@ def summary_of_piece(specification: Any) -> str:
     piece = str(spec.get("piece_type") or "").strip().lower()
     metal = cost_components.extract_metal(spec)
     stone = cost_components.extract_center_stone(spec)
-    parts = [f"{'an' if piece[:1] in tuple('aeiou') else 'a'} {piece}" if piece else "a piece"]
+    parts = [_with_article(piece) if piece else "a piece"]
     if metal.get("description"):
         parts.append(f"in {metal['description']}")
     if stone.get("description"):
