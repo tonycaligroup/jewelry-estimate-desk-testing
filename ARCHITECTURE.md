@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.13.1 (built 7 September 2026): silent between views; every card title decides by text.**
+Rehearsal on 4.13.0 showed one "still processing" line per rendering view
+reaching the owner: the run report counted an unleased processing claim as
+unsettled, and between views the desk releases the lease on purpose.
+`inbox_monitor.handed_to_next_tick` (a `rendering-progress.json` or
+`next-step.json` in the claim's work folder) now counts as in flight. The
+SMS shows only a card's title, so every title carries the decision facts:
+the customer's name, the offered times and what they asked for, the
+checker result and the revision note on rendering cards; plural pieces
+read "a pair of earrings", never "an earrings".
+
 **4.13.0 (built 7 September 2026): renderings run inside the watcher, one view per tick; the whole-desk pass.**
 The one-shot render job is retired (`render_job.py`, `spawn_render_job`,
 its create argv, its lease): `rendering.plan_piece` produces the views as
