@@ -1297,6 +1297,37 @@ class OwnStoneAndStallTests(SideBranchTests):
             self.assertEqual(self.claim(ws, "s2")["status"], "processed")
         self.run_branch(branch)
 
+    def test_a_second_piece_after_the_estimate_joins_it_as_another_line(self) -> None:
+        """WORKFLOW.md 6.8 and the multi-piece rule: "second piece" reopens the estimate with two lines and one total."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            thread, estimate_id = self._estimate_sent(ws, world)
+            world.design_change = ["pieces"]
+            world.customer_message("s2", thread, "Could you also quote a plain matching band, size 10?\n\nPat")
+            self.tick(ws, world)
+            self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner")
+            world.design_change = []
+            world.spec = {"metal": "yellow gold", "metal_karat": "14k", "pieces": [
+                {**{k: v for k, v in world.spec.items()}},
+                {"piece_type": "wedding band", "finger_size": "10", "notes": "plain, polished, no stones"},
+            ]}
+            answered = self.answer(ws, "second piece")
+            self.assertEqual(answered["decision"], "second_piece", answered)
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["status"], "pending_approval", answered)
+            self.assertEqual(len(record["specification"]["pieces"]), 2)
+            self.assertEqual(record["estimate_history"][-1]["reopened_for"], "second_piece")
+            card = world.cards[-1]
+            self.assertIn("wedding band", card["title"])
+            self.assertIn("signet ring", card["title"])
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.sent), 2)
+            self.assertIn("updated", world.sent[-1]["body"].lower())
+            self.assertEqual(len(re.findall(r"\$", world.sent[-1]["body"])), 1, "one total for both pieces")
+        self.run_branch(branch)
+
     def test_two_sizes_read_as_one_piece_are_confirmed_before_any_price(self) -> None:
         """ARCHITECTURE-OPTIONS.md E': the customer names two sizes, the model reads one piece; the follow-up confirms."""
         def branch(ws: Path, world: World) -> None:

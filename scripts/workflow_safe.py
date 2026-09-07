@@ -228,13 +228,14 @@ def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runne
 
 
 def _answer_design_change(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
-                          question: dict[str, Any]) -> dict[str, Any]:
-    """The owner says the reply changes the design (WORKFLOW.md 6.8): reopen the estimate on this thread.
+                          question: dict[str, Any], outcome: str = "design_change") -> dict[str, Any]:
+    """The owner says the reply changes the design or adds a piece (WORKFLOW.md 6.8): reopen on this thread.
 
     The sent estimate becomes history on the record; the customer's message
     is read again as part of the inquiry, the gate asks for what the change
     leaves open or prices it, and a fresh card follows. Same thread, same
-    record, the old figure never re-sent.
+    record, the old figure never re-sent. A second piece is read into
+    `pieces` beside the first (the multi-piece rule: one estimate, one total).
     """
     import cron_config  # local import keeps module import order unchanged
     import inbox_watcher  # local import: inbox_watcher imports this module
@@ -243,7 +244,7 @@ def _answer_design_change(args: argparse.Namespace, workspace: Path, p: dict[str
     message_id = question["gmail_message_id"]
     estimate_id = question["estimate_id"]
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "unclear_reply",
-                              "decision": "design_change"}
+                              "decision": outcome}
     reopened = _resume_parked_claim(p, message_id)
     if not Path(reopened["work_paths"]["gmail_message"]).exists():
         import gmail_fetch  # local import; only needed when the work file was cleaned up
@@ -251,9 +252,9 @@ def _answer_design_change(args: argparse.Namespace, workspace: Path, p: dict[str
         gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
     record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
     if record.get("status") in SENT_STATUSES:
-        estimate_record.reopen_for_change(p["record_root"], estimate_id, message_id, "design_change", args.answer)
+        estimate_record.reopen_for_change(p["record_root"], estimate_id, message_id, outcome, args.answer)
     if question["status"] == "open":
-        owner_questions.record_decision(root, question, args.answer, "design_change")
+        owner_questions.record_decision(root, question, args.answer, outcome)
     work_dir = Path(reopened["work_paths"]["work_dir"])
     intake_path = work_dir / "intake-result.json"
     intake_result = read_object(intake_path) if intake_path.exists() else None
@@ -1928,8 +1929,8 @@ def answer_decision(
                 message_id, intake_result["estimate_id"], runner=getattr(args, "runner", subprocess.run))}
         result["pipeline"] = done.get("outcome")
         return result
-    if question["kind"] == "unclear_reply" and outcome == "design_change":
-        return _answer_design_change(args, workspace, p, root, question)
+    if question["kind"] == "unclear_reply" and outcome in {"design_change", "second_piece"}:
+        return _answer_design_change(args, workspace, p, root, question, outcome)
     if question["kind"] == "appointment_next":
         return _answer_appointment_next(args, workspace, p, root, question, outcome)
     if question["kind"] == "price_next":
