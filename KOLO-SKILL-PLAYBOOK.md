@@ -194,6 +194,12 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   address at claim time and prefixing every card title, subject, and notice
   (`[REHEARSAL]`); Kolo itself has no test mode, so the mark must be the
   skill's. **built 6 Sep, jewelry desk 4.12.0**
+- The chat session's `exec` tool detaches a command after `yieldMs`
+  (default 10 s) into a background process the session must then manage
+  (`process` poll/log/kill); it does not kill it unless a per-call
+  `timeout` is set. Neither is configurable session-wide. So every command
+  a skill asks the session to run must finish within 10 s: record the
+  decision, hand the work to the cron tick, return. **verified 6 Sep 2026**
 - `kolo --help` (6 Sep 2026): no command reads a brief back; the brief
   surface is `request-approval`, `update-brief`, and `audit-query`. A skill
   cannot verify an edited payload from the trail, so treat cards as binary
