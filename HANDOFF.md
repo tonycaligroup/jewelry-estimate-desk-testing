@@ -37,7 +37,7 @@ version come from the SKILL.md frontmatter (`name:` and `version:`).
   `jewelry-estimate-desk`, version 2.0.0, from 23 August. The main session
   ran scripts from that stale copy once by mistake. Publish the new build
   over that slug, or delete the old listing, so no instance can pick it up.
-- Frontmatter version is `4.12.7` on master (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
+- Frontmatter version is `4.13.0` on master (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
 - `tests/`, `ARCHITECTURE.md`, `WORKFLOW.md`, `KOLO-SKILL-PLAYBOOK.md`,
   `HANDOFF.md`, and `TESTING-CHANGE-REPORT.md` are not needed on an
   instance; shipping them is harmless.
@@ -75,7 +75,7 @@ otherwise.
 - Cards are binary (6 September 2026): the desk executes every approval
   from the audit trail, price cards included; a rejected price card asks
   the owner for the price and files a fresh card at it (`price_next`).
-- Unpublished on master (7 September 2026): renderings run one view per tick inside the watcher (`pipeline.render_step`, `rendering-progress.json`); the one-shot render job is gone; every owner answer returns in seconds (`_hand_to_tick`, `next-step.json`). See ARCHITECTURE.md's latest note.
+- 4.13.0 (7 September 2026): renderings run one view per tick inside the watcher (`pipeline.render_step`, `rendering-progress.json`); the one-shot render job is gone; every owner answer returns in seconds (`_hand_to_tick`, `next-step.json`). See ARCHITECTURE.md's latest note.
 - 4.12.0 (6 September 2026): rendering reject loop (`rendering_next`),
   reading check before pricing (`reading_check.py`), rehearsal mode
   (`rehearsal.py`), "change" and "second piece" reopen the estimate

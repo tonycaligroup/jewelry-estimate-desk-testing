@@ -167,4 +167,4 @@ second permanent routine; or render one view per tick inside the watcher.
 Chosen: one view per tick inside the watcher, the safest by the measures
 that bit us: one environment, nothing created on the instance, every step
 small and resumable, nothing side by side. Built and green (538 tests,
-harness 96/96), unpublished until the owner decides.
+harness 96/96), shipped as 4.13.0 on 7 September 2026 after the named vision model was proven inside a cron-run command.

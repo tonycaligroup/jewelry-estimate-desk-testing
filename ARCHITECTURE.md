@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished, 7 September 2026: renderings run inside the watcher, one view per tick; the whole-desk pass.**
+**4.13.0 (built 7 September 2026): renderings run inside the watcher, one view per tick; the whole-desk pass.**
 The one-shot render job is retired (`render_job.py`, `spawn_render_job`,
 its create argv, its lease): `rendering.plan_piece` produces the views as
 data, `rendering.render_view` renders and checks one, and
