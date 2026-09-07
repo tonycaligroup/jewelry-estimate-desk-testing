@@ -381,6 +381,19 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.4 (7 September 2026): a twin piece takes the quoted numbers.**
+Live case 5: the customer asked for the same band in rose gold, specs
+copied exactly, and the model weighed it again (12 g to 10 g, 1.8 ct to 1.2
+ct, other fees). `cost_components.is_twin(new, quoted)`: same piece type,
+every non-cosmetic fact both state equal, a non-cosmetic fact stated only
+for the new piece is a difference, a fact only the quoted piece states is
+not (the re-read is thinner), and the stone facts (`stone_type`,
+`accent_stones`) present on both or neither. `COSMETIC_KEYS` lists what may
+differ. `prepare` gives a twin the quoted piece's `prior_quantities`
+(`twin_of` names it) so `judge.choose_quantities` asks the model about
+nothing when every piece is covered. Fixture:
+`tests/fixtures/live/2026-09-07-twin-band-rose-gold.json`.
+
 **Unpublished after 4.13.4 (7 September 2026): twin piece labels.**
 Live case 5 on 4.13.4 passed (brief #46 kept brief #45's band to the cent,
 shipping once, title whole) but both bands were labelled "(men's wedding

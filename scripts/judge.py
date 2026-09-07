@@ -770,7 +770,8 @@ def choose_quantities(
             if open_pieces else []
         )
         return {"pieces": [
-            {**info["prior_quantities"], "label": str(info.get("label"))} if info.get("prior_quantities") else next(answered)
+            {**{k: v for k, v in info["prior_quantities"].items() if k != "twin_of"}, "label": str(info.get("label"))}
+            if info.get("prior_quantities") else next(answered)
             for info in pieces
         ]}
     needs_carat = any(key.startswith("stone_lines[0].quantity") for key in fill)

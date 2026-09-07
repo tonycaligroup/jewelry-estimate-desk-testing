@@ -24,7 +24,9 @@ Two kinds:
   `outcomes` (the tick's inline outcomes), `sent` (emails sent so far),
   `claim_status`, `decision`, `missing_required_fields`, `pieces` (count),
   `piece` (`index` and `has`: facts that piece must carry),
-  `card_title_contains`, `no_new_card`, `assumptions_contain`.
+  `card_title_contains`, `no_new_card`, `assumptions_contain`,
+  `assumptions_count`, `model_quantity_prompts` (per-piece quantity calls
+  the model received during the step).
 
 Keep a defect's `seen_on` version and `fixed_in` version in the file, so
 the history reads without git.

@@ -437,6 +437,12 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 7 September 2026 (unpublished, after 4.13.4): a new piece that is a
+  quoted piece in another colour or finish (every fact that drives weight,
+  stones and labour the same; colour, finish, engraving and stone grade may
+  differ) takes the quoted piece's grams, hours, stones and fees; the model
+  is not asked. A changed size, width, metal, karat, stone or setting is a
+  different piece and is estimated (6.8).
 - Built 7 September 2026 (unpublished, after 4.13.4): two pieces of one
   kind are told apart on the card by what differs ("men's wedding band,
   rose gold", or "size 5"; a still-identical pair is numbered), so every

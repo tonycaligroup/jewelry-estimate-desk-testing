@@ -487,6 +487,46 @@ def prior_quantities(record: dict[str, Any]) -> list[dict[str, Any]]:
     return [r for r in result if r["finished_grams"] and r["bench_hours"]]
 
 
+# Facts that change nothing a bench jeweler would weigh, count or time:
+# a twin piece may differ in these and still take the quoted piece's numbers.
+COSMETIC_KEYS = frozenset({
+    "metal_color", "finish", "engraving", "notes", "stone_color", "stone_clarity", "stone_cut",
+    "certificate", "reference_images", "scheduling_intent", "event_date", "budget",
+})
+
+
+def _plain(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value)).strip().lower()
+
+
+def is_twin(piece: dict[str, Any], other: dict[str, Any]) -> bool:
+    """The same piece in another colour or finish: every fact that drives quantities agrees.
+
+    Live, 7 September 2026: "the same band in rose gold" was weighed again
+    by the model (12 g became 10 g, 1.8 ct became 1.2 ct). Two pieces are
+    twins when their piece type is the same, every non-cosmetic fact they
+    both state is equal, and they agree on whether there are stones at all.
+    A fact only one of them states is not a disagreement (the re-read of
+    "same as the first" is usually the thinner one), except the stone facts,
+    which must be stated on both or on neither.
+    """
+    if _plain(piece.get("piece_type") or "") != _plain(other.get("piece_type") or "") or not piece.get("piece_type"):
+        return False
+    for key in set(piece) | set(other):
+        if key in COSMETIC_KEYS or key == "pieces":
+            continue
+        mine, theirs = piece.get(key), other.get(key)
+        if key not in piece or mine in (None, "", []):
+            continue  # the thinner re-read left it out; the quoted piece's fact stands
+        if key not in other:
+            return False  # a fact stated only for the new piece ("7 mm wide") is a difference
+        if _plain(mine) != _plain(theirs if theirs is not None else ""):
+            return False
+    # A band with melee and a plain band are not twins, however alike otherwise:
+    # the stone facts must be stated on both or on neither.
+    return all(bool(piece.get(key)) == bool(other.get(key)) for key in ("stone_type", "accent_stones"))
+
+
 def prepare(
     record: dict[str, Any],
     shop_profile: dict[str, Any],
@@ -606,6 +646,14 @@ def prepare(
         # The pieces already quoted keep their numbers; only the new one is estimated.
         for info, prior in zip(piece_map, prior_quantities(record)):
             info["prior_quantities"] = prior
+        # A new piece that is a quoted piece in another colour takes its numbers too.
+        for info in piece_map:
+            if info.get("prior_quantities"):
+                continue
+            for quoted in piece_map:
+                if quoted.get("prior_quantities") and is_twin(pieces[info["index"]], pieces[quoted["index"]]):
+                    info["prior_quantities"] = {**quoted["prior_quantities"], "twin_of": quoted["label"]}
+                    break
     # The same missing rate for two pieces is one question, not two.
     seen: set[str] = set()
     deduped = []

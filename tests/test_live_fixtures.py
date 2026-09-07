@@ -69,6 +69,7 @@ class LiveFixtureTests(unittest.TestCase):
             thread = estimate_id = None
             for number, step in enumerate(data["steps"], 1):
                 summary = None
+                prompts_before = len(world.prompts)
                 if "estimate_sent" in step:
                     thread, estimate_id = helper._estimate_sent(ws, world, spec=step["estimate_sent"]["spec"],
                                                                 text=step["estimate_sent"].get("text"))
@@ -113,6 +114,9 @@ class LiveFixtureTests(unittest.TestCase):
                 assumptions = title.split("Assumptions: ")[1] if "Assumptions: " in title else ""
                 for words in expect.get("assumptions_contain", []):
                     outer.assertIn(words, assumptions, f"step {number}: {assumptions}")
+                if "model_quantity_prompts" in expect:
+                    asked = [pr for pr in world.prompts[prompts_before:] if "PIECES TO QUANTIFY:" in pr]
+                    outer.assertEqual(len(asked), expect["model_quantity_prompts"], f"step {number}: the model was asked about pieces")
                 for words, count in (expect.get("assumptions_count") or {}).items():
                     outer.assertEqual(assumptions.count(words), count, f"step {number}: {assumptions}")
 

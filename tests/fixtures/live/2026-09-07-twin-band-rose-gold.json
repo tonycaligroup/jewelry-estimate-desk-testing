@@ -1,0 +1,107 @@
+{
+  "defect": "the customer asked for the same band again in rose gold (specs copied exactly); the second piece was weighed again by the model (12 g became 10 g, 1.8 ct melee became 1.2 ct, different fees) instead of taking the quoted band's numbers",
+  "seen_on": "4.13.4",
+  "fixed_in": "unpublished",
+  "text_is": "paraphrase",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "estimate_sent": {
+        "text": "I'd like a quote on a men's wedding band in 18k yellow gold, size 10, channel-set lab-grown diamond melee all the way around, about 2.5 mm stones, VVS1 or better, D color, 5 mm wide. No engraving.\n\nThanks, Tony",
+        "spec": {
+          "piece_type": "men's wedding band",
+          "metal": "gold",
+          "metal_karat": "18k",
+          "metal_color": "yellow",
+          "finger_size": "10",
+          "setting_style": "channel-set eternity",
+          "stone_type": "diamond",
+          "stone_origin": "lab-grown",
+          "stone_carat": "2.5 mm",
+          "stone_color": "D",
+          "stone_clarity": "VVS1",
+          "center_stone": "no",
+          "accent_stones": "lab-grown diamond melee all the way around",
+          "band_width_mm": "5",
+          "engraving": "none"
+        }
+      },
+      "expect": {
+        "assumptions_contain": [
+          "9.5g",
+          "3.5h"
+        ]
+      }
+    },
+    {
+      "customer": {
+        "id": "s2",
+        "text": "Could you also quote the same band in 18k rose gold? Size 10, channel-set lab-grown diamond melee all the way around, 2.5 mm stones, VVS1 or better, D color, 5 mm wide, no engraving.\n\nTony",
+        "design_change": [
+          "pieces"
+        ]
+      },
+      "expect": {
+        "claim_status": "awaiting_owner",
+        "no_new_card": true
+      }
+    },
+    {
+      "answer": "second piece",
+      "expect": {
+        "decision": "second_piece"
+      }
+    },
+    {
+      "tick": true,
+      "spec": {
+        "metal": "gold",
+        "metal_karat": "18k",
+        "stone_type": "diamond",
+        "stone_origin": "lab-grown",
+        "stone_color": "D",
+        "stone_clarity": "VVS1",
+        "pieces": [
+          {
+            "piece_type": "men's wedding band",
+            "metal_color": "yellow",
+            "finger_size": "10"
+          },
+          {
+            "piece_type": "men's wedding band",
+            "metal_color": "rose",
+            "finger_size": "10",
+            "setting_style": "channel-set eternity",
+            "stone_carat": "2.5 mm",
+            "center_stone": "no",
+            "accent_stones": "lab-grown diamond melee all the way around",
+            "band_width_mm": "5",
+            "engraving": "none"
+          }
+        ]
+      },
+      "expect": {
+        "outcomes": [
+          "approval_requested"
+        ],
+        "sent": 1,
+        "missing_required_fields": [],
+        "pieces": 2,
+        "card_title_contains": [
+          "men's wedding band, yellow gold",
+          "men's wedding band, rose gold"
+        ],
+        "assumptions_contain": [
+          "(men's wedding band, yellow gold) 9.5g",
+          "(men's wedding band, rose gold) 9.5g",
+          "bench labor (men's wedding band, yellow gold) 3.5h",
+          "bench labor (men's wedding band, rose gold) 3.5h"
+        ],
+        "assumptions_count": {
+          "0.2ct": 2
+        },
+        "model_quantity_prompts": 0
+      }
+    }
+  ]
+}

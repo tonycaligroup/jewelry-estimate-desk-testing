@@ -8797,3 +8797,35 @@ class PieceLabelTests(unittest.TestCase):
         self.assertEqual(frozen[0]["accents"], [])
         self.assertEqual(frozen[1]["accents"], [{"key": "melee", "carats": 1.2}])
         self.assertEqual(frozen[1]["fees"], ["shipping"])
+
+
+class TwinPieceTests(unittest.TestCase):
+    """Live, 7 September 2026: the same band in rose gold was weighed again (12 g became 10 g, 1.8 ct became 1.2 ct)."""
+
+    QUOTED = {"piece_type": "men's wedding band", "metal": "gold", "metal_karat": 18, "metal_color": "yellow", "finger_size": 10,
+              "setting_style": "channel-set eternity", "stone_carat": "2.5 mm", "stone_clarity": "vvs1 or better", "stone_type": "diamond",
+              "stone_origin": "lab-grown", "stone_color": "d", "center_stone": "no", "engraving": "none"}
+
+    def test_the_same_band_in_another_colour_is_a_twin_and_a_changed_fact_is_not(self) -> None:
+        rose = {**self.QUOTED, "metal_color": "rose"}
+        thin = {"piece_type": "men's wedding band", "metal": "gold", "metal_karat": 18, "metal_color": "rose", "finger_size": 10,
+                "stone_type": "diamond", "stone_origin": "lab-grown", "center_stone": "no"}
+        self.assertTrue(cost_components_module.is_twin(rose, self.QUOTED))
+        self.assertTrue(cost_components_module.is_twin(thin, self.QUOTED), "a thinner re-read of the same piece")
+        self.assertTrue(cost_components_module.is_twin({**rose, "finish": "brushed", "engraving": "TL"}, self.QUOTED))
+        for changed in ({"finger_size": 5}, {"metal": "platinum"}, {"metal_karat": 14}, {"band_width_mm": 7},
+                        {"stone_carat": "3 mm"}, {"setting_style": "bead set"}, {"piece_type": "ladies' band"}):
+            self.assertFalse(cost_components_module.is_twin({**thin, **changed}, self.QUOTED), changed)
+        plain = {"piece_type": "men's wedding band", "metal": "gold", "metal_karat": 18, "metal_color": "rose", "finger_size": 10, "notes": "plain"}
+        self.assertFalse(cost_components_module.is_twin(plain, self.QUOTED), "a plain band is not a melee band")
+
+    def test_a_twin_takes_the_quoted_numbers_and_the_model_is_not_asked(self) -> None:
+        pieces = [{"index": 0, "label": "band, yellow gold", "prior_quantities": {"finished_grams": 12.0, "bench_hours": 5.0, "center_carat": None,
+                                                                                    "fees": ["simple_stone_setting"], "accents": [{"key": "melee", "carats": 1.8}], "twin_of": None}},
+                  {"index": 1, "label": "band, rose gold", "prior_quantities": {"finished_grams": 12.0, "bench_hours": 5.0, "center_carat": None,
+                                                                                  "fees": ["simple_stone_setting"], "accents": [{"key": "melee", "carats": 1.8}], "twin_of": "band, yellow gold"}}]
+        with patch.object(judge, "ask_json", side_effect=AssertionError("the model must not be asked")):
+            chosen = judge.choose_quantities({"pieces": [{}, {}]}, {}, [], [], {}, pieces=pieces)
+        self.assertEqual([p["finished_grams"] for p in chosen["pieces"]], [12.0, 12.0])
+        self.assertNotIn("twin_of", chosen["pieces"][1])
+        self.assertEqual(chosen["pieces"][1]["label"], "band, rose gold")
