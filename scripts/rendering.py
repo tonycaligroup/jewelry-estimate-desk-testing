@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
@@ -25,6 +27,9 @@ import judge
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 ARCHETYPE_DIR = Path(__file__).resolve().parent.parent / "templates" / "render"
 DEFAULT_VISION_MODEL = None  # the pod default (text+image capable); override with --vision-model
+_CHECK_LOCK = threading.Lock()
+DESCRIBE_TRIES = 3
+DESCRIBE_PAUSE_SECONDS = 3
 IMAGE_TIMEOUT_MS = 180_000
 MARK_SOURCES = ("artwork", "initials", "none")
 
@@ -189,7 +194,26 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
         + 'Answer with one JSON object only: {"answers": {"<id>": "yes"|"no"}, "notes": {"<id>": "<why>"}}\n\n'
         f"QUESTIONS:\n{questions}"
     )
-    completed = runner(describe_argv(image, prompt, openclaw, vision_model), check=True, capture_output=True, text=True, shell=False)
+    # The vision call fails now and then on the pod (exit 1, the same command
+    # succeeds a moment later; 6 September 2026). Try again with a pause; if it
+    # keeps failing the view goes to the owner unchecked rather than the
+    # whole rendering dying and the owner being asked.
+    completed = None
+    last_error: Exception | None = None
+    for attempt in range(DESCRIBE_TRIES):
+        try:
+            completed = runner(describe_argv(image, prompt, openclaw, vision_model), check=True, capture_output=True, text=True, shell=False)
+            break
+        except (OSError, subprocess.CalledProcessError) as exc:
+            last_error = exc
+            if attempt + 1 < DESCRIBE_TRIES:
+                time.sleep(DESCRIBE_PAUSE_SECONDS * (attempt + 1))
+    if completed is None:
+        detail = ""
+        if isinstance(last_error, subprocess.CalledProcessError):
+            detail = (last_error.stderr or last_error.stdout or "").strip()[:160]
+        return {"answers": {}, "failed": [], "unsure": [c["id"] for c in arch["checks"]], "notes": {},
+                "unchecked": True, "error": f"vision check unavailable after {DESCRIBE_TRIES} tries" + (f": {detail}" if detail else "")}
     text = _describe_text(completed.stdout)
     try:
         value = judge.extract_json(text)
@@ -337,7 +361,8 @@ def run(
         check = None
         for attempt in range(max_regenerations + 1):
             image = render(current_prompt, refs, out_dir / f"view-{slot}-try-{attempt + 1}.png", openclaw, runner, image_model)
-            check = check_image(image, plan, openclaw, runner, vision_model, artwork)
+            with _CHECK_LOCK:
+                check = check_image(image, plan, openclaw, runner, vision_model, artwork)
             attempts.append({"image": str(image), "check": check, "prompt": current_prompt})
             if not check["failed"]:
                 break
@@ -346,10 +371,11 @@ def run(
         return {
             "slot": slot, "image": str(image), "passed": not check["failed"], "failed": check["failed"],
             "unsure": check["unsure"], "notes": check["notes"], "attempts": len(attempts), "history": attempts,
+            **({"unchecked": True, "check_error": check.get("error")} if check.get("unchecked") else {}),
         }
 
-    # The views are independent: render and check them side by side. Each
-    # is one image call and one check; the wall time is one view, not two.
+    # The image calls run side by side; the vision checks run one at a time
+    # under a lock, since two at once is what the provider refused.
     with ThreadPoolExecutor(max_workers=max(1, len(prompts))) as pool:
         futures = [pool.submit(one_view, slot, prompt) for slot, prompt in enumerate(prompts, start=1)]
         report["views"] = [f.result() for f in futures]

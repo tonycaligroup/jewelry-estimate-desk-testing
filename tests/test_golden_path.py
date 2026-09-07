@@ -52,6 +52,7 @@ import judge  # noqa: E402
 import kolo_safe  # noqa: E402
 import owner_questions  # noqa: E402
 import readiness  # noqa: E402
+import rendering  # noqa: E402
 import run_lease  # noqa: E402
 import workflow_safe  # noqa: E402
 from test_runtime import IntakeTests  # noqa: E402
@@ -103,7 +104,7 @@ class World:
     logged in `calls`, so a test can learn which services an action touches.
     """
 
-    SERVICES = ("gmail_read", "gmail_send", "calendar_freebusy", "calendar_create", "calendar_delete", "calendar_list",
+    SERVICES = ("gmail_read", "gmail_send", "calendar_freebusy", "calendar_create", "calendar_delete", "calendar_list", "image_describe",
                 "kolo_card", "kolo_notify", "kolo_audit", "kolo_update", "model", "image")
 
     def __init__(self, ws: Path) -> None:
@@ -321,6 +322,7 @@ class World:
             self.renders.append(argv)
             return self._after("image", ok(argv, json.dumps({"ok": True, "outputs": [{"path": str(output)}]})))
         if argv[1:4] == ["infer", "image", "describe"]:
+            self._service("image_describe", argv, "checked")
             ids = re.findall(r"^- (\w+):", flag(argv, "--prompt") or "", re.MULTILINE)
             text = json.dumps({"answers": {i: "yes" for i in ids}, "notes": {}})
             return ok(argv, json.dumps({"ok": True, "outputs": [{"text": text}]}))
@@ -1106,6 +1108,7 @@ class SideBranchTests(GoldenPathTests):
 class RenderingGateTests(GoldenPathTests):
     """No rendering reaches a customer without the owner's card, whichever path rendered it."""
 
+
     def test_one_customer_from_inquiry_to_reschedule(self) -> None:  # inherited; runs once in the parent
         pass
 
@@ -1262,6 +1265,24 @@ class OwnStoneAndStallTests(SideBranchTests):
 
     def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
+
+    def test_a_vision_check_that_keeps_failing_cards_the_views_unchecked_instead_of_asking(self) -> None:
+        """6 September 2026: the describe call failed six jobs in a row and the owner was asked; the images were fine."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.fail_next["image_describe"] = 50
+            with patch.object(rendering, "DESCRIBE_PAUSE_SECONDS", 0):
+                world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+                summary = self.tick(ws, world)
+            world.fail_next.clear()
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "send_rendering", summary)
+            self.assertIn("not machine-checked", card["details"]["Checker"])
+            self.assertEqual(len(card["payload"]["images"]), 2)
+            self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" in n["text"]], [], "no question for a flaky checker")
+            self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner")
+        self.run_branch(branch)
 
     def test_a_change_after_the_estimate_reopens_it_and_sends_an_updated_estimate_once(self) -> None:
         """WORKFLOW.md 6.8: the owner's "change" reopens the gate on the same thread; the old figure is history."""

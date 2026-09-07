@@ -257,7 +257,9 @@ def render_and_send(
     multi = len(report.get("pieces") or []) > 1
     checker = "; ".join(
         f"view {v['slot']}" + (f" ({v.get('piece')})" if multi else "") + " "
-        + ("passed" if v["passed"] else "failed " + ", ".join(v["failed"])) + f" ({v['attempts']} attempt{'s' if v['attempts'] != 1 else ''})"
+        + ("not machine-checked (the vision check was unavailable)" if v.get("unchecked")
+           else ("passed" if v["passed"] else "failed " + ", ".join(v["failed"])))
+        + f" ({v['attempts']} attempt{'s' if v['attempts'] != 1 else ''})"
         for v in report["views"]
     )
     workflow_safe.write_private(work_dir / "rendering-report.json", report)
