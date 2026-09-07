@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.12.3
+version: 4.12.4
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -642,7 +642,10 @@ so and stop. A missed email is handed back with `doctor.py --requeue
 While a desk question is open (the last desk message ended with
 `desk-answer <CODE>`), the owner's next reply is the answer to it: run
 `answer-question` with their words first, and only if that command refuses
-treat the reply as anything else. Never ask the owner a question of your
+treat the reply as anything else. The command returns in seconds; when its
+output says `queued_for_tick`, the desk reads and prices on its next tick
+(within two minutes) and the card follows on its own. Tell the owner
+nothing in between. Never ask the owner a question of your
 own while a desk question is open, and never read their reply to the desk
 as consent for something you proposed.
 

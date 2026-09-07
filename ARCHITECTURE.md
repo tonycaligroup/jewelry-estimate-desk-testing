@@ -381,6 +381,14 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.12.4 (built 6 September 2026): an owner answer never carries the heavy work.**
+"change", "second piece", "same", and "new" used to run the re-read and the
+price inside `answer-question`, that is inside the chat session's command,
+which the session killed mid-price (the claim then sat leased for fifteen
+minutes). `_hand_to_tick` marks the claim inline and releases its lease;
+the answer returns `queued_for_tick` in seconds and the next tick does the
+reading and pricing with its own clock.
+
 **4.12.3 (built 6 September 2026): a requeue starts fresh; a repeat stuck question has its own code.**
 After the owner's requeue the claim kept `inline_attempts` at the
 deterministic limit, so the next tick asked the stuck question instead of

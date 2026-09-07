@@ -228,6 +228,21 @@ def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runne
     return {"outcome": "asked", "question_id": question["question_id"], "created": created}
 
 
+def _hand_to_tick(p: dict[str, Path], message_id: str) -> dict[str, Any]:
+    """Leave the heavy work (a re-read, a price) to the next tick.
+
+    An owner's answer runs inside the chat session's command, which the
+    session may kill after a while (6 September 2026: a "change" answer
+    died in the re-price and the claim sat leased for fifteen minutes). The
+    answer records the decision and reopens the claim; the tick, with its
+    own clock, does the reading and pricing within two minutes.
+    """
+    token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+    inbox_claim.mark_inline(p["claim_root"], message_id, token, True)
+    inbox_claim.release_lease(p["claim_root"], message_id, token)
+    return {"pipeline": "queued_for_tick", "note": "the next tick reads and prices it"}
+
+
 def _answer_same_piece(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
                        question: dict[str, Any]) -> dict[str, Any]:
     """The owner says a new thread is the same piece (WORKFLOW.md 6.1): the estimate carries on there.
@@ -271,19 +286,8 @@ def _answer_same_piece(args: argparse.Namespace, workspace: Path, p: dict[str, P
     result["intake"] = {k: intake_result.get(k) for k in ("decision", "estimate_id", "next_action", "outcome")}
     if intake_result.get("next_action") != "review_thread":
         return result
-    inbox_claim.delegate(p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
-                         cron_config.WORKER_LEASE_SECONDS)
-    switch = pipeline.settings(workspace / "estimate-desk")
-    done = pipeline.process_claim(
-        workspace, args.base_dir.resolve(), message_id, intake_result,
-        model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
-        command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
-    )
-    if done.get("outcome") == "render_job_requested":
-        done = {"outcome": "render_job_spawned", "job_id": inbox_watcher.spawn_render_job(
-            workspace, args.base_dir.resolve(), args.openclaw or inbox_watcher.default_openclaw(),
-            message_id, estimate_id, runner=getattr(args, "runner", subprocess.run))}
-    result.update({"pipeline": done.get("outcome"), "thread_id": new_route.get("thread_id")})
+    result.update(_hand_to_tick(p, message_id))
+    result["thread_id"] = new_route.get("thread_id")
     return result
 
 
@@ -324,16 +328,9 @@ def _answer_design_change(args: argparse.Namespace, workspace: Path, p: dict[str
             message_id=message_id, shop_profile=p["shop_profile"],
         ))
         write_private(intake_path, intake_result)
-    inbox_claim.delegate(p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
-                         cron_config.WORKER_LEASE_SECONDS)
-    switch = pipeline.settings(workspace / "estimate-desk")
-    done = pipeline.process_claim(
-        workspace, args.base_dir.resolve(), message_id, intake_result,
-        model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
-        command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
-    )
-    result.update({"pipeline": done.get("outcome"), "revision": int(estimate_record.read_object(
-        estimate_record.record_path(p["record_root"], estimate_id)).get("revision") or 0)})
+    result.update(_hand_to_tick(p, message_id))
+    result["revision"] = int(estimate_record.read_object(
+        estimate_record.record_path(p["record_root"], estimate_id)).get("revision") or 0)
     return result
 
 
@@ -1973,28 +1970,7 @@ def answer_decision(
             return result
         work_dir = Path(reopened["work_paths"]["work_dir"])
         write_private(work_dir / "intake-result.json", intake_result)
-        # Intake advances the phase journal, which drops the reopen lease; lease
-        # the claim again before any worker or inline run touches it.
-        inbox_claim.delegate(
-            p["claim_root"], message_id,
-            inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
-            cron_config.WORKER_LEASE_SECONDS,
-        )
-        import pipeline  # local import: pipeline imports this module
-
-        switch = pipeline.settings(workspace / "estimate-desk")
-        if not switch.get("inline"):
-            raise ValueError("inline judgment is switched off in pipeline.json; the desk has no other way to judge")
-        done = pipeline.process_claim(
-            workspace, args.base_dir.resolve(), message_id, intake_result,
-            model=switch.get("model"), judge_runner=getattr(args, "judge_runner", subprocess.run),
-            command_runner=getattr(args, "runner", subprocess.run), openclaw=args.openclaw or inbox_watcher.default_openclaw(),
-        )
-        if done.get("outcome") == "render_job_requested":
-            done = {"outcome": "render_job_spawned", "job_id": inbox_watcher.spawn_render_job(
-                workspace, args.base_dir.resolve(), args.openclaw or inbox_watcher.default_openclaw(),
-                message_id, intake_result["estimate_id"], runner=getattr(args, "runner", subprocess.run))}
-        result["pipeline"] = done.get("outcome")
+        result.update(_hand_to_tick(p, message_id))
         return result
     if question["kind"] == "same_sender" and outcome == "same":
         return _answer_same_piece(args, workspace, p, root, question)
