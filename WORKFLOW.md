@@ -437,6 +437,9 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 7 September 2026 (4.13.2): a customer who asks for a time outside
+  the declared consultation hours is told the hours and offered free times
+  inside them; nothing is booked outside the hours (6.7).
 - Built 6 September 2026 (4.12.0): a rejected rendering card asks what
   should change and only the named piece is rendered again (6.6); the
   model's reading is cross-checked against the customer's words before any

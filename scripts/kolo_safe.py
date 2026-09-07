@@ -282,6 +282,10 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
     piece = str(details.get("piece") or "their estimate")[:120]
     asked = details.get("requested_times") or []
     asked_text = "; ".join(str(t) for t in asked)[:200] if asked else "no time given"
+    outside = details.get("outside_hours") or []
+    if outside:
+        hours = str(details.get("hours") or "your hours")
+        asked_text = f"{asked_text} (outside your hours: {hours})"[:320]
     options = details.get("calendar_availability") or []
     booking = details.get("action_type") == "appointment_booking"
     rows: dict[str, str] = {

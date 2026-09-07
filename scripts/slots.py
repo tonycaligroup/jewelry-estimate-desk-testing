@@ -63,6 +63,52 @@ def parse_windows(scheduling: dict[str, Any]) -> list[tuple[set[int], int, int]]
     return parsed
 
 
+DAY_WORDS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _clock(minute: int) -> str:
+    hour, mm = divmod(minute, 60)
+    suffix = "AM" if hour < 12 else "PM"
+    hour12 = hour % 12 or 12
+    return f"{hour12}:{mm:02d} {suffix}"
+
+
+def hours_text(scheduling: dict[str, Any]) -> str:
+    """The declared consultation windows in words: 'Monday to Friday, 10:00 AM to 11:59 PM (America/Los_Angeles)'."""
+    parts = []
+    for days, start, end in parse_windows(scheduling):
+        ordered = sorted(days)
+        if ordered == list(range(ordered[0], ordered[-1] + 1)) and len(ordered) > 1:
+            day_text = f"{DAY_WORDS[ordered[0]]} to {DAY_WORDS[ordered[-1]]}"
+        else:
+            day_text = ", ".join(DAY_WORDS[d] for d in ordered)
+        parts.append(f"{day_text}, {_clock(start)} to {_clock(end)}")
+    zone = str(scheduling.get("timezone") or "").strip()
+    friendly = ZONE_WORDS.get(zone, zone.replace("_", " ").split("/")[-1] if zone else "")
+    return "; ".join(parts) + (f" {friendly} time" if friendly and parts else "")
+
+
+ZONE_WORDS = {
+    "America/Los_Angeles": "Pacific", "America/Denver": "Mountain", "America/Phoenix": "Arizona",
+    "America/Chicago": "Central", "America/New_York": "Eastern", "America/Anchorage": "Alaska", "Pacific/Honolulu": "Hawaii",
+}
+
+
+def outside_hours(scheduling: dict[str, Any], requested: list[str]) -> list[str]:
+    """The requested times (YYYY-MM-DDTHH:MM) that fall outside the declared windows, as labels."""
+    zone = ZoneInfo(scheduling.get("timezone") or "UTC")
+    length = timedelta(minutes=duration_minutes(scheduling))
+    out = []
+    for text in requested:
+        try:
+            start = datetime.strptime(str(text), "%Y-%m-%dT%H:%M").replace(tzinfo=zone)
+        except (TypeError, ValueError):
+            continue
+        if parse_windows(scheduling) and not _inside_windows(scheduling, start, length):
+            out.append(start.strftime("%A, %B %-d at %-I:%M %p"))
+    return out
+
+
 def duration_minutes(scheduling: dict[str, Any]) -> int:
     durations = scheduling.get("durations_minutes")
     if isinstance(durations, dict):
@@ -338,4 +384,6 @@ def offer_times(
         "options": labelled,
         "requested_slot": asked[0] if asked else None,
         "reason": "" if labelled else "no free slot inside the declared windows",
+        "outside_hours": outside_hours(scheduling, requested or []),
+        "hours": hours_text(scheduling),
     }

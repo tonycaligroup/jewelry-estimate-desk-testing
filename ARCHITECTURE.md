@@ -381,6 +381,16 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.13.2 (built 7 September 2026): a time outside the hours is answered with the hours and open times.**
+The owner's rule. `slots.outside_hours` and `slots.hours_text` report a
+requested time that falls outside the declared windows ("Monday to Friday,
+10:00 AM to 11:59 PM Pacific time"); the intent and the approval carry
+`outside_hours` and `hours`; the offer card's "Customer asked for" row and
+its title say "(outside your hours: ...)"; the offer email states the hours
+and that the requested time falls outside them, then the open times
+(`OFFER_NOTE_OUTSIDE_HOURS`, `_offer_facts`), and the drafting check refuses
+a draft that omits the hours. Nothing books outside the hours, as before.
+
 **4.13.1 (built 7 September 2026): silent between views; every card title decides by text.**
 Rehearsal on 4.13.0 showed one "still processing" line per rendering view
 reaching the owner: the run report counted an unleased processing claim as

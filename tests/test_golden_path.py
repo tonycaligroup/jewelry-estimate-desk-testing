@@ -913,6 +913,35 @@ class SideBranchTests(GoldenPathTests):
             self.assertEqual([n for n in world.notices if not n["file"]], [], "a card, no ping")
         self.run_branch(branch)
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        """The owner's rule (7 September 2026): say the hours, offer times inside them."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            saturday = next_weekday(1, 18, 0)
+            while saturday.weekday() != 5:
+                saturday += timedelta(days=1)
+            world.intents = ["appointment_request"]
+            world.requested = (["Saturday at 6pm"], [local_key(saturday)])
+            world.customer_message("s2", thread, "Can we meet Saturday at 6pm?\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            self.assertEqual(card["kind"], "appointment_offer", card["payload"])
+            self.assertIn("outside your hours", card["details"]["Customer asked for"])
+            self.assertIn("outside your hours", card["title"])
+            self.assertTrue(card["payload"]["outside_hours"], card["payload"])
+            self.assertIn("Monday to Friday", card["payload"]["hours"])
+            starts = [o["start"][:16] for o in card["payload"]["calendar_availability"]]
+            self.assertTrue(starts and local_key(saturday) not in starts, "nothing outside the hours is offered")
+            world.approve(card)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            body = world.sent[-1]["body"]
+            self.assertIn(card["payload"]["hours"], body, "the email states the hours exactly")
+            self.assertIn("outside our hours", body)
+            for option in card["payload"]["calendar_availability"]:
+                self.assertIn(option["label"], body)
+        self.run_branch(branch)
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         """6 September 2026: 'next Tuesday at 2pm' asked on a Sunday fell past the 7-day window; the desk offered nothing."""
         def branch(ws: Path, world: World) -> None:
@@ -1151,6 +1180,9 @@ class WindowGateTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        pass
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         pass
 
@@ -1249,6 +1281,9 @@ class OwnStoneAndStallTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
         pass
 
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
@@ -1612,6 +1647,9 @@ class MeetingFirstTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        pass
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         pass
 
@@ -1703,6 +1741,9 @@ class CombinedIntentTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        pass
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         pass
 
@@ -1782,6 +1823,9 @@ class FailureQuestionTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
         pass
 
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
@@ -1898,6 +1942,9 @@ class StuckClaimTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        pass
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         pass
 
@@ -1998,6 +2045,9 @@ class DoctorTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
         pass
 
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
@@ -2187,6 +2237,9 @@ class PartialAnswerTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        pass
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         pass
 
@@ -2305,6 +2358,9 @@ class TwoPieceTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
         pass
 
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
@@ -2513,6 +2569,9 @@ class DeskExecutesApprovalsTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        pass
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         pass
 
@@ -2654,6 +2713,9 @@ class RehearsalTests(SideBranchTests):
     def test_no_time_given_offers_a_tight_spread(self) -> None:
         pass
 
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
+        pass
+
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
         pass
 
@@ -2741,6 +2803,9 @@ class SameSenderTests(SideBranchTests):
         pass
 
     def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_time_outside_the_hours_is_answered_with_the_hours_and_open_times(self) -> None:
         pass
 
     def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:

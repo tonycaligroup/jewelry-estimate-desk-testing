@@ -449,8 +449,15 @@ def appointment_intent(
             {"start": o["start"], "end": o["end"], "label": o["label"]} for o in offered["options"]
         ]
         intent["mode"] = offered.get("mode", "offer")
+        if offered.get("outside_hours"):
+            intent["outside_hours"] = list(offered["outside_hours"])[:3]
+            intent["hours"] = str(offered.get("hours") or "")[:160]
         if offered.get("reason"):
             intent["availability_note"] = offered["reason"]
+        elif offered.get("outside_hours") and offered.get("mode") == "offer":
+            intent["availability_note"] = (
+                f"the time they asked for ({'; '.join(offered['outside_hours'][:2])}) is outside your hours; these are free"
+            )[:160]
         elif offered.get("mode") == "offer" and offered.get("requested_slot"):
             intent["availability_note"] = "the time they asked for is taken; these are free"
     except (OSError, ValueError, KeyError) as exc:

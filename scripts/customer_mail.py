@@ -104,6 +104,9 @@ def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[st
         for label in facts.get("time_labels") or []:
             if label not in body:
                 raise ValueError(f"the email must state this time exactly as written: {label}")
+        hours = facts.get("consultation hours")
+        if hours and str(hours) not in body:
+            raise ValueError(f"the email must state the consultation hours exactly as written: {hours}")
         if previous and _opening(body) and _opening(body) == _opening(previous):
             raise ValueError("do not open with the same sentence as the last email on this thread")
         return {"body": body}
@@ -135,8 +138,10 @@ KIND_BRIEFS = {
     "offer": (
         "Say you would be glad to meet, in a personal way that reacts to what they said, then offer exactly these "
         "meeting times, each written exactly as provided, one per line, and ask them to reply with the one that "
-        "works or say what does. If the facts say there is no estimate yet, say you will go through the design "
-        "together when they come in and do not ask for any detail now. Nothing is booked yet. No prices."
+        "works or say what does. If the facts give consultation hours, say the time they asked for falls outside "
+        "those hours and state the hours exactly as written before offering the times. If the facts say there is "
+        "no estimate yet, say you will go through the design together when they come in and do not ask for any "
+        "detail now. Nothing is booked yet. No prices."
     ),
     "rendering": (
         "Send the attached design renderings. Say they illustrate the design direction discussed, that the "
