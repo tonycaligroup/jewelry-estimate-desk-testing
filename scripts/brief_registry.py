@@ -110,14 +110,15 @@ def approvals_watermark_path(monitor_root: Path) -> Path:
 
 def approved_since_last_poll(
     monitor_root: Path, runner: Callable[..., Any] | None = None, now: datetime | None = None,
-    kinds: tuple[str, ...] = ("rendering", "appointment"),
+    kinds: tuple[str, ...] = ("price", "rendering", "appointment"),
 ) -> list[dict[str, Any]]:
-    """Approvals of cards the desk filed, new since the previous poll, for the kinds the desk executes itself.
+    """Approvals of cards the desk filed, new since the previous poll.
 
-    ARCHITECTURE-OPTIONS.md A' tier 1: a rendering, a booking, or an offer is
-    a yes or no with nothing to edit, so the desk acts on the approval
-    without the main session. A price card may be edited, which the trail
-    does not show, so it stays with the session.
+    WORKFLOW.md 6.4 and 6.10 (6 September 2026): every card is approve or
+    reject, nothing else, so an approval in the trail means exactly what the
+    card said and the desk acts on it without the main session. A price
+    card included: an owner who wants another number rejects and answers
+    the desk's question, and a fresh card follows.
     """
     current = now or datetime.now(timezone.utc)
     path = approvals_watermark_path(monitor_root)

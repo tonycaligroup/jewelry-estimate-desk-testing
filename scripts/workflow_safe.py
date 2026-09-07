@@ -136,9 +136,7 @@ def handle_rejected_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
                     f"Renderings for estimate {estimate_id.upper()} are held back; nothing was sent. "
                     "Tell me what to change if you want new views.", *channel], runner=runner)
             elif kind == "price":
-                kolo_safe.run_command(["kolo", "notify-owner", "-m",
-                    f"You passed on the price for estimate {estimate_id.upper()}; nothing was sent. "
-                    "Tell me the price you want and I will re-file it, or say \"handle myself\".", *channel], runner=runner)
+                _ask_price_next(p, estimate_id, message_id, runner)
             brief_registry.mark(p["monitor_root"], entry["brief_id"], "rejected", entry.get("note"))
             handled.append({"brief_id": entry["brief_id"], "kind": kind, "estimate_id": estimate_id})
         except (OSError, ValueError, subprocess.CalledProcessError) as exc:
@@ -147,12 +145,13 @@ def handle_rejected_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
 
 
 def handle_approved_briefs(workspace: Path, runner: Any = subprocess.run) -> list[dict[str, Any]]:
-    """Every tick: rendering and appointment cards the owner approved, executed here.
+    """Every tick: every card the owner approved, executed here.
 
     The same executors the session would run, with the same lease, journal,
     and failure question; if the session runs the line too, the second run
-    finds the first one's journal and does nothing more. Price cards are
-    not touched (an edited number is invisible in the trail; WORKFLOW 6.4).
+    finds the first one's journal and does nothing more. Cards are binary
+    (WORKFLOW 6.4, 6 September 2026), so an approval means the card as filed,
+    the price card included.
     """
     import inbox_watcher  # local import: inbox_watcher imports this module
 
@@ -162,7 +161,10 @@ def handle_approved_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
         kind, estimate_id, message_id, brief_id = entry["kind"], entry["estimate_id"], entry["message_id"], entry["brief_id"]
         argv: list[str] | None = None
         try:
-            if kind == "rendering":
+            if kind == "price":
+                argv = ["send-approved-estimate-brief", "--workspace", str(workspace), "--estimate-id", estimate_id,
+                        "--brief-id", brief_id]
+            elif kind == "rendering":
                 argv = ["send-approved-rendering", "--workspace", str(workspace), "--estimate-id", estimate_id,
                         "--message-id", message_id, "--brief-id", brief_id]
             elif kind == "appointment":
@@ -193,6 +195,111 @@ def handle_approved_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
         except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
             handled.append({"brief_id": brief_id, "kind": kind, "error": str(exc)[:160]})
     return handled
+
+
+def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runner: Any) -> dict[str, Any]:
+    """The owner rejected a price card: ask, in words, what price to file (WORKFLOW.md 6.4).
+
+    A card is approve or reject; the price the owner wants comes back as an
+    answer and becomes a fresh card. Each rejection asks once more, so the
+    question is numbered by round.
+    """
+    root = owner_questions.questions_root(p["monitor_root"])
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    if record.get("status") != "pending_approval":
+        return {"outcome": "nothing_to_ask", "record_status": record.get("status")}
+    customer = kolo_safe._sender_display(record["route"]["recipient"])
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their piece"
+    price = float(record.get("proposed_price") or 0)
+    answered = [q for q in owner_questions.list_questions(root)
+                if q["kind"] == "price_next" and q["estimate_id"] == estimate_id and q["status"] != "open"]
+    round_no = len(answered) + 1
+    qid_message = message_id if round_no == 1 else f"{message_id}#round{round_no}"
+    text = (
+        f"You passed on the price for {customer} ({piece}): ${price:,.2f}; nothing was sent. "
+        "Reply with the price you want and I will file a fresh card at it (same cost sheet, new margin shown), "
+        "or \"handle myself\" and I will leave the thread to you."
+    )
+    created, question = owner_questions.create_decision(
+        root, "price_next", estimate_id, qid_message, text,
+        {"rejected_price": price, "source_message_id": message_id, "round": round_no},
+    )
+    question = _attach_answer_command(root, p["monitor_root"], question)
+    if created:
+        owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
+    return {"outcome": "asked", "question_id": question["question_id"], "created": created}
+
+
+def _refile_price_card(p: dict[str, Path], estimate_id: str, message_id: str, round_no: int,
+                       runner: Any, args: argparse.Namespace) -> dict[str, Any]:
+    """File a fresh price card from the record's bound state (the owner's price already on it)."""
+    profile = read_object(p["shop_profile"])
+    state = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], message_id))
+    for key, action in (state.get("external_actions") or {}).items():
+        if key.startswith(f"approved_estimate:{estimate_id}:") and isinstance(action, dict) \
+                and action.get("status") in {"sent", "pending", "uncertain"}:
+            raise ValueError("an estimate send is journaled for this thread; run the doctor before filing a new price")
+    current = estimate_record.prepare_approval_state(p["record_root"], estimate_id, message_id, {"estimate_id": estimate_id}, profile)
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    approval = approval_guard.build_request(current)
+    approval["execute"] = execute_line(p["monitor_root"], "send-approved-estimate-brief", estimate_id=estimate_id, brief_id="<Brief ID>")
+    approval["owner_price"] = record.get("owner_price")
+    estimate_record.validate_approval_request(p["record_root"], estimate_id, message_id, approval)
+    work_dir = estimate_work_dir(p["monitor_root"], estimate_id, message_id)
+    work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Everything drafted or journaled at the old price is stale: the executor
+    # must never reuse the old email or the old payload.
+    for name in ("customer-reply.txt", "approved.json", "gmail-send.json", "current-record.json"):
+        (work_dir / name).unlink(missing_ok=True)
+    approval_path = work_dir / f"approval-request-r{round_no}.json"
+    write_private(approval_path, approval)
+    approver = activation_binding.load(activation_binding.binding_path(p["monitor_root"]))
+    kolo_safe.request_approval_claimed(
+        p["claim_root"], message_id, None, f"approval_request:{estimate_id}:{message_id}:r{round_no}",
+        estimate_id, approval_path, approver["session_key"], runner=runner, allow_processed=True,
+    )
+    record = estimate_record.record_approval_requested(p["record_root"], estimate_id, message_id, approval)
+    title = kolo_safe.approval_title(approval, estimate_id)
+    _register_brief(p["monitor_root"], "price", title, estimate_id, message_id, runner)
+    try:
+        paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+        facts, fixed = estimate_email_facts(record, profile)
+        _prepare_email({"monitor_root": p["monitor_root"], "shop_profile": p["shop_profile"]}, record, message_id, "estimate",
+                       facts, fixed, work_dir / "customer-reply.txt", _digest_from_work(paths, message_id, profile),
+                       getattr(args, "judge_runner", subprocess.run))
+    except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
+        pass
+    mirror_record(record, work_dir / "current-record.json")
+    return {"outcome": "price_card_filed", "price": record["proposed_price"], "title": title[:120],
+            "margin": (record.get("owner_price") or {}).get("margin")}
+
+
+def _answer_price_next(args: argparse.Namespace, p: dict[str, Path], root: Path,
+                       question: dict[str, Any], outcome: str) -> dict[str, Any]:
+    """Apply the owner's answer after a rejected price card: a price, or the thread is theirs."""
+    runner = getattr(args, "runner", subprocess.run)
+    estimate_id = question["estimate_id"]
+    context = question.get("context") or {}
+    message_id = context.get("source_message_id") or question["gmail_message_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "price_next", "decision": outcome}
+    if outcome == "handle_myself":
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        if record.get("status") == "pending_approval":
+            estimate_record.retire(p["record_root"], estimate_id, "owner_handles_thread",
+                                   f"owner took the thread after passing on ${float(context.get('rejected_price') or 0):,.2f}")
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        result["note"] = "the desk leaves this thread to the owner; the estimate is dormant"
+        return result
+    price = owner_questions.parse_owner_price(args.answer)
+    if price is None:
+        raise ValueError("could not read a price from that reply; give a dollar figure, for example 2,300")
+    estimate_record.record_owner_price(p["record_root"], estimate_id, price, question["question_id"], read_object(p["shop_profile"]))
+    filed = _refile_price_card(p, estimate_id, message_id, int(context.get("round") or 1) + 0, runner, args)
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    result.update(filed)
+    return result
 
 
 def _attach_answer_command(root: Path, monitor_root: Path, question: dict[str, Any]) -> dict[str, Any]:
@@ -1706,6 +1813,8 @@ def answer_decision(
         return result
     if question["kind"] == "appointment_next":
         return _answer_appointment_next(args, workspace, p, root, question, outcome)
+    if question["kind"] == "price_next":
+        return _answer_price_next(args, p, root, question, outcome)
     if question["kind"] == "command_failed":
         return _answer_command_failed(args, p, root, question, outcome)
     if question["kind"] == "stuck_claim":
@@ -2574,7 +2683,7 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(f"estimate is {record.get('status')}, not pending_approval")
     price = float(getattr(args, "approved_price", None) or record["proposed_price"])
     if abs(price - float(record["proposed_price"])) > 0.005:
-        raise ValueError("an edited price needs a fresh brief; reject this one and ask the desk to re-price")
+        raise ValueError("only the card's price can be sent; reject the card and answer the desk's question with the price")
     approved = {
         "approval_status": "approved",
         "estimate_id": args.estimate_id,

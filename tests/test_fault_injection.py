@@ -131,9 +131,9 @@ class Harness(GoldenPathTests):
                 and any(c["kind"] == "price_approval" or "send-approved-estimate-brief" in c["payload"].get("execute", "") for c in world.cards),
             ),
             Action(
-                "approve the price -> estimate sent",
-                lambda ws, world: None,
-                lambda ws, world: self.raw_execute(ws, world, card_of(world, world.cards[-1]["kind"])),
+                "approve the price from the phone -> the tick sends the estimate",
+                lambda ws, world: world.approve(world.cards[-1]),
+                tick,
                 lambda ws, world: self.record(ws, self.only_estimate(ws))["status"] == "estimate_sent" and len(world.sent) == 2,
             ),
             Action(
@@ -147,9 +147,9 @@ class Harness(GoldenPathTests):
                 and self.claim(ws, "m3")["status"] == "awaiting_owner",
             ),
             Action(
-                "approve the renderings -> sent",
-                lambda ws, world: None,
-                lambda ws, world: self.raw_execute(ws, world, card_of(world, "send_rendering")),
+                "approve the renderings from the phone -> the tick sends them",
+                lambda ws, world: world.approve(card_of(world, "send_rendering")),
+                tick,
                 lambda ws, world: len(world.sent) == 3 and len(world.sent[2]["attachments"]) == 2
                 and self.claim(ws, "m3")["status"] == "processed",
             ),
@@ -165,9 +165,9 @@ class Harness(GoldenPathTests):
                 and self.claim(ws, "m4")["status"] == "processed",
             ),
             Action(
-                "approve the booking -> booked and confirmed",
-                lambda ws, world: None,
-                lambda ws, world: self.raw_execute(ws, world, card_of(world, "appointment_booking")),
+                "approve the booking from the phone -> the tick books and confirms",
+                lambda ws, world: world.approve(card_of(world, "appointment_booking")),
+                tick,
                 lambda ws, world: len(world.calendar_events) == 1
                 and self.record(ws, self.only_estimate(ws))["status"] == "appointment_booked" and len(world.sent) == 4,
             ),

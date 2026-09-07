@@ -37,7 +37,7 @@ version come from the SKILL.md frontmatter (`name:` and `version:`).
   `jewelry-estimate-desk`, version 2.0.0, from 23 August. The main session
   ran scripts from that stale copy once by mistake. Publish the new build
   over that slug, or delete the old listing, so no instance can pick it up.
-- Frontmatter version is `4.10.3` on master (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
+- Frontmatter version is `4.11.0` on master (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
 - `tests/`, `ARCHITECTURE.md`, `WORKFLOW.md`, `KOLO-SKILL-PLAYBOOK.md`,
   `HANDOFF.md`, and `TESTING-CHANGE-REPORT.md` are not needed on an
   instance; shipping them is harmless.
@@ -74,7 +74,6 @@ otherwise.
 
 - A known customer writing on a new thread: "same" hands the thread to the
   owner instead of continuing the estimate.
-- An edited price on a brief is rejected with a re-price note, not applied.
-- The brief registry marks rejections; approved briefs stay "pending" in
-  `estimate-desk/briefs/` (harmless, untidy).
-- Rejected price briefs get a notice only; no follow-up question yet.
+- Cards are binary (6 September 2026): the desk executes every approval
+  from the audit trail, price cards included; a rejected price card asks
+  the owner for the price and files a fresh card at it (`price_next`).

@@ -174,12 +174,25 @@ def approval_details(details: dict[str, Any], estimate_id: str) -> dict[str, str
         "Piece": _piece_words(details.get("specification"))[:160],
         "Proposed price": _money(price) if isinstance(price, (int, float)) and not isinstance(price, bool) else "unknown",
         "Approve means": "Send this price to the customer in their email thread.",
-        "Reject means": "Nothing is sent; the desk steps back from this thread.",
+        "Reject means": "Nothing is sent; I ask you what price to file, or say \"handle myself\".",
         "Estimate": estimate_id,
     }
     hard = review.get("hard_cost_total")
     if isinstance(hard, (int, float)) and not isinstance(hard, bool):
         rows["Hard cost (owner only)"] = _money(hard)
+    owner_price = details.get("owner_price") if isinstance(details.get("owner_price"), dict) else None
+    if owner_price:
+        # A fresh card at the price the owner named after rejecting the desk's.
+        desk_price = owner_price.get("desk_price")
+        rows["Owner-set price"] = _money(owner_price.get("price")) + (
+            f" (the desk priced {_money(desk_price)})" if isinstance(desk_price, (int, float)) else ""
+        )
+        margin, expected = owner_price.get("margin"), owner_price.get("expected_margin")
+        if isinstance(margin, (int, float)):
+            text = f"{margin * 100:.0f}%"
+            if isinstance(expected, (int, float)) and margin + 0.005 < expected:
+                text += f", below the shop's {expected * 100:.0f}%"
+            rows["Margin"] = text
     return rows
 
 
@@ -747,10 +760,11 @@ def request_approval_claimed(
     session_key: str,
     agent_id: str = "main",
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    allow_processed: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Create one approval request with durable ambiguity tracking."""
     if claim_token is None:
-        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
+        claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id, allow_processed=allow_processed)
     command = build_request_approval(estimate_id, details, session_key, agent_id)
     binding_material = json.dumps(
         {
@@ -771,6 +785,7 @@ def request_approval_claimed(
         action_key,
         "approval_request",
         binding,
+        allow_processed=allow_processed,
     )
     if not acquired:
         status = state["external_actions"][action_key]["status"]
@@ -781,6 +796,7 @@ def request_approval_claimed(
                 return subprocess.CompletedProcess(command, 0, "approval approval already sent\n", "")
             acquired, state = inbox_claim.acquire_external_action(
                 claim_root, message_id, claim_token, action_key, "approval_request", binding,
+                allow_processed=allow_processed,
             )
         if not acquired:
             raise ValueError(f"approval approval is already {status}; refusing retry")

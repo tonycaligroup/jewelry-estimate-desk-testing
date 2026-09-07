@@ -185,6 +185,17 @@ renderings, a booking, an offer of times. A' therefore lands in two tiers:
 shape: a one-shot command job, isolated session, no announce, a longer
 budget (900 seconds), deleted after its run.
 
+## 5c. Closed by the owner's rule, 6 September 2026
+
+Cards are binary: approve or reject, nothing else (WORKFLOW.md 6.4, roles,
+6.10). `kolo --help` on the pod lists no command that reads a brief back
+(only `request-approval`, `update-brief`, and `audit-query` touch briefs),
+so an edit could never have been verified anyway. Tier 2 therefore folds
+into tier 1 without an experiment: the desk executes price approvals from
+the trail like every other card, the session runs nothing on an approval,
+and an owner who wants another number rejects the card and answers the
+desk's question with the price; a fresh binary card follows (4.11.0).
+
 ## 5b. Built
 
 4.10.0, 6 September 2026: A' tier 1, C', D, and F1, on the full suite and

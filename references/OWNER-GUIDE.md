@@ -32,7 +32,11 @@ consultation on the books while the customer is still excited.
 Three things always come to you as a card to approve or reject: a price,
 a set of renderings, and a meeting time. Approve and I act; reject and I
 ask you here what you want instead. Nothing is sent or booked on a card
-you have not approved.
+you have not approved. A card is approve or reject, nothing else: do not
+use Kolo's "Edit Intent" on a card, because I send exactly what the card
+says. To change a price, reject the card and answer my question with the
+price you want; a fresh card comes back at that price with the same cost
+sheet and the new margin shown, and nothing goes out until you approve it.
 
 One thing I do on my own: when someone writes "I want a custom ring"
 without saying what metal, what size, or what stone, I email them those

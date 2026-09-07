@@ -254,7 +254,7 @@ class InstructionCoherenceTests(unittest.TestCase):
     def test_main_session_has_explicit_appointment_approval_handoff(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         # Batch 3: the session runs the execute line the payload carries.
-        self.assertIn("Approved briefs: run the payload's `execute` line", skill)
+        self.assertIn("Approved briefs: the desk runs them; you do nothing", skill)
         self.assertIn("book-approved-appointment", skill)
         self.assertIn("send-approved-estimate-brief", skill)
         self.assertIn("Owner questions: the `desk-answer` tag", skill)
@@ -7441,7 +7441,7 @@ class OneCommandExecutorTests(unittest.TestCase):
             self.assertNotIn("*", captured["body"])
             self.assertEqual(captured["approved"]["owner_approved_price"], 2186.3)
             self.assertEqual(captured["approved"]["binding_hash"], record["approval_binding_hash"])
-            with self.assertRaisesRegex(ValueError, "fresh brief"):
+            with self.assertRaisesRegex(ValueError, "only the card.s price"):
                 workflow_safe.send_approved_estimate_brief(argparse.Namespace(
                     workspace=ws, estimate_id=record["estimate_id"], brief_id=None, approved_price=1999.0, runner=runner,
                 ))

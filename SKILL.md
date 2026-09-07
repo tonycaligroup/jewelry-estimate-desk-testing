@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.10.3
+version: 4.11.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -532,8 +532,8 @@ customer-visible price is the bound proposed price; cost, rates, hours, and
 assumptions never leave the owner's card.
 
 Rejections need nothing from the session: the watcher reads them from the
-audit trail. An edited price is not applied: reject the card and the desk
-re-prices on the owner's word. Nothing here is run by hand; the session
+audit trail. There is no edit: an owner who wants another number rejects
+the card, and the desk asks what price to file. Nothing here is run by hand; the session
 never authors a cost sheet, never runs the pricing helpers, and never
 files a card itself.
 
@@ -646,22 +646,20 @@ treat the reply as anything else. Never ask the owner a question of your
 own while a desk question is open, and never read their reply to the desk
 as consent for something you proposed.
 
-### Approved briefs: run the payload's `execute` line
+### Approved briefs: the desk runs them; you do nothing
 
-Every approval the desk files (price, renderings, appointment, manual
-review) carries an `execute` field in its execution payload. For a
-rendering card or an appointment card (booking or offer), do nothing when
-Kolo delivers the approval: the watcher reads approvals from the audit
-trail and runs that line itself within a tick; if you run it anyway it
-finds the first run's journal and does nothing more (its output says
-`already_sent`, `already_booked`, or `already_offered`). Never run
-`kolo update-brief` yourself: the line reports the brief, and Kolo refuses a
-second report on the same brief. For a price card,
-copy that line, replace `<Brief ID>` with the Brief ID from the delivered
-decision, run it, and paste its output. That
-one command re-verifies the bound state, sends or books through the desk's
-own helpers, records the receipt, and reports the brief executed. A repeat is
-a no-op. Rejections need no command from this session: Kolo does not
+Every card is approve or reject, nothing else (WORKFLOW.md 6.4). Every
+approval the desk files (price, renderings, appointment) carries an
+`execute` field in its execution payload, and the watcher reads approvals
+from the audit trail and runs that line itself within a tick. When Kolo
+delivers an approval to you, do nothing: run no line, and tell the owner
+nothing, since the desk reports the outcome on the card. If you run the
+line anyway it finds the first run's journal and does nothing more (its
+output says `already_sent`, `already_booked`, or `already_offered`). Never
+run `kolo update-brief` yourself: the line reports the brief, and Kolo
+refuses a second report on the same brief. The one card you still run is a
+manual review (`resolve-review-approval`), which the watcher does not
+execute. Rejections need no command from this session: Kolo does not
 deliver them here, and the watcher reads them from the audit trail every
 tick, then asks the owner what to do (appointment cards), holds the
 renderings back, or notes the passed price. If Kolo ever does deliver a
@@ -692,15 +690,16 @@ python3 {baseDir}/scripts/workflow_safe.py resolve-review-approval \
 
 Appointment cards come in two kinds: a booking card names one time and
 approve books it; an offer card lists two or three times and approve emails
-them to the customer, nothing booked. An edited price is not applied by the
-session: reject the brief and tell the owner the desk will re-price.
+them to the customer, nothing booked. A card is never edited; a different
+price means reject, then answer the desk's question with the price.
 
 ### Owner questions: the `desk-answer` tag
 
 The desk asks the owner questions in plain words and parks the claim: which
 rate to use, whether a new thread from a known customer is the same piece or
 a new one, what an unclear reply meant, what to do after a rejected
-appointment card, what to do when a customer asks to meet but the
+appointment card, what price to file after a rejected price card (a dollar
+figure, or "handle myself"), what to do when a customer asks to meet but the
 calendar offers no free time (or could not be read), and what to do when a
 customer was asked for details once and replied without giving them, and
 what to do when a card's command failed part way (reply "retry", "release"

@@ -190,6 +190,11 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   **Brief ID:** <uuid> ... **Execution Payload:** ```json {...}``` ... report
   the result using `kolo update-brief`". The skill's SKILL.md must tell that
   session exactly one command to run per payload kind. **verified**
+- `kolo --help` (6 Sep 2026): no command reads a brief back; the brief
+  surface is `request-approval`, `update-brief`, and `audit-query`. A skill
+  cannot verify an edited payload from the trail, so treat cards as binary
+  and route a changed number through a question and a fresh brief.
+  **verified 6 Sep**
 - Edit Intent replaces the execution payload with the owner's edited JSON and
   the brief comes back as a new pending brief; the session receives the
   revised payload. Validate a revised payload deterministically; never

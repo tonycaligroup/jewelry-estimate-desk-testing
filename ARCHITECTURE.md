@@ -381,6 +381,25 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.11.0 (built 6 September 2026): cards are binary; the desk executes every approval.**
+The owner's rule, written into WORKFLOW.md first: a card is approve or
+reject, never edited. `brief_registry.approved_since_last_poll` now
+returns price approvals too and the tick runs
+`send-approved-estimate-brief` for them; the session runs nothing on any
+approval (its instructions say so, and a test pins the heading). A
+rejected price card becomes a `price_next` question ("reply with the
+price, or handle myself"); the answer goes through
+`estimate_record.record_owner_price` (same cost sheet, new customer
+price, new binding, the rejected request's binding listed in
+`rejected_approval_bindings` because `approval_requests` is append-only)
+and `workflow_safe._refile_price_card` (a fresh claimed request under the
+processed claim with a round-numbered action key, the stale draft and
+payload removed, the card carrying "Owner-set price" and "Margin" rows
+with a below-the-shop's-markup warning). "Handle myself" retires the
+record (`owner_handles_thread`). The fault harness drives all three
+approvals through the trail now (93 combinations, every one ok or
+recovered).
+
 **4.10.3 (built 6 September 2026): a meeting request always gets a card when the calendar has room.**
 Live, "next Tuesday at 2pm" asked on a Sunday resolved to a day past the
 7-day offer window; the free/busy query stopped short of it, every

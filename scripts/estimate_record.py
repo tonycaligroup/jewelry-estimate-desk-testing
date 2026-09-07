@@ -1364,14 +1364,18 @@ def validate_approval_request(
                 if isinstance(item, dict)
                 and item.get("source_message_id_sha256")
                 == evidence["source_message_id_sha256"]
+                and item.get("binding_hash") not in rejected_bindings(record)
             ),
             None,
         )
+        owner_price = record.get("owner_price") if isinstance(record.get("owner_price"), dict) else None
         if matching is not None:
-            comparable = dict(matching)
-            comparable.pop("requested_at", None)
+            comparable = {k: v for k, v in matching.items() if k not in {"requested_at", "owner_set"}}
             if comparable != evidence:
                 raise ValueError("conflicting approval request for source message")
+        elif record.get("status") == "pending_approval" and owner_price and \
+                abs(float(owner_price.get("price", -1)) - float(evidence["proposed_price"])) <= 0.005:
+            pass  # the fresh card at the owner's price
         elif record.get("status") != "awaiting_specs":
             raise ValueError("approval evidence requires awaiting_specs status")
         return approval_request
@@ -1384,7 +1388,82 @@ RETIREMENT_REASONS = {
     "customer_withdrew",
     "test_artifact",
     "not_an_inquiry",
+    "owner_handles_thread",
 }
+
+
+def rejected_bindings(record: dict[str, Any]) -> set[str]:
+    """Binding hashes of price cards the owner rejected before naming a price."""
+    value = record.get("rejected_approval_bindings")
+    return {v for v in value if isinstance(v, str)} if isinstance(value, list) else set()
+
+
+def record_owner_price(
+    root: Path, estimate_id: str, price: Any, question_id: str, shop_profile: dict[str, Any] | None
+) -> dict[str, Any]:
+    """The owner rejected the price card and named the price to file (WORKFLOW.md 6.4).
+
+    The cost sheet stays as priced; the customer price, the profit, and the
+    binding change. The rejected request becomes history, the price carries
+    its provenance, and the record stays pending_approval for the fresh card.
+    """
+    if isinstance(price, bool) or not isinstance(price, (int, float)) or not 1 <= float(price) <= 10_000_000:
+        raise ValueError("the owner's price must be a number between 1 and 10,000,000")
+    price = round(float(price), 2)
+    if not isinstance(question_id, str) or not question_id:
+        raise ValueError("question_id is required")
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") != "pending_approval":
+            raise ValueError(f"estimate is {record.get('status')}, not pending_approval; no price to re-file")
+        sheet = record.get("internal_cost_sheet")
+        if not isinstance(sheet, dict):
+            raise ValueError("record has no cost sheet to re-file from")
+        hard = float(sheet["hard_cost_total"])
+        if price <= hard:
+            raise ValueError(f"the price must be above the hard cost of ${hard:,.2f}")
+        previous = float(record["proposed_price"])
+        expected = None
+        if isinstance(shop_profile, dict):
+            try:
+                expected = pricing_model.quote_price(hard, shop_profile.get("pricing"))
+            except (TypeError, ValueError):
+                expected = None
+        sheet = dict(sheet)
+        sheet["customer_price"] = price
+        state = {
+            "estimate_id": record["estimate_id"],
+            "route": record["route"],
+            "specification": record.get("specification"),
+            "proposed_price": price,
+            "internal_cost_sheet": sheet,
+        }
+        binding = approval_guard.binding_hash(state)
+        # The rejected request stays untouched (approval_requests is append-only);
+        # its binding is listed as rejected so every reader passes over it.
+        rejected = record.setdefault("rejected_approval_bindings", [])
+        if not isinstance(rejected, list):
+            raise ValueError("rejected_approval_bindings must be an array")
+        old_binding = record.get("approval_binding_hash")
+        if isinstance(old_binding, str) and old_binding not in rejected:
+            rejected.append(old_binding)
+        record["owner_price"] = {
+            "price": price,
+            "previous_price": previous,
+            "desk_price": expected,
+            "hard_cost_total": hard,
+            "margin": round((price - hard) / price, 4),
+            "expected_margin": round((expected - hard) / expected, 4) if expected else None,
+            "question_id": question_id,
+            "set_at": datetime.now(timezone.utc).isoformat(),
+        }
+        record["proposed_price"] = price
+        record["internal_cost_sheet"] = sheet
+        record["approval_binding_hash"] = binding
+        write_object(path, record)
+        return record
 
 
 def retire(
@@ -1458,14 +1537,21 @@ def record_approval_requested(
             if (
                 existing.get("source_message_id_sha256")
                 != evidence["source_message_id_sha256"]
+                or existing.get("binding_hash") in rejected_bindings(record)
             ):
                 continue
-            comparable = dict(existing)
-            comparable.pop("requested_at", None)
+            comparable = {k: v for k, v in existing.items() if k not in {"requested_at", "owner_set"}}
             if comparable == evidence:
                 return record
             raise ValueError("conflicting approval request for source message")
-        if record["status"] != "awaiting_specs":
+        owner_price = record.get("owner_price") if isinstance(record.get("owner_price"), dict) else None
+        if record["status"] == "pending_approval" and owner_price and \
+                abs(float(owner_price.get("price", -1)) - float(evidence["proposed_price"])) <= 0.005 and \
+                evidence["binding_hash"] == record.get("approval_binding_hash"):
+            # A fresh card at the price the owner named (WORKFLOW.md 6.4): the
+            # rejected request stays as history, this one is the live one.
+            evidence["owner_set"] = True
+        elif record["status"] != "awaiting_specs":
             raise ValueError("approval evidence requires awaiting_specs status")
         evidence["requested_at"] = datetime.now(timezone.utc).isoformat()
         requests.append(evidence)

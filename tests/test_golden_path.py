@@ -680,9 +680,11 @@ class GoldenPathTests(unittest.TestCase):
         registry = ws / "estimate-desk" / "briefs" / f"{price_card['brief_id']}.json"
         self.assertTrue(registry.exists(), "the brief id is on file for the rejection poll")
 
-        # 4. Approval: the one execute line sends the estimate.
-        result = self.execute(ws, world, price_card["payload"]["execute"], price_card)
-        self.assertEqual(result["outcome"], "estimate_sent", result)
+        # 4. Approval from the phone: the next tick sends the estimate; the session runs nothing.
+        world.approve(price_card)
+        summary = self.tick(ws, world)
+        self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+        self.assertEqual(summary["approvals"][0]["result"]["outcome"], "estimate_sent", summary)
         self.assertEqual(len(world.sent), 2)
         estimate_mail = world.sent[1]
         self.assertIn(f"${price:,.2f}", estimate_mail["body"])
@@ -1022,10 +1024,68 @@ class SideBranchTests(GoldenPathTests):
             notes = [n for n in world.notices if not n["file"]]
             self.assertEqual(len(notes), 1, notes)
             self.assertRegex(notes[0]["text"], r"(?i)passed on the price")
+            self.assertIn("desk-answer", notes[0]["text"], "a question, answered in words (WORKFLOW 6.10)")
             self.assertEqual(world.sent, [])
-            self.assertEqual(self.record(ws, self.only_estimate(ws))["status"], "pending_approval")
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "pending_approval")
             self.tick(ws, world)
             self.assertEqual(len([n for n in world.notices if not n["file"]]), 1, "said once")
+            # The owner names a price: a fresh binary card at that price, same cost sheet, new margin.
+            answered = self.answer(ws, "file it at $2,000")
+            self.assertEqual(answered["outcome"], "price_card_filed", answered)
+            fresh = world.cards[-1]
+            self.assertNotEqual(fresh["brief_id"], card["brief_id"])
+            self.assertIn("quote $2,000.00", fresh["title"])
+            self.assertIn("cost $1,252.50", fresh["title"])
+            self.assertEqual(fresh["details"]["Owner-set price"], "$2,000.00 (the desk priced $2,505.00)")
+            self.assertRegex(fresh["details"]["Margin"], r"^37%, below the shop's 50%$")
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["status"], "pending_approval")
+            self.assertEqual(record["proposed_price"], 2000.0)
+            self.assertEqual(record["internal_cost_sheet"]["customer_price"], 2000.0)
+            self.assertEqual(record["owner_price"]["previous_price"], 2505.0)
+            self.assertEqual(len(record["approval_requests"]), 2, "the rejected request stays as history")
+            self.assertEqual(world.sent, [], "nothing sent without the fresh card's approval")
+            # Approved from the phone: the tick sends the new price, once, and the old draft is gone.
+            world.approve(fresh)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
+            self.assertEqual(len(world.sent), 1)
+            self.assertIn("$2,000.00", world.sent[-1]["body"])
+            self.assertNotIn("2,505", world.sent[-1]["body"])
+            self.assertEqual(self.record(ws, estimate_id)["status"], "estimate_sent")
+            self.assertEqual(self.execute(ws, world, fresh["payload"]["execute"], fresh)["outcome"], "already_sent")
+            self.assertEqual(len(world.sent), 1)
+        self.run_branch(branch)
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_diamond_melee"] = 600.0
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+            world.spec = {
+                "piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                "setting_style": "bead set", "accent_stones": "small lab-grown diamonds",
+                "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS",
+            }
+            world.customer_message("r2", "thread-reject-2", "Quote please.\n\nPat")
+            self.tick(ws, world)
+            world.reject(world.cards[-1], "too high")
+            self.tick(ws, world)
+            self.assertEqual(self.answer(ws, "2300")["outcome"], "price_card_filed")
+            fresh = world.cards[-1]
+            self.assertIn("quote $2,300.00", fresh["title"])
+            world.reject(fresh, "still too high")
+            summary = self.tick(ws, world)
+            self.assertEqual([r.get("kind") for r in summary["rejections"]], ["price"], summary)
+            asked = [n for n in world.notices if not n["file"]]
+            self.assertEqual(len(asked), 2, "asked once per rejection")
+            self.assertIn("$2,300.00", asked[-1]["text"])
+            self.assertEqual(self.answer(ws, "I will handle it myself")["decision"], "handle_myself")
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "dormant")
+            self.assertEqual(world.sent, [])
+            self.assertEqual(self.tick(ws, world)["rejections"], [])
         self.run_branch(branch)
 
 
@@ -1084,6 +1144,9 @@ class WindowGateTests(SideBranchTests):
         pass
 
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
 
     def _sunday(self) -> datetime:
@@ -1181,6 +1244,9 @@ class OwnStoneAndStallTests(SideBranchTests):
         pass
 
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
 
     def _pendant(self, ws: Path, world: World) -> str:
@@ -1307,6 +1373,9 @@ class MeetingFirstTests(SideBranchTests):
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
         pass
 
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
+        pass
+
     def test_meeting_before_the_estimate_then_details_then_price(self) -> None:
         def branch(ws: Path, world: World) -> None:
             thread = "thread-propose"
@@ -1395,6 +1464,9 @@ class CombinedIntentTests(SideBranchTests):
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
         pass
 
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
+        pass
+
     def _both_cards(self, ws: Path, world: World) -> tuple[dict, dict, datetime]:
         thread, _estimate_id = self._estimate_sent(ws, world)
         wanted = next_weekday(2, 15, 0)
@@ -1471,6 +1543,9 @@ class FailureQuestionTests(SideBranchTests):
         pass
 
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
 
     def _booking_card(self, ws: Path, world: World) -> dict:
@@ -1584,6 +1659,9 @@ class StuckClaimTests(SideBranchTests):
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
         pass
 
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
+        pass
+
     def _raw_tick(self, ws: Path, world: World) -> dict:
         return inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t", judge_runner=world.run)
 
@@ -1679,6 +1757,9 @@ class DoctorTests(SideBranchTests):
         pass
 
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
 
     def _doctor(self, ws: Path) -> list[dict]:
@@ -1865,6 +1946,9 @@ class PartialAnswerTests(SideBranchTests):
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
         pass
 
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
+        pass
+
     def test_progress_earns_a_second_ask_and_the_price_fields_come_first(self) -> None:
         def branch(ws: Path, world: World) -> None:
             import pipeline
@@ -1980,6 +2064,9 @@ class TwoPieceTests(SideBranchTests):
         pass
 
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
 
     def _profile_with_rates(self, ws: Path) -> None:
@@ -2111,6 +2198,9 @@ class DeskExecutesApprovalsTests(SideBranchTests):
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
         pass
 
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
+        pass
+
     def test_an_approved_booking_is_booked_by_the_next_tick_and_the_line_is_then_a_no_op(self) -> None:
         def branch(ws: Path, world: World) -> None:
             thread, estimate_id = self._estimate_sent(ws, world)
@@ -2198,7 +2288,7 @@ class DeskExecutesApprovalsTests(SideBranchTests):
             self.assertEqual(self.tick(ws, world)["approvals"], [], "an approval is acted on once")
         self.run_branch(branch)
 
-    def test_a_price_card_approval_is_left_to_the_session(self) -> None:
+    def test_a_price_card_approval_is_sent_by_the_next_tick(self) -> None:
         def branch(ws: Path, world: World) -> None:
             profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
             profile["pricing"]["stones_per_carat"]["lab_grown_diamond_melee"] = 600.0
@@ -2209,10 +2299,13 @@ class DeskExecutesApprovalsTests(SideBranchTests):
             world.customer_message("p1", "thread-price", "Quote please.\n\nPat")
             self.tick(ws, world)
             card = world.cards[-1]
+            self.assertIn("send-approved-estimate-brief", card["payload"]["execute"])
             world.approve(card)
             summary = self.tick(ws, world)
-            self.assertEqual(summary["approvals"], [], "a price may have been edited; the session confirms it")
-            self.assertEqual(world.sent, [])
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], "a card is binary; the desk sends it")
+            self.assertEqual(len(world.sent), 1)
+            self.assertEqual(self.execute(ws, world, card["payload"]["execute"], card)["outcome"], "already_sent")
+            self.assertEqual(len(world.sent), 1)
         self.run_branch(branch)
 
 
@@ -2244,6 +2337,9 @@ class SameSenderTests(SideBranchTests):
         pass
 
     def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
 
     def test_new_thread_from_a_known_customer_is_asked_and_new_is_quoted_inline(self) -> None:

@@ -27,8 +27,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 SCHEMA_VERSION = 1
-QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim"}
-DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim"}
+QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed",
+                  "stuck_claim", "price_next"}
+DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim",
+                  "price_next"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -61,7 +63,25 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "offer_other_times": ("other times", "different times", "new times", "pick again", "something else", "other options"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },
+    "price_next": {
+        "price_given": ("file at", "file it at", "quote", "price it at", "make it", "go with", "send it at", "at"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
+    },
 }
+
+PRICE_RE = re.compile(r"\$?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?\s*(k)?\b", re.IGNORECASE)
+
+
+def parse_owner_price(answer: str) -> float | None:
+    """The one dollar figure in the owner's words ("2,300", "$2300.50", "2.3k"), or None."""
+    match = PRICE_RE.search(answer or "")
+    if not match:
+        return None
+    whole, cents, thousands = match.group(1).replace(",", ""), match.group(2), match.group(3)
+    value = float(whole + ("." + cents if cents else ""))
+    if thousands:
+        value *= 1000
+    return round(value, 2)
 RATE_KINDS = {"metal_per_gram": "per gram", "stones_per_carat": "per carat"}
 REMINDER_AFTER_SECONDS = 24 * 60 * 60
 DELIVERY_STATUSES = {"pending", "sent", "uncertain"}
@@ -345,6 +365,9 @@ def match_option(question: dict[str, Any], answer: str) -> str:
     if not hits and question.get("kind") == "appointment_next" and _mentions_a_time(words):
         # The owner typed times: "Tuesday 2pm or Wednesday at 11".
         return "times_given"
+    if question.get("kind") == "price_next" and "handle_myself" not in hits and parse_owner_price(answer) is not None:
+        # The owner typed a price: "$2,300" or "file it at 2300".
+        return "price_given"
     if not hits:
         raise ValueError(
             "could not tell which answer was meant; reply with one of: "

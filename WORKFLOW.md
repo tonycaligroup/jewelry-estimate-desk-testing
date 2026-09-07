@@ -37,7 +37,7 @@ something.
 |---|---|---|
 | Customer | Their original channel. Today that is email to the shop's mailbox, and every reply stays in the customer's own thread. | Asks for a piece, answers questions, accepts or declines, asks for a picture or a meeting. |
 | The desk (assistant) | Works in the background. Writes to the customer only in the original thread, and only when the stage allows it. | Reads, extracts, prices, drafts, requests approval, sends approved messages, schedules. |
-| Owner / approver | Kolo: approval briefs for actions, plain-English questions in the channel chosen at setup for missing information, and the estimate records. The person who activated the desk is the approver. | Approves, edits, or rejects every price, rendering, and booking. Answers the desk's questions. Decides escalations. Sets the trust stage. |
+| Owner / approver | Kolo: approval briefs for actions, plain-English questions in the channel chosen at setup for missing information, and the estimate records. The person who activated the desk is the approver. | Approves or rejects every price, rendering, and booking. Answers the desk's questions. Decides escalations. Sets the trust stage. |
 | Calendar | The shop's Google Calendar. | The only source of truth for whether a meeting exists or a slot is free. |
 | Records | One private estimate record per inquiry, mirrored to Kolo for the owner. | Authoritative memory of the inquiry, its specification, price, evidence, and status. |
 
@@ -211,11 +211,14 @@ The owner receives one brief per estimate containing:
 - The estimate ID and a binding hash tying the brief to this exact route,
   specification, and price.
 
-The owner can **approve**, **edit the number**, or **reject**. A conversational
-"yes" in chat is not approval. If anything material changed between the brief
-and the send (recipient, thread, specification, price), the approval is stale
-and a fresh brief is required. The record is `pending_approval` until the
-owner acts.
+The owner can **approve** or **reject**; a card is binary, never edited. An
+owner who wants a different number rejects the card, and the desk asks in
+words what price to file; the answer becomes a fresh brief at that price
+with the same cost sheet and the new margin shown. A conversational "yes"
+in chat is not approval. If anything material changed between the brief
+and the send (recipient, thread, specification, price), the approval is
+stale and a fresh brief is required. The record is `pending_approval` until
+the owner acts.
 
 ### 6.5 The estimate goes to the customer
 
@@ -287,7 +290,7 @@ The desk has exactly two ways to put something in front of the owner.
 
 | It needs | It sends | The owner answers |
 |---|---|---|
-| Permission to act (send a price, send a rendering, book a meeting, any send) | An approval brief in the Kolo approval queue | Approve, edit, or reject |
+| Permission to act (send a price, send a rendering, book a meeting, any send) | An approval brief in the Kolo approval queue | Approve or reject, nothing else |
 | A fact only the owner has (a rate, what a customer meant, whether two threads are one piece) | A plain-English question in the channel chosen at setup | In plain words, in the same channel |
 
 A review list is not one of the ways. An owner should never have to go
@@ -428,6 +431,12 @@ in the implementation.
 
 Known gaps between this document and the current implementation, to be
 closed by follow-up changes:
+
+- Cards are binary (6 September 2026): approve or reject, the edit option
+  is withdrawn. Every approval is executed by the desk from the audit
+  trail, price cards included; the chat session runs nothing on an
+  approval. A rejected price is followed by the desk's question for the
+  price to file; the fresh brief at that price is the next change to build.
 
 - Renderings are approval-gated since 3 September 2026: the owner sees the
   views in chat and approves a card before anything is emailed.
