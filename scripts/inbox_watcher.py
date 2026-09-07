@@ -166,6 +166,9 @@ def _error_kind(exc: BaseException) -> str:
     return "deterministic"
 
 
+TICK_MARGIN_SECONDS = 30  # the view step plans to be done this long before the watcher's timeout
+
+
 def run_inline_claim(
     workspace: Path, base_dir: Path, p: dict[str, Path], message_id: str, owner_target: str, openclaw: str,
     runner: Runner, judge_runner: Runner, token: str | None, summary: dict[str, Any] | None = None,
@@ -205,8 +208,10 @@ def run_inline_claim(
             raise ValueError("a rendering is under way but its estimate is unknown")
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
         switch = pipeline.settings(workspace / "estimate-desk")
+        tick_started = summary.get("tick_started")
+        deadline = (tick_started + cron_config.WATCHER_TIMEOUT_SECONDS - TICK_MARGIN_SECONDS) if tick_started else None
         done = pipeline.render_step(p, message_id, estimate_id, record, paths, openclaw, runner,
-                                    model=switch.get("model"), judge_runner=judge_runner)
+                                    model=switch.get("model"), judge_runner=judge_runner, deadline=deadline)
         if done.get("outcome") == "rendering_in_progress":
             return _rendering_continues(p, message_id, claim_token, done, summary, started, calls_before)
         calls = judge.CALL_LOG[calls_before:]
@@ -340,6 +345,7 @@ def tick(
         "message": "NO_REPLY",
     }
     started = time.monotonic()
+    summary["tick_started"] = started
     judge.reset_stats()
     profile_result = validate_profile.validate_profile(
         validate_profile.load_profile(p["shop_profile"])

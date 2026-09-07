@@ -287,10 +287,13 @@ def _plan_rendering(
     return plan
 
 
+MAX_VIEW_STARTS = 3  # a view started this many times without finishing is not going to: the owner is asked
+
+
 def render_step(
     p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any],
     paths: dict[str, str], openclaw: str, command_runner: Runner,
-    model: str | None = None, judge_runner: Runner | None = None,
+    model: str | None = None, judge_runner: Runner | None = None, deadline: float | None = None,
 ) -> dict[str, Any]:
     """One tick's worth of rendering: plan on the first call, one view per call, the card when the last view is done.
 
@@ -327,8 +330,38 @@ def render_step(
         view = pending[0]
         piece_plan = next((pc.get("plan") for pc in progress["pieces"] if pc.get("label") == view.get("piece")), progress.get("plan") or {})
         refs = [Path(r) for r in progress.get("references") or []]
-        result = rendering.render_view(view, piece_plan or {}, refs, openclaw, artwork=art, vision_model=vision_model,
-                                       image_model=image_model, runner=command_runner)
+        done_count = len(progress["views"]) - len(pending)
+        left = rendering.remaining_seconds(deadline)
+        if left is not None and left < rendering.START_MIN_SECONDS:
+            # Too little of the tick left to finish a view: nothing started, nothing counted; next tick.
+            return {"outcome": "rendering_in_progress", "done": done_count, "of": len(progress["views"]), "next": "again",
+                    "deferred": True}
+        # A tick killed mid-view leaves no result behind, only this count; a
+        # view that keeps dying is not tried forever (7 September 2026: a
+        # regeneration ran the tick past its 300 s and the job was killed).
+        view["started"] = int(view.get("started") or 0) + 1
+        if view["started"] > MAX_VIEW_STARTS:
+            # The owner is asked (the stuck-claim question); "retry" or a
+            # requeue gets a fresh count of starts, like a fresh retry budget.
+            view["started"] = 0
+            workflow_safe.write_private(progress_path, progress)
+            raise ValueError(f"rendering view {view['slot']} did not finish in {MAX_VIEW_STARTS} ticks; "
+                             "the image or vision step is too slow for the watcher")
+        workflow_safe.write_private(progress_path, progress)
+        try:
+            result = rendering.render_view(view, piece_plan or {}, refs, openclaw, artwork=art, vision_model=vision_model,
+                                           image_model=image_model, runner=command_runner, deadline=deadline)
+        except Exception:
+            # A failure that raises is counted by the claim's retry budget
+            # already; only a silent death (the tick killed) keeps the start.
+            view["started"] -= 1
+            workflow_safe.write_private(progress_path, progress)
+            raise
+        if result.get("deferred"):
+            view["started"] -= 1
+            workflow_safe.write_private(progress_path, progress)
+            return {"outcome": "rendering_in_progress", "done": done_count, "of": len(progress["views"]), "next": "again",
+                    "deferred": True}
         view.update({**result, "slot": view["slot"], "piece": view.get("piece"), "done": True})
         workflow_safe.write_private(progress_path, progress)
         remaining = len([v for v in progress["views"] if not v.get("done")])

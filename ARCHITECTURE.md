@@ -381,6 +381,24 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.4 (7 September 2026): the view step keeps to the tick's clock.**
+Live: "cron: job execution timed out" while renders were under way. One
+view is an image call (180 s timeout) plus a vision check (3 tries at 90 s)
+and, on a failed check, the same again for a regeneration: up to 900 s
+against a 300 s tick. Now `inbox_watcher.tick` stamps `tick_started` and
+the rendering branch passes `deadline = tick_started + 300 - 30` to
+`pipeline.render_step`, which hands it to `rendering.render_view`,
+`render` and `check_image`: no render with under 120 s left (the step
+returns `deferred`, nothing counted), no regeneration with under 200 s, no
+vision retry with under 100 s (the view goes unchecked), and the image
+call's `--timeout-ms` is what remains minus 30 s (at least 60 s).
+Silent deaths are counted: `render_step` writes `started` on the view
+before rendering and gives it back when the view raises (the claim's retry
+budget counts that) or defers; the fourth start of one view raises
+"did not finish in 3 ticks", which the watcher turns into the stuck-claim
+question, and the count resets so "retry" or a requeue starts fresh.
+`render_and_send` (lab and tests) passes no deadline and is unchanged.
+
 **Unpublished after 4.13.4 (7 September 2026): a twin piece takes the quoted numbers.**
 Live case 5: the customer asked for the same band in rose gold, specs
 copied exactly, and the model weighed it again (12 g to 10 g, 1.8 ct to 1.2

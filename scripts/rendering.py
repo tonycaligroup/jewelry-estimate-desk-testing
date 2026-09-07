@@ -35,6 +35,21 @@ _CHECK_LOCK = threading.Lock()
 DESCRIBE_TRIES = 3
 DESCRIBE_PAUSE_SECONDS = 3
 IMAGE_TIMEOUT_MS = 180_000
+# The watcher tick is 300 s (cron_config.WATCHER_TIMEOUT_SECONDS). A view is
+# one image call plus a vision check, regenerated once on a failed check: up
+# to 900 s in the worst case, which killed a tick live on 7 September 2026.
+# With a deadline the step never starts what it cannot finish: no render
+# with under START_MIN_SECONDS left, no regeneration with under
+# REGENERATE_MIN_SECONDS left, no vision retry with under RETRY_MIN_SECONDS
+# left, and the image call's own timeout shrinks to what remains.
+START_MIN_SECONDS = 120
+REGENERATE_MIN_SECONDS = 200
+RETRY_MIN_SECONDS = 100
+IMAGE_MIN_TIMEOUT_MS = 60_000
+
+
+def remaining_seconds(deadline: float | None) -> float | None:
+    return None if deadline is None else deadline - time.monotonic()
 MARK_SOURCES = ("artwork", "initials", "none")
 
 
@@ -122,7 +137,8 @@ def build_prompts(plan: dict[str, Any], specification: dict[str, Any] | str, has
     return [f"{base} View: {view}." for view in arch["views"][:2]]
 
 
-def image_argv(prompt: str, refs: list[Path], output: Path, openclaw: str, model: str | None = None) -> list[str]:
+def image_argv(prompt: str, refs: list[Path], output: Path, openclaw: str, model: str | None = None,
+               timeout_ms: int = IMAGE_TIMEOUT_MS) -> list[str]:
     argv = [openclaw, "infer", "image"]
     if refs:
         argv.append("edit")
@@ -130,7 +146,7 @@ def image_argv(prompt: str, refs: list[Path], output: Path, openclaw: str, model
             argv += ["--file", str(ref)]
     else:
         argv.append("generate")
-    argv += ["--prompt", prompt, "--size", "1024x1024", "--output", str(output), "--timeout-ms", str(IMAGE_TIMEOUT_MS), "--json"]
+    argv += ["--prompt", prompt, "--size", "1024x1024", "--output", str(output), "--timeout-ms", str(int(timeout_ms)), "--json"]
     if model:
         argv += ["--model", model]
     return argv
@@ -148,9 +164,13 @@ def _envelope(stdout: str) -> dict[str, Any]:
 
 
 def render(prompt: str, refs: list[Path], output: Path, openclaw: str, runner: Runner = subprocess.run,
-           model: str | None = None) -> Path:
+           model: str | None = None, deadline: float | None = None) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
-    completed = runner(image_argv(prompt, refs, output, openclaw, model), check=True, capture_output=True, text=True, shell=False)
+    timeout_ms = IMAGE_TIMEOUT_MS
+    left = remaining_seconds(deadline)
+    if left is not None:
+        timeout_ms = int(min(IMAGE_TIMEOUT_MS, max(IMAGE_MIN_TIMEOUT_MS, (left - 30) * 1000)))
+    completed = runner(image_argv(prompt, refs, output, openclaw, model, timeout_ms), check=True, capture_output=True, text=True, shell=False)
     envelope = _envelope(completed.stdout)
     outputs = envelope.get("outputs") or []
     path = outputs[0].get("path") if outputs and isinstance(outputs[0], dict) else None
@@ -186,7 +206,8 @@ def _describe_text(stdout: str) -> str:
 
 
 def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner = subprocess.run,
-                vision_model: str | None = DEFAULT_VISION_MODEL, reference: Path | None = None) -> dict[str, Any]:
+                vision_model: str | None = DEFAULT_VISION_MODEL, reference: Path | None = None,
+                deadline: float | None = None) -> dict[str, Any]:
     """The archetype's questions answered yes or no about one render."""
     arch = archetypes()[plan["archetype"]]
     questions = "\n".join(f"- {c['id']}: {c['question']}" for c in arch["checks"])
@@ -210,6 +231,9 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
             break
         except (OSError, subprocess.CalledProcessError) as exc:
             last_error = exc
+            left = remaining_seconds(deadline)
+            if left is not None and left < RETRY_MIN_SECONDS:
+                break  # no time for another try inside this tick: the view goes to the owner unchecked
             if attempt + 1 < DESCRIBE_TRIES:
                 time.sleep(DESCRIBE_PAUSE_SECONDS * (attempt + 1))
     if completed is None:
@@ -367,9 +391,15 @@ def plan_piece(
 def render_view(
     view: dict[str, Any], plan: dict[str, Any], refs: list[Path], openclaw: str = "openclaw",
     artwork: Path | None = None, vision_model: str | None = DEFAULT_VISION_MODEL, image_model: str | None = None,
-    runner: Runner = subprocess.run, max_regenerations: int = 1,
+    runner: Runner = subprocess.run, max_regenerations: int = 1, deadline: float | None = None,
 ) -> dict[str, Any]:
-    """Render one planned view, check it, regenerate a failing one once. One view, one tick's worth of work."""
+    """Render one planned view, check it, regenerate a failing one once. One view, one tick's worth of work.
+
+    With a `deadline` (monotonic seconds) the step keeps to the tick's clock:
+    it returns `{"deferred": True}` without rendering when too little time is
+    left to start, skips the regeneration when there is no room for one, and
+    the vision check stops retrying. What it did is always recorded.
+    """
     out_dir = Path(view["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     slot = int(view["slot"])
@@ -378,10 +408,17 @@ def render_view(
     current_prompt = prompt
     image = None
     check = None
+    left = remaining_seconds(deadline)
+    if left is not None and left < START_MIN_SECONDS:
+        return {"slot": slot, "deferred": True, "seconds_left": round(left)}
     for attempt in range(max_regenerations + 1):
-        image = render(current_prompt, refs, out_dir / f"view-{slot}-try-{attempt + 1}.png", openclaw, runner, image_model)
+        if attempt:
+            left = remaining_seconds(deadline)
+            if left is not None and left < REGENERATE_MIN_SECONDS:
+                break  # the failed view stands as it is; the owner sees the checker line and can ask for a revision
+        image = render(current_prompt, refs, out_dir / f"view-{slot}-try-{attempt + 1}.png", openclaw, runner, image_model, deadline)
         with _CHECK_LOCK:
-            check = check_image(image, plan, openclaw, runner, vision_model, artwork)
+            check = check_image(image, plan, openclaw, runner, vision_model, artwork, deadline)
         attempts.append({"image": str(image), "check": check, "prompt": current_prompt})
         if not check["failed"]:
             break

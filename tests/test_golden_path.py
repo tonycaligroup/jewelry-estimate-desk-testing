@@ -54,6 +54,7 @@ import owner_questions  # noqa: E402
 import readiness  # noqa: E402
 import reading_check  # noqa: E402
 import rendering  # noqa: E402
+import pipeline  # noqa: E402
 import run_lease  # noqa: E402
 import workflow_safe  # noqa: E402
 from test_runtime import IntakeTests  # noqa: E402
@@ -1381,6 +1382,62 @@ class OwnStoneAndStallTests(SideBranchTests):
                 self.assertEqual(self.claim(ws, "s2").get("inline_attempts", 0), 0, "a requeue resets the retry budget")
                 for _ in range(3):
                     summary = self.one_tick(ws, world)
+                    if world.cards and world.cards[-1]["kind"] == "send_rendering":
+                        break
+                self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)
+        self.run_branch(branch)
+
+    def test_a_view_killed_three_ticks_running_becomes_a_question_not_a_loop(self) -> None:
+        """7 September 2026, live: a view's regeneration ran past the tick's 300 s and cron killed the job;
+        with nothing recorded, the next tick would start the same view again, forever."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+
+            class LaterClock(datetime):
+                """The claim journal's clock, moved on before every tick: a killed tick's lease has lapsed."""
+                offset = timedelta()
+
+                @classmethod
+                def now(cls, tz=None):
+                    return datetime.now(tz) + cls.offset
+
+            def later_tick() -> dict:
+                LaterClock.offset += timedelta(minutes=10)
+                return self.one_tick(ws, world)
+
+            with patch.object(inbox_watcher, "STALE_AFTER_SECONDS", 1), patch.object(inbox_claim, "datetime", LaterClock):
+                def tick_until(predicate, limit: int = 4) -> dict:
+                    """Ticks until the predicate holds on a summary (a resumed claim can take a tick to come back)."""
+                    summary = None
+                    for _ in range(limit):
+                        summary = later_tick()
+                        if predicate(summary):
+                            return summary
+                    self.fail(f"no tick satisfied the predicate: {summary}")
+
+                for _ in range(pipeline.MAX_VIEW_STARTS):
+                    world.crash_after.add("image")
+                    killed = False
+                    for _ in range(4):
+                        try:
+                            later_tick()
+                        except Crash:
+                            killed = True
+                            break
+                    self.assertTrue(killed, "the tick was not killed mid-view")
+                summary = tick_until(lambda s: any(i["outcome"] == "deferred" for i in s["inline"]))
+                deferred = [i for i in summary["inline"] if i["outcome"] == "deferred"]
+                self.assertIn("did not finish in 3 ticks", deferred[0]["error"], summary)
+                # A tick that plainly fails (the tool down) is not a silent death: the start is given back.
+                world.fail_next["image"] = 1
+                summary = tick_until(lambda s: any(i["outcome"] == "deferred" for i in s["inline"]))
+                deferred = [i for i in summary["inline"] if i["outcome"] == "deferred"]
+                self.assertNotIn("did not finish", deferred[0]["error"], summary)
+                # The tool is back: the rendering completes, one view per tick.
+                for _ in range(4):
+                    summary = later_tick()
                     if world.cards and world.cards[-1]["kind"] == "send_rendering":
                         break
                 self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)

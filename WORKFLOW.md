@@ -437,6 +437,11 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 7 September 2026 (unpublished, after 4.13.4): a rendering view keeps
+  to the watcher tick's clock: no regeneration or vision retry when time is
+  short, no view started that cannot finish; a view killed three ticks
+  running becomes a question to the owner instead of a tick that dies every
+  two minutes (6.6, 10).
 - Built 7 September 2026 (unpublished, after 4.13.4): a new piece that is a
   quoted piece in another colour or finish (every fact that drives weight,
   stones and labour the same; colour, finish, engraving and stone grade may

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from email import policy
@@ -8221,7 +8222,70 @@ class PlainTextMailTests(unittest.TestCase):
 
 
 class TickRenderingTests(unittest.TestCase):
-    pass
+    """7 September 2026, live: a view's regeneration ran the watcher tick past its 300 s and cron killed it."""
+
+    def _runner(self, first_check: str = "yes"):
+        calls: list[list[str]] = []
+        state = {"checks": 0}
+
+        def runner(argv, **kwargs):  # noqa: ANN001, ANN003
+            calls.append(list(argv))
+            if argv[3] in ("generate", "edit"):
+                out = Path(_flag(argv, "--output")); out.parent.mkdir(parents=True, exist_ok=True); out.write_bytes(b"png")
+                return Mock(returncode=0, stdout=json.dumps({"ok": True, "outputs": [{"path": str(out)}]}), stderr="")
+            state["checks"] += 1
+            answer = first_check if state["checks"] == 1 else "yes"
+            ids = re.findall(r"^- (\w+):", _flag(argv, "--prompt") or "", re.MULTILINE)
+            text = json.dumps({"answers": {i: answer for i in ids}, "notes": {i: "wrong" for i in ids}})
+            return Mock(returncode=0, stdout=json.dumps({"ok": True, "outputs": [{"text": text}]}), stderr="")
+        return runner, calls
+
+    def _view(self, tmp: str) -> tuple[dict, dict]:
+        arch = next(iter(rendering.archetypes()))
+        return ({"slot": 1, "prompt": "a ring", "out_dir": tmp}, {"archetype": arch})
+
+    def test_with_time_to_spare_a_failed_check_is_regenerated_once(self) -> None:
+        runner, calls = self._runner(first_check="no")
+        with tempfile.TemporaryDirectory() as tmp:
+            view, plan = self._view(tmp)
+            result = rendering.render_view(view, plan, [], "openclaw", runner=runner, deadline=time.monotonic() + 600)
+        self.assertEqual(result["attempts"], 2)
+        self.assertTrue(result["passed"])
+        self.assertEqual(_flag(calls[0], "--timeout-ms"), str(rendering.IMAGE_TIMEOUT_MS))
+
+    def test_near_the_deadline_the_failed_view_stands_and_the_image_timeout_shrinks(self) -> None:
+        runner, calls = self._runner(first_check="no")
+        with tempfile.TemporaryDirectory() as tmp:
+            view, plan = self._view(tmp)
+            result = rendering.render_view(view, plan, [], "openclaw", runner=runner, deadline=time.monotonic() + 150)
+        self.assertEqual(result["attempts"], 1, "no regeneration with under 200 s left")
+        self.assertFalse(result["passed"])
+        self.assertAlmostEqual(int(_flag(calls[0], "--timeout-ms")), 120_000, delta=1_000, msg="the image call gets what remains, minus a margin")
+
+    def test_with_too_little_time_nothing_starts(self) -> None:
+        runner, calls = self._runner()
+        with tempfile.TemporaryDirectory() as tmp:
+            view, plan = self._view(tmp)
+            result = rendering.render_view(view, plan, [], "openclaw", runner=runner, deadline=time.monotonic() + 60)
+        self.assertTrue(result.get("deferred"))
+        self.assertEqual(calls, [], "no image call started")
+
+    def test_the_vision_check_does_not_retry_near_the_deadline(self) -> None:
+        tries: list[int] = []
+
+        def runner(argv, **kwargs):  # noqa: ANN001, ANN003
+            tries.append(1)
+            raise subprocess.CalledProcessError(1, argv, "", "model down")
+        arch = next(iter(rendering.archetypes()))
+        with patch.object(rendering, "DESCRIBE_PAUSE_SECONDS", 0), tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "v.png"; image.write_bytes(b"png")
+            result = rendering.check_image(image, {"archetype": arch}, "openclaw", runner, deadline=time.monotonic() + 50)
+        self.assertTrue(result["unchecked"])
+        self.assertEqual(len(tries), 1, "one try, then unchecked: no time for more inside the tick")
+
+
+def _flag(argv: list, name: str) -> str | None:
+    return argv[argv.index(name) + 1] if name in argv else None
 
 
 class SlotTests(unittest.TestCase):
