@@ -432,6 +432,8 @@ def mark_jewelers_choice(root: Path, estimate_id: str, source_message_id: str, f
             raise ValueError("only an estimate still awaiting specifications can skip details")
         specification = dict(record.get("specification") or {})
         for field in fields:
+            if str(field).startswith("confirm."):
+                continue  # a reading check is confirmed by the customer, never chosen by the jeweler
             index, bare = split_field_name(str(field))
             if index is None:
                 specification[bare] = "jeweler's choice"

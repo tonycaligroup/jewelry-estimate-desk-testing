@@ -834,7 +834,14 @@ if __name__ == "__main__":
 class SideBranchTests(GoldenPathTests):
     """The branches off the golden path, each on the same real code."""
 
-    def _estimate_sent(self, ws: Path, world: World, spec: dict | None = None, rate: bool = True) -> tuple[str, str]:
+    def _profile_with_rates(self, ws: Path) -> None:
+        profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+        profile["pricing"]["stones_per_carat"]["lab_grown_diamond"] = 900.0
+        profile["pricing"]["typical_finished_weights"].update({"engagement ring": 5.0, "wedding band": 4.0})
+        (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
+
+    def _estimate_sent(self, ws: Path, world: World, spec: dict | None = None, rate: bool = True,
+                       text: str | None = None) -> tuple[str, str]:
         """A complete inquiry priced and sent: the starting point for post-estimate branches."""
         if rate:
             profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
@@ -847,8 +854,8 @@ class SideBranchTests(GoldenPathTests):
             "accent_stones": "small lab-grown diamonds along the shoulders",
             "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS",
         }
-        world.customer_message("s1", thread, "Please quote a 14k yellow gold signet ring, size 10, logo on the face, "
-                               "small lab-grown diamonds G VS bead set on the shoulders.\n\nPat")
+        world.customer_message("s1", thread, text or ("Please quote a 14k yellow gold signet ring, size 10, logo on the face, "
+                                                       "small lab-grown diamonds G VS bead set on the shoulders.\n\nPat"))
         summary = self.tick(ws, world)
         self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
         card = world.cards[-1]
@@ -987,7 +994,7 @@ class SideBranchTests(GoldenPathTests):
             _thread, estimate_id = self._estimate_sent(ws, world, rate=False, spec={
                 "piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7",
                 "dimensions": "4mm wide", "finish": "brushed", "notes": "plain band, no stones",
-            })
+            }, text="Please quote a plain 14k yellow gold wedding band, size 7, 4mm wide, brushed finish, no stones.\n\nPat")
             self.assertEqual([n for n in world.notices if not n["file"]], [], "no rate question for a plain band")
             card = world.cards[0]
             self.assertNotRegex(card["title"], r"(?i)stone|carat|melee")
@@ -1249,6 +1256,41 @@ class OwnStoneAndStallTests(SideBranchTests):
 
     def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
+
+    def test_two_sizes_read_as_one_piece_are_confirmed_before_any_price(self) -> None:
+        """ARCHITECTURE-OPTIONS.md E': the customer names two sizes, the model reads one piece; the follow-up confirms."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {
+                "piece_type": "engagement ring", "finger_size": "6", "metal": "yellow gold", "metal_karat": "14k",
+                "stone_type": "diamond", "stone_origin": "lab-grown", "stone_carat": "2", "stone_shape": "round",
+                "stone_color": "F", "stone_clarity": "VS1", "setting_style": "solitaire", "center_stone": "yes",
+            }
+            world.customer_message("c1", "thread-confirm", "A 14k yellow gold engagement ring, size 6, 2 ct round lab-grown "
+                                   "solitaire, and a plain matching band in size 10.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual(world.cards, [], "nothing priced on a reading the customer's words contradict")
+            body = world.sent[-1]["body"]
+            self.assertIn("how many pieces", body)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertIn("confirm.piece_count", record["missing_required_fields"])
+            self.assertEqual(record["status"], "awaiting_specs")
+            asked = [p for p in world.prompts if "MISSING DETAILS TO ASK FOR" in p]
+            self.assertTrue(asked and "to confirm:" in asked[-1], "the drafting model is given the confirming line")
+            # The customer confirms two pieces; the reading now agrees and the estimate carries two lines.
+            world.spec = {"metal": "yellow gold", "metal_karat": "14k", "pieces": [
+                {"piece_type": "engagement ring", "finger_size": "6", "stone_type": "diamond", "stone_origin": "lab-grown",
+                 "stone_carat": "2", "stone_shape": "round", "stone_color": "F", "stone_clarity": "VS1", "setting_style": "solitaire",
+                 "center_stone": "yes"},
+                {"piece_type": "wedding band", "finger_size": "10", "notes": "plain, polished, no stones"},
+            ]}
+            world.customer_message("c2", "thread-confirm", "Yes, two pieces: the ring in size 6 and the band in size 10.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertIn("wedding band", world.cards[-1]["title"])
+            self.assertNotIn("confirm.", json.dumps(self.record(ws, self.only_estimate(ws))["missing_required_fields"]))
+        self.run_branch(branch)
 
     def _pendant(self, ws: Path, world: World) -> str:
         profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
@@ -2069,12 +2111,6 @@ class TwoPieceTests(SideBranchTests):
 
     def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
         pass
-
-    def _profile_with_rates(self, ws: Path) -> None:
-        profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
-        profile["pricing"]["stones_per_carat"]["lab_grown_diamond"] = 900.0
-        profile["pricing"]["typical_finished_weights"].update({"engagement ring": 5.0, "wedding band": 4.0})
-        (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
 
     def _two_piece_rendering_card(self, ws: Path, world: World) -> dict:
         self._profile_with_rates(ws)

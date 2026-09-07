@@ -30,6 +30,7 @@ import kolo_safe
 import owner_questions
 import rendering_materialize
 import slots
+import reading_check
 import spec_gate
 import workflow_safe
 
@@ -101,11 +102,15 @@ FIELD_PRIORITY = (
 def prioritized(missing: list[str]) -> list[str]:
     """The fields that move the price first: origin, stone, size; the follow-up asks for all of them, in this order.
 
-    Multi-piece names sort by piece first, then by the same field order.
+    A reading check to confirm comes before everything (it decides what the
+    piece even is); multi-piece names sort by piece first, then by the same
+    field order.
     """
     rank = {name: index for index, name in enumerate(FIELD_PRIORITY)}
 
     def key(name: str):
+        if reading_check.is_confirm(name):
+            return (-2, -1, name)
         index, field = estimate_record.split_field_name(name)
         return (index if index is not None else -1, rank.get(field, len(rank)), field)
 
@@ -113,9 +118,12 @@ def prioritized(missing: list[str]) -> list[str]:
 
 
 def describe_missing(specification: dict[str, Any], missing: list[str]) -> list[str]:
-    """Missing names as the customer would read them: 'wedding band: finger size'."""
+    """Missing names as the customer would read them: 'wedding band: finger size'; a check to confirm is its question."""
     labels = []
     for name in missing:
+        if reading_check.is_confirm(name):
+            labels.append("to confirm: " + (reading_check.question_for(name) or name))
+            continue
         index, field = estimate_record.split_field_name(name)
         words = field.replace("_", " ")
         labels.append(f"{estimate_record.piece_label(specification, index)}: {words}" if index is not None else words)
@@ -125,6 +133,9 @@ def describe_missing(specification: dict[str, Any], missing: list[str]) -> list[
 def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None) -> str:
     asks = []
     for name in missing[:8]:
+        if reading_check.is_confirm(name):
+            asks.append(reading_check.question_for(name) or name)
+            continue
         index, field = estimate_record.split_field_name(name)
         question = FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?")
         if index is not None:
@@ -425,6 +436,13 @@ def process_claim(
 
     specification = judged["specification"] if judged else judge.extract_specification(digest, model, judge_runner, openclaw)["specification"]
     missing = spec_gate.missing_required_fields(specification, profile)
+    # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
+    # customer's own words in code. A disagreement is never priced; it is
+    # one more line the follow-up asks, alongside everything else missing.
+    disagreements = reading_check.compare(digest, specification)
+    if disagreements:
+        workflow_safe.write_private(Path(paths["work_dir"]) / "reading-check.json", {"disagreements": disagreements})
+        missing = missing + [d["name"] for d in disagreements if d["name"] not in missing]
     workflow_safe.write_private(review_path, {"specification": specification, "missing_required_fields": missing})
     reviewed = workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner))
     nxt = reviewed.get("next")

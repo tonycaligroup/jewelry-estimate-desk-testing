@@ -480,6 +480,8 @@ def check_body(value: dict[str, Any]) -> dict[str, Any]:
     return {"body": body}
 
 
+CONFIRM_WORDS = ("confirm", "make sure", "double-check", "double check", "just checking", "to be sure", "clarify")
+
 FIELD_WORDS = {
     "finger_size": ("size",), "dimensions": ("length", "size", "long", "inch", "mm"),
     "metal": ("metal", "gold", "platinum", "silver"), "metal_karat": ("karat", "14k", "18k", "10k", "carat gold"),
@@ -495,9 +497,13 @@ def uncovered_fields(body: str, missing_fields: list[str]) -> list[str]:
     text = body.lower()
     out = []
     for label in missing_fields:
-        field = label.split(": ", 1)[1] if ": " in label else label
-        key = field.strip().replace(" ", "_")
-        words = FIELD_WORDS.get(key, (field.strip().replace("_", " "),))
+        if label.startswith("to confirm: "):
+            # A reading check: covered when the body raises its subject at all.
+            words = CONFIRM_WORDS
+        else:
+            field = label.split(": ", 1)[1] if ": " in label else label
+            key = field.strip().replace(" ", "_")
+            words = FIELD_WORDS.get(key, (field.strip().replace("_", " "),))
         if not any(w in text for w in words):
             out.append(label)
     return out
