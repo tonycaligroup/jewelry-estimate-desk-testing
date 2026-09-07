@@ -437,6 +437,15 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 7 September 2026 (unpublished, after 4.13.2): a fact written at the
+  top level of a multi-piece reading applies to every piece that lacks it,
+  stone facts included, not only metal; after "second piece" the first
+  piece keeps every fact it was priced with, and a reading that came back
+  as one flat piece is taken as the new piece beside the priced one; a
+  multi-piece reading is gated per piece only, with no bare top-level
+  requirement. "Reuse", "reset", "remount", "my own" count as the customer's
+  own stone only with a stone word near them ("reuse the wedding band" is a
+  band, not a stone). Nothing already on the record is asked again (6.2).
 - Built 7 September 2026 (4.13.2): a customer who asks for a time outside
   the declared consultation hours is told the hours and offered free times
   inside them; nothing is booked outside the hours (6.7).

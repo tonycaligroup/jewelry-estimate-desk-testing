@@ -600,9 +600,10 @@ def record_thread_review(
             specification = snapshot.get("specification")
             if not isinstance(specification, dict) or not specification:
                 raise ValueError("specification must be a non-empty object")
-            missing = enforce_specification_policies(
-                specification, missing, shop_profile
-            )
+            if not is_multi_piece(specification):
+                missing = enforce_specification_policies(
+                    specification, missing, shop_profile
+                )
             outcome = "awaiting_specs" if missing else "specs_complete"
         evidence = {
             "source_message_id_sha256": sha256_text(source_message_id),
@@ -743,7 +744,12 @@ def pieces_of(specification: Any) -> list[dict[str, Any]]:
     raw = specification.get("pieces")
     if not isinstance(raw, list) or len([p for p in raw if isinstance(p, dict)]) < 2:
         return [{k: v for k, v in specification.items() if k != "pieces"}]
-    shared = {k: v for k, v in specification.items() if k in SHARED_KEYS and v not in (None, "", [])}
+    # A fact written at the top level of a multi-piece specification is
+    # shared by definition (the model put it there for both): metal, and
+    # the stone facts too ("diamond, lab-grown, D" at the top with two
+    # pieces below, 7 September 2026). Each piece's own facts win.
+    shared = {k: v for k, v in specification.items()
+              if k not in ("pieces", "notes") and not isinstance(v, (list, dict)) and v not in (None, "", [])}
     merged = []
     for piece in raw:
         if isinstance(piece, dict):
@@ -1584,6 +1590,37 @@ def drop_stale_confirms(root: Path, estimate_id: str, source_message_id: str, ke
             )
             write_object(path, record)
         return record
+
+
+def carry_prior_facts(record: dict[str, Any], specification: dict[str, Any]) -> dict[str, Any]:
+    """After a reopen for a second piece, the first piece keeps every fact it was priced with.
+
+    The model's re-read may return two pieces with the first one thin, or one
+    flat piece (the new one). The prior specification (estimate_history[-1])
+    is authoritative for the first piece: every key it had and the re-read
+    lacks is restored; nothing on the record is ever asked again.
+    """
+    if not isinstance(specification, dict) or record.get("reopened_for") != "second_piece":
+        return specification
+    history = record.get("estimate_history") or []
+    prior = history[-1].get("specification") if history and isinstance(history[-1], dict) else None
+    if not isinstance(prior, dict) or not prior:
+        return specification
+    prior_pieces = pieces_of(prior)
+    prior_first = {k: v for k, v in prior_pieces[0].items() if k != "pieces"}
+    raw = specification.get("pieces")
+    if not isinstance(raw, list) or len([p for p in raw if isinstance(p, dict)]) < 2:
+        # One flat piece came back: it is the new one; the first is the prior.
+        new_piece = {k: v for k, v in specification.items() if k != "pieces"}
+        if not new_piece.get("piece_type") or new_piece.get("piece_type") == prior_first.get("piece_type"):
+            return specification
+        return {"pieces": [prior_first, new_piece]}
+    pieces = [dict(p) for p in raw if isinstance(p, dict)]
+    first = pieces[0]
+    for key, value in prior_first.items():
+        if first.get(key) in (None, "", []) and value not in (None, "", []):
+            first[key] = value
+    return {**specification, "pieces": [first] + pieces[1:]}
 
 
 def rejected_bindings(record: dict[str, Any]) -> set[str]:

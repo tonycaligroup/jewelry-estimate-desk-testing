@@ -1501,6 +1501,35 @@ class OwnStoneAndStallTests(SideBranchTests):
             self.assertEqual(len(re.findall(r"\$", world.sent[-1]["body"])), 1, "one total for both pieces")
         self.run_branch(branch)
 
+    def test_a_second_piece_read_with_shared_facts_at_the_top_asks_nothing_known(self) -> None:
+        """7 September 2026, live: the re-read put the shared stone facts at the top level and left the first piece
+        thin; the desk re-asked facts already on the record. Now nothing on the record is asked again."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            thread, estimate_id = self._estimate_sent(ws, world)
+            world.design_change = ["pieces"]
+            world.customer_message("s2", thread, "Could you also quote a plain matching band, size 10, same stones?\n\nPat")
+            self.tick(ws, world)
+            self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner")
+            world.design_change = []
+            # The live shape: shared facts at the top, the priced piece thin, the new piece with its own facts.
+            world.spec = {"metal": "yellow gold", "metal_karat": "14k", "stone_type": "diamond", "stone_origin": "lab-grown",
+                          "stone_color": "G", "stone_clarity": "VS", "pieces": [
+                              {"piece_type": "signet ring", "finger_size": "10"},
+                              {"piece_type": "wedding band", "finger_size": "10", "setting_style": "channel set",
+                               "accent_stones": "small lab-grown diamonds all around", "center_stone": "no"}]}
+            self.assertEqual(self.answer(ws, "second piece")["decision"], "second_piece")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(len(world.sent), 1, "no follow-up asked for known facts; only the first estimate went out")
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["missing_required_fields"], [])
+            first = record["specification"]["pieces"][0]
+            self.assertEqual(first["setting_style"], "bead set", "the priced piece kept its facts")
+            self.assertEqual(first["engraving"], "our logo on the face")
+            self.assertIn("wedding band", world.cards[-1]["title"])
+        self.run_branch(branch)
+
     def test_two_sizes_read_as_one_piece_are_confirmed_before_any_price(self) -> None:
         """ARCHITECTURE-OPTIONS.md E': the customer names two sizes, the model reads one piece; the follow-up confirms."""
         def branch(ws: Path, world: World) -> None:

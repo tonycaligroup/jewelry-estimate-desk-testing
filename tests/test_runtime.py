@@ -8590,3 +8590,87 @@ class OwnerQuestionTests(unittest.TestCase):
             self.assertEqual(len(sent), 1)
             self.assertTrue(sent[0][3].startswith("Reminder"))
 
+
+
+class MultiPieceFactsTests(unittest.TestCase):
+    """7 September 2026, live: a second piece was read with the shared stone facts at the top level and the
+    pieces thin; the gate re-asked facts already on the record and added a bare top-level setting_style."""
+
+    LIVE = {"metal": "gold", "metal_karat": 18, "pieces": [
+        {"center_stone": "no", "finger_size": 10, "metal_color": "yellow", "piece_type": "men's wedding band",
+         "setting_style": "channel-set eternity", "stone_carat": "2.5 mm", "stone_clarity": "vvs1 or better"},
+        {"center_stone": "yes", "customer_supplied_materials": "original wedding band", "finger_size": 5, "metal_color": "rose",
+         "piece_type": "ring", "setting_style": "classic solitaire", "stone_carat": 3, "stone_clarity": "flawless",
+         "stone_shape": "round brilliant"}],
+        "stone_color": "d", "stone_cut": "ideal", "stone_origin": "lab-grown", "stone_type": "diamond"}
+
+    def _profile(self) -> dict:
+        return json.loads((Path(__file__).resolve().parent.parent / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
+
+    def test_every_shared_top_level_fact_reaches_the_pieces_that_lack_it(self) -> None:
+        pieces = estimate_record.pieces_of(self.LIVE)
+        for piece in pieces:
+            self.assertEqual(piece["stone_type"], "diamond")
+            self.assertEqual(piece["stone_origin"], "lab-grown")
+            self.assertEqual(piece["stone_color"], "d")
+            self.assertEqual(piece["metal_karat"], 18)
+        self.assertEqual(pieces[0]["metal_color"], "yellow", "a piece's own fact wins")
+        self.assertNotIn("pieces", pieces[0])
+        self.assertEqual(spec_gate.missing_required_fields(self.LIVE, self._profile()), [])
+
+    def test_a_multi_piece_review_is_gated_per_piece_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            record_root = Path(tmp) / "records"
+            route = {
+                "channel": "gmail", "mailbox": "sales@example.com", "recipient": "customer@example.net",
+                "identity_key": gmail_route.email_identity_key("customer@example.net"),
+                "gmail_message_id": "18f0000000000001", "thread_id": "18f0000000000001",
+                "original_message_id": "<initial@example.net>", "original_subject": "Custom inquiry", "references": [],
+            }
+            record = estimate_record.create_initial_record(record_root, route, 1_100)
+            profile = self._profile()
+            reviewed = estimate_record.record_thread_review(record_root, record["estimate_id"], {
+                "thread_id": "18f0000000000001", "source_message_id": "18f0000000000001",
+                "message_ids": ["18f0000000000001"], "specification": self.LIVE,
+                "missing_required_fields": spec_gate.missing_required_fields(self.LIVE, profile),
+            }, profile)
+            self.assertEqual(reviewed["missing_required_fields"], [])
+            self.assertEqual(reviewed["thread_reviews"][-1]["outcome"], "specs_complete")
+            # A single piece is still held to the policies.
+            single = {"piece_type": "ring", "metal": "gold", "metal_karat": 14, "finger_size": 6, "stone_type": "diamond",
+                      "stone_origin": "lab-grown", "stone_carat": 1, "stone_color": "F", "stone_clarity": "VS1", "center_stone": "yes"}
+            reviewed = estimate_record.record_thread_review(record_root, record["estimate_id"], {
+                "thread_id": "18f0000000000001", "source_message_id": "18f0000000000001",
+                "message_ids": ["18f0000000000001"], "specification": single, "missing_required_fields": [],
+            }, profile)
+            self.assertIn("setting_style", reviewed["missing_required_fields"])
+
+    def _reopened(self, prior: dict) -> dict:
+        return {"reopened_for": "second_piece", "estimate_history": [{"specification": prior, "reopened_for": "second_piece"}]}
+
+    def test_the_first_piece_keeps_every_fact_it_was_priced_with(self) -> None:
+        prior = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                 "setting_style": "bead set", "engraving": "our logo on the face", "stone_type": "diamond",
+                 "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS"}
+        thin = {"metal": "yellow gold", "pieces": [{"piece_type": "signet ring", "finger_size": "10"},
+                                                  {"piece_type": "wedding band", "finger_size": "10", "notes": "plain"}]}
+        carried = estimate_record.carry_prior_facts(self._reopened(prior), thin)
+        first, second = carried["pieces"]
+        self.assertEqual(first["engraving"], "our logo on the face")
+        self.assertEqual(first["stone_origin"], "lab-grown")
+        self.assertEqual(first["setting_style"], "bead set")
+        self.assertEqual(second, thin["pieces"][1], "the new piece is read from the customer's words alone")
+        self.assertEqual(carried["metal"], "yellow gold")
+
+    def test_a_flat_re_read_is_the_new_piece_beside_the_prior_one(self) -> None:
+        prior = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10", "setting_style": "bead set"}
+        flat = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10", "notes": "plain"}
+        carried = estimate_record.carry_prior_facts(self._reopened(prior), flat)
+        self.assertEqual([p["piece_type"] for p in carried["pieces"]], ["signet ring", "wedding band"])
+        self.assertEqual(carried["pieces"][0]["setting_style"], "bead set")
+        # The same piece read again (the model changed nothing) is not doubled.
+        same = estimate_record.carry_prior_facts(self._reopened(prior), dict(prior))
+        self.assertNotIn("pieces", same)
+        # Nothing happens outside a second-piece reopen.
+        self.assertEqual(estimate_record.carry_prior_facts({"reopened_for": "design_change"}, flat), flat)
+        self.assertEqual(estimate_record.carry_prior_facts({}, flat), flat)

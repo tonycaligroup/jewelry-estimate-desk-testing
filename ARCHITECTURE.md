@@ -381,6 +381,24 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.2 (7 September 2026): a second piece never re-asks what the record knows.**
+Live, the wife's-ring second piece: the extractor put the shared stone
+facts ("diamond, lab-grown, D, ideal") at the top level with two thin
+pieces under them, and `pieces_of` shared only the metal keys, so the gate
+asked each piece for its stone facts; `record_thread_review` also ran
+`enforce_specification_policies` on the top-level object of a multi-piece
+reading and added a bare `setting_style`. Now `pieces_of` shares every
+scalar top-level fact with each piece that lacks it (a piece's own value
+wins), the record-time policy pass is skipped for a multi-piece reading
+(the gate already applies it per piece), and `carry_prior_facts` in
+`pipeline.process_claim` restores into the first piece every fact of the
+specification the estimate was priced with (`estimate_history[-1]`) while
+`reopened_for` is `second_piece`; a flat re-read with a different piece
+type becomes `[prior, new]`. `reading_check._says_own_stone` counts
+"reuse", "reset", "remount", "my own", "existing" only with a stone noun
+within 40 characters ("reuse the wedding band" no longer asks about a
+stone). Tests carry the exact live record shape.
+
 **4.13.2 (built 7 September 2026): a time outside the hours is answered with the hours and open times.**
 The owner's rule. `slots.outside_hours` and `slots.hours_text` report a
 requested time that falls outside the declared windows ("Monday to Friday,

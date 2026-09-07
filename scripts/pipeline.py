@@ -568,6 +568,7 @@ def process_claim(
         return _manual_review(p, message_id, "customer_escalation", command_runner)
 
     specification = judged["specification"] if judged else judge.extract_specification(digest, model, judge_runner, openclaw)["specification"]
+    specification = estimate_record.carry_prior_facts(record, specification)
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
     # customer's own words in code. A disagreement is never priced; it is
