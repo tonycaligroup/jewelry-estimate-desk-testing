@@ -1,0 +1,47 @@
+# Every push and pull request: the suite, the fault-injection harness, and
+# (when the OPTIMIZER_TOKEN secret is set) the Kolo skill audit. Results are
+# kept as an artifact tied to the commit (tests/run_all.py writes them).
+name: tests
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Suite and harness
+        run: python3 tests/run_all.py --results results-${{ matrix.python }}.json
+      - name: Keep the results with the commit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-python-${{ matrix.python }}
+          path: results-${{ matrix.python }}.json
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      OPTIMIZER_TOKEN: ${{ secrets.OPTIMIZER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the optimizer (private; needs the OPTIMIZER_TOKEN secret)
+        if: env.OPTIMIZER_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: tonycaligroup/kolo-skill-optimizer
+          token: ${{ env.OPTIMIZER_TOKEN }}
+          path: optimizer
+      - name: Skill audit (exit 1 on any high finding)
+        if: env.OPTIMIZER_TOKEN != ''
+        run: python3 optimizer/scripts/skill_audit.py .
+      - name: Audit skipped
+        if: env.OPTIMIZER_TOKEN == ''
+        run: echo "OPTIMIZER_TOKEN is not set; the skill audit did not run. Add a read-only token for tonycaligroup/kolo-skill-optimizer as a repository secret."

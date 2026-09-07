@@ -1,0 +1,15 @@
+{
+  "defect": "'reuse the wedding band' was read as a customer-supplied stone; the desk emailed a question about a stone the customer never mentioned",
+  "seen_on": "4.13.2", "fixed_in": "4.13.3", "text_is": "paraphrase",
+  "kind": "reading_check",
+  "messages": [
+    "Could you also quote a ring for my wife? Reuse the wedding band she has now as the base, 18k rose gold, a 3 ct round brilliant lab-grown diamond, D flawless, classic solitaire, size 5."
+  ],
+  "specification": {
+    "piece_type": "ring", "metal": "gold", "metal_karat": 18, "metal_color": "rose", "finger_size": 5,
+    "stone_type": "diamond", "stone_origin": "lab-grown", "stone_carat": 3, "stone_shape": "round brilliant",
+    "stone_color": "d", "stone_clarity": "flawless", "setting_style": "classic solitaire", "center_stone": "yes",
+    "customer_supplied_materials": "original wedding band"
+  },
+  "expect": {"topics": []}
+}

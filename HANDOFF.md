@@ -16,6 +16,24 @@ the whole desk end to end on the real code (ticks plus the exact execute
 lines from the cards) with only Gmail, Kolo, the calendar, and the model
 faked, and six side branches beside it.
 
+## Tests, CI, fixtures
+
+- `python3 tests/run_all.py` runs the suite and the fault-injection harness
+  in one go; `--results out.json` writes counts, timings, Python version and
+  the commit; `-k words` runs only matching tests. The suite alone:
+  `python3 -m unittest discover -s tests -q`; the harness alone:
+  `python3 tests/test_fault_injection.py`.
+- `.github/workflows/tests.yml` runs both on every push and pull request
+  (Python 3.9 and 3.12) and keeps the results file as an artifact per
+  commit. The skill audit runs there only when the repository secret
+  `OPTIMIZER_TOKEN` (read access to `tonycaligroup/kolo-skill-optimizer`)
+  is set; locally: `python3 ~/code/kolo-skill-optimizer/scripts/skill_audit.py .`
+- `tests/fixtures/live/` holds one file per defect seen on the instance,
+  replayed by `tests/test_live_fixtures.py` on every run. A live defect is
+  captured there the same day, before the fix. Format in the README there.
+- `LIVE-QUALIFICATION.md` is the short live set with expected outcomes
+  written before each run, and the status of the latest runs.
+
 ## Where the code is
 
 | | |

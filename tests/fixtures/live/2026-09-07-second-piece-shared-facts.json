@@ -1,0 +1,29 @@
+{
+  "defect": "on 'second piece' the re-read put the shared stone facts at the top level with thin pieces; the desk re-asked facts already on the record and added a bare setting_style; the first piece lost the facts it was priced with; the re-price re-estimated the first piece's grams and hours and charged shipping per piece",
+  "seen_on": "4.13.2", "fixed_in": "4.13.4", "text_is": "paraphrase",
+  "kind": "golden_path",
+  "profile": {"fees": {"shipping": 50.0}},
+  "steps": [
+    {"estimate_sent": {
+      "text": "Please quote a 14k yellow gold signet ring, size 10, logo on the face, small lab-grown diamonds G VS bead set on the shoulders.\n\nPat",
+      "spec": {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+               "setting_style": "bead set", "engraving": "our logo on the face",
+               "accent_stones": "small lab-grown diamonds along the shoulders",
+               "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS"}},
+     "expect": {"assumptions_contain": ["14K yellow gold 9.5g", "bench labor 3.5h"]}},
+    {"customer": {"id": "s2", "text": "Could you also quote a plain matching band, size 10, same stones?\n\nPat", "design_change": ["pieces"]},
+     "expect": {"claim_status": "awaiting_owner", "no_new_card": true}},
+    {"answer": "second piece", "expect": {"decision": "second_piece"}},
+    {"tick": true,
+     "spec": {"metal": "yellow gold", "metal_karat": "14k", "stone_type": "diamond", "stone_origin": "lab-grown",
+              "stone_color": "G", "stone_clarity": "VS",
+              "pieces": [{"piece_type": "signet ring", "finger_size": "10"},
+                         {"piece_type": "wedding band", "finger_size": "10", "setting_style": "channel set",
+                          "accent_stones": "small lab-grown diamonds all around", "center_stone": "no"}]},
+     "expect": {"outcomes": ["approval_requested"], "sent": 1, "missing_required_fields": [], "pieces": 2,
+                "piece": {"index": 0, "has": {"setting_style": "bead set", "engraving": "our logo on the face", "stone_origin": "lab-grown"}},
+                "card_title_contains": ["wedding band", "signet ring"],
+                "assumptions_contain": ["(signet ring) 9.5g", "bench labor (signet ring) 3.5h", "(wedding band) 4g"],
+                "assumptions_count": {"shipping": 1}}}
+  ]
+}
