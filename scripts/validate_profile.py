@@ -38,6 +38,13 @@ def validate_profile(data: Any) -> dict[str, Any]:
     if data.get("schema_version") != 1:
         errors.append("schema_version must be 1")
 
+    rehearsal_block = data.get("rehearsal")
+    if rehearsal_block is not None:
+        if not isinstance(rehearsal_block, dict) or not isinstance(rehearsal_block.get("enabled", False), bool):
+            errors.append("rehearsal must be an object with a boolean enabled and an address")
+        elif rehearsal_block.get("enabled") and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", str(rehearsal_block.get("address") or "")):
+            errors.append("rehearsal.enabled needs rehearsal.address, the address the rehearsal inquiries come from")
+
     mode = _read_path(data, "shop.mode")
     if mode is not None and mode != "retailer":
         # WORKFLOW.md: retail only. A missing mode means retailer.

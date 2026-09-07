@@ -28,6 +28,7 @@ import gateway_token
 import inbox_claim
 import inbox_monitor
 import owner_questions
+import rehearsal
 import run_lease
 
 PARKING_KINDS = {"missing_rate", "same_sender", "unclear_reply", "followup_stalled", "stuck_claim", "rendering_next"}
@@ -49,6 +50,7 @@ def _lines(workspace: Path) -> dict[str, str]:
     return {
         "requeue": f"python3 {base}/scripts/doctor.py --workspace {workspace} --requeue '<gmail-id>'",
         "answer": f"python3 {base}/scripts/workflow_safe.py answer-question --workspace {workspace} --base-dir {base} --question '<CODE>' --answer '<words>'",
+        "rehearsal_off": f"python3 {base}/scripts/rehearsal.py --workspace {workspace} --off",
     }
 
 
@@ -63,6 +65,11 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
     def add(code: str, subject: str, detail: str, repair: str, level: str = "repair") -> None:
         findings.append({"code": code, "level": level, "subject": subject, "detail": detail[:300], "repair": repair})
 
+    state = rehearsal.apply(workspace)
+    if state["enabled"]:
+        held = rehearsal.held(monitor_root, claim_root)
+        add("rehearsal_mode", "REHEARSAL MODE", rehearsal.banner(state) + f"; {len(held)} message(s) held for live",
+            lines["rehearsal_off"], level="info")
     try:
         items = inbox_monitor.all_queue_items(monitor_root)
     except (OSError, ValueError) as exc:
@@ -94,6 +101,8 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
             continue
         if claim is None:
             continue
+        if claim.get("status") == "awaiting_owner" and claim.get("reason_code") == rehearsal.HELD_REASON:
+            continue  # held for live while rehearsal is on; listed under rehearsal_mode
         if claim.get("status") == "awaiting_owner" and not open_by_message.get(message_id):
             add("parked_without_question", f"message {message_id}",
                 f"parked ({claim.get('reason_code') or 'no reason'}) but no open question will resume it",

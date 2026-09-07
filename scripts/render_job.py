@@ -22,6 +22,7 @@ import estimate_record
 import inbox_claim
 import inbox_monitor
 import inbox_watcher
+import rehearsal
 import judge
 import pipeline
 import run_lease
@@ -37,6 +38,7 @@ def run(
 ) -> dict[str, Any]:
     workspace = workspace.resolve()
     p = inbox_watcher.paths_for(workspace)
+    rehearsal.apply(workspace)
     desk = workspace / "estimate-desk"
     key = inbox_claim.claim_key(message_id)[:16]
     with run_lease.hold(desk, "render-job", key, seconds=LEASE_SECONDS):

@@ -21,6 +21,7 @@ import judge
 import kolo_safe
 import pipeline
 import slots
+import rehearsal
 import validate_profile
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -38,6 +39,10 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
     def add(name: str, status: str, detail: str = "") -> None:
         out.append({"check": name, "status": status, "detail": detail[:200]})
 
+    # Rehearsal first, in capitals: it must be impossible to mistake for live.
+    state = rehearsal.apply(workspace)
+    if state["enabled"]:
+        add("REHEARSAL MODE", "WARN", rehearsal.banner(state))
     # Profile
     try:
         profile = validate_profile.load_profile(desk / "shop-profile.json")

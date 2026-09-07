@@ -44,8 +44,12 @@ def require_message_id(value: Any, field: str) -> str:
     return value
 
 
+SUBJECT_PREFIX = ""  # "[REHEARSAL] " while rehearsal mode is on (rehearsal.apply)
+
+
 def reply_subject(original_subject: str) -> str:
-    return original_subject if re.match(r"^\s*re\s*:", original_subject, re.I) else f"Re: {original_subject}"
+    subject = original_subject if re.match(r"^\s*re\s*:", original_subject, re.I) else f"Re: {original_subject}"
+    return SUBJECT_PREFIX + subject if SUBJECT_PREFIX and not subject.startswith(SUBJECT_PREFIX) else subject
 
 
 def html_body(body: str) -> str:

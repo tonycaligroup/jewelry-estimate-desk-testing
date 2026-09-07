@@ -30,6 +30,7 @@ import inbox_claim
 import inbox_monitor
 import judge
 import kolo_safe
+import rehearsal
 import pipeline
 import skill_version
 import owner_questions
@@ -214,6 +215,13 @@ def run_inline_claim(
     paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
     if not Path(paths["gmail_thread"]).exists() or not Path(paths["gmail_message"]).exists():
         gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, token or gateway_token.load_token())
+    rehearsal_state = rehearsal.load(workspace)
+    if rehearsal_state["enabled"] and rehearsal.should_hold(rehearsal_state, workflow_safe.read_object(Path(paths["gmail_message"]))):
+        # Rehearsal (ARCHITECTURE-OPTIONS.md F2): not the rehearsal address,
+        # so this is real mail; held untouched until rehearsal is off.
+        rehearsal.hold(p["monitor_root"], p["claim_root"], message_id)
+        summary["held"] = summary.get("held", 0) + 1
+        return {"message_id": message_id, "outcome": "held_for_live", "seconds": round(time.monotonic() - started, 2)}
     intake_path = Path(paths["work_dir"]) / "intake-result.json"
     if intake_path.exists():
         result = workflow_safe.read_object(intake_path)
@@ -298,6 +306,7 @@ def tick(
     judge_runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
     p = paths_for(workspace)
+    rehearsal_state = rehearsal.apply(workspace)
     summary: dict[str, Any] = {
         "version": skill_version.installed(base_dir),
         "discovered": 0,
@@ -404,6 +413,8 @@ def tick(
     # Claims this tick deferred are in flight, not stuck: the reconciler and
     # the next tick own them. The owner hears about a claim only when it
     # becomes a card or a question; the notes stay in the run log.
+    if rehearsal_state.get("enabled"):
+        notes.insert(0, rehearsal.banner(rehearsal_state) + (f"; {summary.get('held', 0)} held this tick" if summary.get("held") else ""))
     summary["notes"] = notes
     if report["message"] != "NO_REPLY" and not report.get("settled"):
         unleased = report["counts"]["processing"] - report.get("delegated", 0)

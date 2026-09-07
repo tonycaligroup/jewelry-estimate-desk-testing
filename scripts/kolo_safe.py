@@ -123,6 +123,9 @@ def _piece_words(specification: Any) -> str:
         return "a piece"
 
 
+TITLE_PREFIX = ""  # "[REHEARSAL] " while rehearsal mode is on (rehearsal.apply)
+
+
 def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     """'Price approval: a pendant in 14K yellow gold with a natural ruby 1 ct, $3,802.76'."""
     review = details.get("owner_review") if isinstance(details.get("owner_review"), dict) else {}
@@ -139,7 +142,7 @@ def approval_title(details: dict[str, Any], estimate_id: str) -> str:
         pct = f" ({profit / price * 100:.0f}%)" if price else ""
         tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}" + _assumptions(review)
     room = TITLE_LIMIT - len("Price approval: ") - len(tail)
-    return f"Price approval: {piece[:max(room, 12)]}{tail}"[:TITLE_LIMIT]
+    return TITLE_PREFIX + f"Price approval: {piece[:max(room, 12)]}{tail}"[:TITLE_LIMIT]
 
 
 TITLE_LIMIT = 700  # Kolo showed a 120-character title in full by SMS; longer is being tested
@@ -316,6 +319,7 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
         rows["Reject means"] = reject
         title = f"Appointment request: {piece}"[:120]
         reasoning = f"{customer} asked to meet ({asked_text}). {reason}."
+    title = (TITLE_PREFIX + title)[:120]
     return rows, reasoning, title
 
 
@@ -324,8 +328,8 @@ def rendering_title(details: dict[str, Any]) -> str:
     piece = str(details.get("piece") or "their estimate")[:120]
     revision = details.get("revision")
     if isinstance(revision, int) and revision > 1:
-        return f"Send renderings (revision {revision}): {piece}"[:120]
-    return f"Send renderings: {piece}"[:120]
+        return (TITLE_PREFIX + f"Send renderings (revision {revision}): {piece}")[:120]
+    return (TITLE_PREFIX + f"Send renderings: {piece}")[:120]
 
 
 def build_request_rendering_approval(
@@ -417,7 +421,7 @@ def request_rendering_approval_claimed(
 def send_owner_preview(monitor_root: Path, text: str, image: Path,
                        runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> None:
     """Show the owner one rendering in their channel (PNG inline)."""
-    run_command(["kolo", "notify-owner", "-m", text, "--file", str(image), *owner_channel_args(monitor_root)], runner=runner)
+    run_command(["kolo", "notify-owner", "-m", TITLE_PREFIX + text, "--file", str(image), *owner_channel_args(monitor_root)], runner=runner)
 
 
 REVIEW_REASON_TEXT = {
@@ -571,6 +575,11 @@ def build_update_brief(brief_id: str, status: str, result: dict[str, Any]) -> li
         "--execution-result",
         json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     ]
+
+
+def owner_text(text: str) -> str:
+    """An owner notice, prefixed while rehearsal mode is on."""
+    return TITLE_PREFIX + text
 
 
 def owner_channel_args(monitor_root: Path | None) -> list[str]:

@@ -406,13 +406,16 @@ def record_decision(
     return save(root, question)
 
 
+NOTICE_PREFIX = ""  # "[REHEARSAL] " while rehearsal mode is on (rehearsal.apply)
+
+
 def question_text(question: dict[str, Any], reminder: bool = False) -> str:
     if question["kind"] == "missing_rate":
         text = missing_rate_text(question, reminder)
     else:
         text = question["text"]
         text = f"Reminder, still waiting on this: {text}" if reminder else text
-    return with_answer_command(question, text)
+    return NOTICE_PREFIX + with_answer_command(question, text)
 
 
 def with_answer_command(question: dict[str, Any], text: str) -> str:

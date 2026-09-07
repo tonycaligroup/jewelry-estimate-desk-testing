@@ -35,6 +35,7 @@ import inbox_monitor
 import judge
 import kolo_safe
 import owner_questions
+import rehearsal
 import run_lease
 import cost_components
 import route_ownership
@@ -3082,6 +3083,9 @@ def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
     booked.add_argument("--receipt", type=Path, required=True)
     booked.add_argument("--record-output", type=Path, required=True)
     args = parser.parse_args(argv)
+    workspace_arg = getattr(args, "workspace", None) or (workspace_of(args.monitor_root) if getattr(args, "monitor_root", None) else None)
+    if workspace_arg is not None:
+        rehearsal.apply(Path(workspace_arg).resolve())
     try:
         if args.command == "send-spec-followup":
             record = send_spec_followup(args)

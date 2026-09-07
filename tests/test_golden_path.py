@@ -41,6 +41,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import activation_binding  # noqa: E402
 import artwork  # noqa: E402
 import calendar_query  # noqa: E402
+import doctor  # noqa: E402
 import estimate_record  # noqa: E402
 import gateway_token  # noqa: E402
 import gmail_safe  # noqa: E402
@@ -50,6 +51,7 @@ import inbox_watcher  # noqa: E402
 import judge  # noqa: E402
 import kolo_safe  # noqa: E402
 import owner_questions  # noqa: E402
+import readiness  # noqa: E402
 import run_lease  # noqa: E402
 import workflow_safe  # noqa: E402
 from test_runtime import IntakeTests  # noqa: E402
@@ -158,14 +160,14 @@ class World:
 
     # ---- Gmail ---------------------------------------------------------
     def customer_message(self, message_id: str, thread_id: str, body: str, subject: str = "Custom signet ring",
-                         attachments: tuple[str, ...] = ()) -> dict:
+                         attachments: tuple[str, ...] = (), sender: str | None = None) -> dict:
         self.clock_ms += 100
         parts = [{"mimeType": "text/plain", "body": {"data": b64url(body)}}]
         for name in attachments:
             parts.append({"mimeType": "image/png", "filename": name,
                           "body": {"attachmentId": f"att-{name}", "size": len(PNG)}})
         headers = {
-            "From": CUSTOMER, "To": SHOP_MAILBOX, "Subject": subject,
+            "From": sender or CUSTOMER, "To": SHOP_MAILBOX, "Subject": subject,
             "Message-ID": f"<{message_id}@example.net>",
         }
         message = {
@@ -2486,6 +2488,95 @@ class DeskExecutesApprovalsTests(SideBranchTests):
             self.assertEqual(self.execute(ws, world, card["payload"]["execute"], card)["outcome"], "already_sent")
             self.assertEqual(len(world.sent), 1)
         self.run_branch(branch)
+
+
+class RehearsalTests(SideBranchTests):
+    """ARCHITECTURE-OPTIONS.md F2: rehearsal is loud, handles one address, and holds real mail untouched."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    def test_requested_time_taken_offers_times_near_it(self) -> None:
+        pass
+
+    def test_no_time_given_offers_a_tight_spread(self) -> None:
+        pass
+
+    def test_a_day_past_the_offer_window_is_checked_and_booked_on_that_day(self) -> None:
+        pass
+
+    def test_a_taken_time_with_no_free_neighbour_offers_a_spread_instead_of_a_question(self) -> None:
+        pass
+
+    def test_calendar_failure_asks_the_owner_instead_of_filing_an_empty_card(self) -> None:
+        pass
+
+    def test_plain_band_without_stones_is_priced_without_a_stone_question(self) -> None:
+        pass
+
+    def test_vendor_mail_closes_without_a_word_to_the_owner(self) -> None:
+        pass
+
+    def test_rejected_price_card_tells_the_owner_once_and_sends_nothing(self) -> None:
+        pass
+
+    def test_rejecting_the_fresh_price_card_asks_again_and_handle_myself_retires_it(self) -> None:
+        pass
+
+    def test_rehearsal_handles_the_owners_mail_loudly_and_holds_everyone_elses_until_off(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            owner = "Tony Owner <owner@example.org>"
+            switched = json.loads(self._run(["python3", str(ROOT / "scripts" / "rehearsal.py"), "--workspace", str(ws), "--on", "--address", "owner@example.org"]))
+            self.assertTrue(switched["rehearsal"]["enabled"], switched)
+            checks = readiness.checks(ws, ROOT, "openclaw", runner=world.run)
+            self.assertEqual(checks[0]["check"], "REHEARSAL MODE", checks[0])
+            self.assertIn("owner@example.org", checks[0]["detail"])
+            # A real customer writes: discovered, held, never read, never answered.
+            world.customer_message("real1", "thread-real", "Quote please, a signet ring.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["held"], 1, json.dumps(summary)[:700])
+            self.assertEqual(summary["claimed"], 1)
+            self.assertTrue(summary["notes"] and summary["notes"][0].startswith("REHEARSAL MODE"), summary["notes"])
+            self.assertEqual(world.sent, [])
+            self.assertEqual(world.cards, [])
+            claim = self.claim(ws, "real1")
+            self.assertEqual((claim["status"], claim["reason_code"]), ("awaiting_owner", "held_for_live"))
+            findings = doctor.scan(ws)
+            self.assertEqual([f["code"] for f in findings if f["level"] != "info"], [], "held mail is not a repair item")
+            self.assertIn("1 message(s) held for live", [f["detail"] for f in findings if f["code"] == "rehearsal_mode"][0])
+            # The owner's own inquiry runs the whole path, marked everywhere.
+            world.spec = {
+                "piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                "setting_style": "bead set", "engraving": "our logo on the face",
+                "accent_stones": "small lab-grown diamonds along the shoulders",
+                "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS",
+            }
+            world.customer_message("own1", "thread-own", "Please quote a 14k yellow gold signet ring, size 10, logo on the face, "
+                                   "small lab-grown diamonds G VS bead set on the shoulders.\n\nTony", sender=owner)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            card = world.cards[-1]
+            self.assertTrue(card["title"].startswith("[REHEARSAL] Price approval:"), card["title"])
+            world.approve(card)
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), 1)
+            self.assertTrue(world.sent[-1]["subject"].startswith("[REHEARSAL] "), world.sent[-1]["subject"])
+            self.assertIn("owner@example.org", world.sent[-1]["to"])
+            # Off: the held mail is released and read on the next tick, with no mark on anything.
+            switched = json.loads(self._run(["python3", str(ROOT / "scripts" / "rehearsal.py"), "--workspace", str(ws), "--off"]))
+            self.assertEqual(switched["released"], ["real1"], switched)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["message_id"] for i in summary["inline"]], ["real1"], summary)
+            self.assertNotIn("REHEARSAL", json.dumps(summary["notes"]))
+            self.assertTrue(world.cards[-1]["title"].startswith("Price approval:"), world.cards[-1]["title"])
+            self.assertEqual(readiness.checks(ws, ROOT, "openclaw", runner=world.run)[0]["check"], "shop profile")
+        self.run_branch(branch)
+
+    def _run(self, argv: list[str]) -> str:
+        completed = subprocess.run(argv, capture_output=True, text=True, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        return completed.stdout
 
 
 class SameSenderTests(SideBranchTests):
