@@ -190,6 +190,10 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   **Brief ID:** <uuid> ... **Execution Payload:** ```json {...}``` ... report
   the result using `kolo update-brief`". The skill's SKILL.md must tell that
   session exactly one command to run per payload kind. **verified**
+- A skill can rehearse a new version safely by filtering on the sender
+  address at claim time and prefixing every card title, subject, and notice
+  (`[REHEARSAL]`); Kolo itself has no test mode, so the mark must be the
+  skill's. **built 6 Sep, jewelry desk 4.12.0**
 - `kolo --help` (6 Sep 2026): no command reads a brief back; the brief
   surface is `request-approval`, `update-brief`, and `audit-query`. A skill
   cannot verify an edited payload from the trail, so treat cards as binary

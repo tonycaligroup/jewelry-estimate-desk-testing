@@ -381,6 +381,31 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.12.0 (built 6 September 2026): everything still open, as one system (RELEASE-PLAN-4.12.md).**
+A rejected rendering card asks `rendering_next`; the owner's words become
+`rendering-change.json`, `rendering.run_pieces(change, only, previous)`
+renders only the named pieces and keeps the others' views, the fresh card
+carries a Revised row and a revision-numbered action key, `handle myself`
+holds the images. `reading_check.compare` cross-checks the reading against
+the customer's words in code (sizes, piece count, carats, origin, own
+stone); a disagreement is a `confirm.<topic>` missing field that the
+follow-up asks and the skip path never fills. `rehearsal.py` switches a
+loud rehearsal on for one address: `rehearsal.apply` sets the title,
+subject, and notice prefixes at every entry point, `run_inline_claim` holds
+mail from anyone else as a parked claim (`held_for_live`), readiness prints
+the mode in capitals, the doctor counts held mail, `--off` requeues it.
+`estimate_record.reopen_for_change` moves a sent estimate's bound fields
+into `estimate_history` and bumps `revision`; `persist_record` and the
+review dedup honour the revision; `answer_decision` turns "change" and
+"second piece" into a reopened read on the same thread, and the estimate
+email says it is updated (the drafting check requires it). `move_route`
+carries a "same" estimate into the new thread (thread and reply headers
+move, the initiating message stays, `route_history` keeps the old); a
+pending price card still hands over. The review step now forwards its
+runner to the finalizer, and `spawn_render_job` runs through the shared
+command seam. Wholesale wording and the trade markup are gone. 532 tests;
+harness 93 of 93 through the trail.
+
 **4.11.0 (built 6 September 2026): cards are binary; the desk executes every approval.**
 The owner's rule, written into WORKFLOW.md first: a card is approve or
 reject, never edited. `brief_registry.approved_since_last_poll` now

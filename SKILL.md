@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.11.0
+version: 4.12.0
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -693,13 +693,39 @@ approve books it; an offer card lists two or three times and approve emails
 them to the customer, nothing booked. A card is never edited; a different
 price means reject, then answer the desk's question with the price.
 
+### Rehearsal mode
+
+`rehearsal.py --workspace <ws> --on --address <owner@example.com>` proves an
+install before a customer sees it: only mail from that address is handled,
+readiness prints REHEARSAL MODE in capitals as its first line, the doctor
+and every tick summary repeat it, and every card title, customer subject,
+owner notice, and preview starts with `[REHEARSAL]`. Mail from anyone else
+is discovered and then held untouched (the doctor lists the count); `--off`
+releases it and the next tick reads it in order. Rehearse from the owner's
+own address so the emails the desk sends land in their inbox. Never treat a
+`[REHEARSAL]` card as a real customer, and never run the desk live with the
+switch on.
+
+### Reading check before pricing
+
+After the model reads an inquiry, the desk compares the reading with the
+customer's own words in code (ring sizes and their count, carats, lab or
+natural, a stone of their own). A disagreement is never priced; it becomes a
+confirming line in the follow-up (`confirm.<topic>` in the missing fields),
+asked together with everything else missing.
+
 ### Owner questions: the `desk-answer` tag
 
 The desk asks the owner questions in plain words and parks the claim: which
 rate to use, whether a new thread from a known customer is the same piece or
-a new one, what an unclear reply meant, what to do after a rejected
-appointment card, what price to file after a rejected price card (a dollar
-figure, or "handle myself"), what to do when a customer asks to meet but the
+a new one ("same" carries the estimate on in the new thread; "new" quotes
+it separately), what an unclear reply meant ("change" reopens the estimate
+on the same thread and re-prices; "second piece" adds a line to it, one
+total), what to do after a rejected appointment card, what price to file
+after a rejected price card (a dollar figure, or "handle myself"), what
+should change after a rejected rendering card (the owner's words, naming
+the piece for a set, and only that piece is rendered again; or "handle
+myself"), what to do when a customer asks to meet but the
 calendar offers no free time (or could not be read), and what to do when a
 customer was asked for details once and replied without giving them, and
 what to do when a card's command failed part way (reply "retry", "release"

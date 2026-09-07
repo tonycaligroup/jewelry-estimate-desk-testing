@@ -11,13 +11,13 @@ rule is new it is written there first (section 12).
 
 | # | Item | Rule (WORKFLOW.md) | Status |
 |---|---|---|---|
-| 1 | Rendering reject loop: reject, "what should change", re-render that piece, fresh card | 6.6, 6.10 | to build |
-| 2 | Reading check: the model's reading cross-checked against the customer's words before pricing | 6.2 ("nothing invented") | to build (E') |
-| 3 | Rehearsal mode: loud, one named address, real mail untouched | 10, 6.5 | to build (F2) |
-| 4 | After an estimate, "change" reopens the gate on the thread; "second piece" adds a line | 6.8, multi-piece rule | to build |
-| 5 | Known customer on a new thread, "same": continue, do not hand over | 6.1 | to build (awaiting owner's answer) |
-| 6 | Wholesale wording and the trade markup removed; stale "stage 3 autonomy" note corrected | 1, 12 | to build |
-| 7 | Watcher schedule: 24/7 every 2 minutes vs shop hours | 10 | owner's choice, config only |
+| 1 | Rendering reject loop: reject, "what should change", re-render that piece, fresh card | 6.6, 6.10 | built (4.12.0) |
+| 2 | Reading check: the model's reading cross-checked against the customer's words before pricing | 6.2 ("nothing invented") | built (E', 4.12.0) |
+| 3 | Rehearsal mode: loud, one named address, real mail untouched | 10, 6.5 | built (F2, 4.12.0); real mail held, released on off |
+| 4 | After an estimate, "change" reopens the gate on the thread; "second piece" adds a line | 6.8, multi-piece rule | built (4.12.0) |
+| 5 | Known customer on a new thread, "same": continue, do not hand over | 6.1 | built (4.12.0); a pending price card still hands over |
+| 6 | Wholesale wording and the trade markup removed; stale "stage 3 autonomy" note corrected | 1, 12 | built (4.12.0) |
+| 7 | Watcher schedule: 24/7 every 2 minutes vs shop hours | 10 | owner's choice, config only; open |
 
 ## 1. Rendering reject loop
 

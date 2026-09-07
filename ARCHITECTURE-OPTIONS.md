@@ -199,7 +199,9 @@ desk's question with the price; a fresh binary card follows (4.11.0).
 ## 5b. Built
 
 4.10.0, 6 September 2026: A' tier 1, C', D, and F1, on the full suite and
-the fault harness. The price-card experiment (tier 2) and E', F2 remain.
+the fault harness. 4.11.0: A' tier 2 by the binary-card rule (5c). 4.12.0:
+E' (`reading_check.py`) and F2 (`rehearsal.py`), with the rest of the open
+list in RELEASE-PLAN-4.12.md. Nothing from this document remains unbuilt.
 
 ## 6. Decision
 

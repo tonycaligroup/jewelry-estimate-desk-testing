@@ -37,6 +37,18 @@ use Kolo's "Edit Intent" on a card, because I send exactly what the card
 says. To change a price, reject the card and answer my question with the
 price you want; a fresh card comes back at that price with the same cost
 sheet and the new margin shown, and nothing goes out until you approve it.
+Reject a rendering card and I ask what should change; tell me in words
+(name the piece if it is a set) and I render that piece again and bring
+you a fresh card. After an estimate, if a customer changes the design I
+ask you; say "change" and I reopen it on the same thread and bring a new
+price; say "second piece" and I add it as another line with one total.
+If a known customer writes in a brand-new thread I ask "same or new";
+"same" carries the estimate on in the new thread.
+
+Before a new version of me goes live, put me in rehearsal: I then handle
+only mail from the address you name (use your own), every card and subject
+is marked [REHEARSAL], and everyone else's mail waits untouched until you
+switch rehearsal off.
 
 One thing I do on my own: when someone writes "I want a custom ring"
 without saying what metal, what size, or what stone, I email them those

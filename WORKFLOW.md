@@ -436,7 +436,15 @@ closed by follow-up changes:
   is withdrawn. Every approval is executed by the desk from the audit
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
-  price to file; the fresh brief at that price is the next change to build.
+  price to file and a fresh brief at that price (built 6 September 2026).
+- Built 6 September 2026 (4.12.0): a rejected rendering card asks what
+  should change and only the named piece is rendered again (6.6); the
+  model's reading is cross-checked against the customer's words before any
+  price and a disagreement is confirmed in the follow-up (6.2); after an
+  estimate, "change" reopens the gate on the same thread and "second piece"
+  adds a line with one total (6.8); a known customer's "same" on a new
+  thread carries the estimate on there (6.1); rehearsal mode handles one
+  named address and holds everyone else's mail untouched (10, 6.5).
 
 - Renderings are approval-gated since 3 September 2026: the owner sees the
   views in chat and approves a card before anything is emailed.
