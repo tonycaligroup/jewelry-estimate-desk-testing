@@ -336,16 +336,8 @@ class World:
             return ok(argv, json.dumps({"jobs": []}))
         if argv[1:3] == ["cron", "create"]:
             name = flag(argv, "--name") or ""
-            if name.startswith("jed-render-"):
-                import render_job
-
-                parts = shlex.split(flag(argv, "--command") or "")
-                opts = {parts[i]: parts[i + 1] for i in range(len(parts) - 1) if parts[i].startswith("--")}
-                self.render_jobs.append(opts)
-                job_id = f"job-render-{len(self.render_jobs)}"
-                # The job runs later on the pod; here it runs now, with the same fakes.
-                self._pending_render_jobs.append(opts)
-                return ok(argv, json.dumps({"id": job_id, "name": name}))
+            # No one-shot render jobs any more: a rendering runs inside the
+            # watcher, one view per tick. Any job creation is unexpected.
             self.spawned.append(argv)
             return ok(argv, json.dumps({"id": "job-unexpected", "name": name}))
         self.other.append(argv)
@@ -557,21 +549,24 @@ class GoldenPathTests(unittest.TestCase):
         )
 
     def run_render_jobs(self, ws: Path, world: World) -> None:
-        """The render jobs the tick spawned, run the way the pod runs them a few seconds later."""
-        import render_job
+        """Kept for callers: renderings no longer run in jobs; `tick` carries them view by view."""
+        return None
 
-        while world._pending_render_jobs:
-            opts = world._pending_render_jobs.pop(0)
-            try:
-                render_job.run(ws, ROOT, opts["--message-id"], opts["--estimate-id"], "openclaw", runner=world.run, judge_runner=world.run)
-            except (OSError, ValueError, subprocess.CalledProcessError, judge.JudgmentError) as exc:
-                # On the pod the job process exits non-zero; the tick sees the noted attempt.
-                world.failed_render_jobs.append(str(exc)[:200])
+    def one_tick(self, ws: Path, world: World) -> dict:
+        return inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t", judge_runner=world.run)
 
     def tick(self, ws: Path, world: World) -> dict:
-        summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t",
-                                     judge_runner=world.run)
-        self.run_render_jobs(ws, world)
+        """One tick, then the ticks that queue right behind it while a rendering is under way.
+
+        On the pod the next scheduled tick waits for the running one and
+        starts the moment it ends, so a rendering's views follow each other
+        back to back; this helper does the same, bounded.
+        """
+        summary = self.one_tick(ws, world)
+        for _ in range(8):
+            if not any(i.get("outcome") == "rendering_in_progress" for i in summary["inline"]):
+                break
+            summary = self.one_tick(ws, world)
         self.assertEqual(summary["inline_failures"], 0, summary)
         self.assertEqual(summary["spawn_failures"], 0, summary)
         self.assertEqual(summary["manual_review"], 0, summary)
@@ -1323,7 +1318,7 @@ class OwnStoneAndStallTests(SideBranchTests):
             with patch.object(inbox_watcher, "TRANSIENT_ATTEMPTS", 2), patch.object(rendering, "DESCRIBE_PAUSE_SECONDS", 0):
                 first = None
                 for _ in range(4):
-                    summary = self.tick(ws, world)
+                    summary = self.one_tick(ws, world)
                     if summary["stuck"]:
                         first = summary["stuck"][0]
                         break
@@ -1333,9 +1328,10 @@ class OwnStoneAndStallTests(SideBranchTests):
                 # The owner says retry; the tool is still down; the desk must ask again, with a new code.
                 answered = self.answer(ws, "retry")
                 self.assertEqual(answered["decision"], "retry", answered)
+                self.assertEqual(answered["pipeline"], "queued_for_tick", answered)
                 second = None
                 for _ in range(4):
-                    summary = self.tick(ws, world)
+                    summary = self.one_tick(ws, world)
                     if summary["stuck"]:
                         second = summary["stuck"][0]
                         break
@@ -1349,7 +1345,7 @@ class OwnStoneAndStallTests(SideBranchTests):
                 self.assertEqual(doctor.requeue(ws, "s2")["outcome"], "requeued")
                 self.assertEqual(self.claim(ws, "s2").get("inline_attempts", 0), 0, "a requeue resets the retry budget")
                 for _ in range(3):
-                    summary = self.tick(ws, world)
+                    summary = self.one_tick(ws, world)
                     if world.cards and world.cards[-1]["kind"] == "send_rendering":
                         break
                 self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)
@@ -1939,7 +1935,9 @@ class StuckClaimTests(SideBranchTests):
             # The owner says retry: the claim runs to its end (a price card for a complete band).
             answered = self.answer(ws, "retry")
             self.assertEqual(answered["decision"], "retry", answered)
-            self.assertEqual(answered.get("pipeline"), "approval_requested", answered)
+            self.assertEqual(answered.get("pipeline"), "queued_for_tick", "the retry runs in the tick, not the session")
+            fourth = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in fourth["inline"]], ["approval_requested"], fourth)
             self.assertEqual(self.claim(ws, "k1")["status"], "processed")
             self.assertTrue(world.cards)
         self.run_branch(branch)
@@ -2351,7 +2349,7 @@ class TwoPieceTests(SideBranchTests):
             answered = self.answer(ws, "make the band wider and flatter")
             self.assertEqual(answered["outcome"], "re_render_started", answered)
             self.assertEqual(answered["pieces"], ["wedding band"])
-            self.run_render_jobs(ws, world)
+            self.tick(ws, world)
             self.assertEqual(len(world.renders), renders_before + 2, "only the band's two views are rendered again")
             self.assertTrue(any("wider and flatter" in flag(argv, "--prompt") for argv in world.renders[-2:]), "the owner's words reach the prompt")
             fresh = world.cards[-1]

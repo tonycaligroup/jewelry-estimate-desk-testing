@@ -154,3 +154,17 @@ autonomy exists in code; bookings are card-gated at every stage).
 once to 4.12.0. Suite and harness green before publish; ARCHITECTURE.md
 gets one note; SKILL.md, OWNER-GUIDE, HANDOFF, playbook updated in the same
 commit.
+
+## 8. Follow-up, 7 September 2026: rendering shape
+
+The one-shot render job produced four live defects on 6 September (a model
+resolved differently in its environment, a target-less delivery step that
+marked every finished job errored so it stayed in the owner's routines
+list, images refused by write-once slot files on a revision, and a job
+that died without telling anyone). Options weighed with the owner: keep the
+jobs with fixes; retire them and raise the watcher's clock (a rebind); a
+second permanent routine; or render one view per tick inside the watcher.
+Chosen: one view per tick inside the watcher, the safest by the measures
+that bit us: one environment, nothing created on the instance, every step
+small and resumable, nothing side by side. Built and green (538 tests,
+harness 96/96), unpublished until the owner decides.

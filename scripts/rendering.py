@@ -325,7 +325,7 @@ def run_pieces(
     return combined
 
 
-def run(
+def plan_piece(
     specification: dict[str, Any] | str,
     out_dir: Path,
     openclaw: str = "openclaw",
@@ -333,13 +333,15 @@ def run(
     archetype: str | None = None,
     context: str = "",
     model: str | None = None,
-    vision_model: str | None = DEFAULT_VISION_MODEL,
-    image_model: str | None = None,
     runner: Runner = subprocess.run,
-    max_regenerations: int = 1,
     views: int = 2,
 ) -> dict[str, Any]:
-    """Plan, render two views, check each, regenerate a failing one once. Returns the report."""
+    """The plan for one piece and the views to render from it, nothing rendered yet.
+
+    One model call. The result is plain data that can be written to disk and
+    picked up by a later run: each view carries its slot, prompt, plan, and
+    reference files, so the views can be rendered one at a time across ticks.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     if archetype:
         known = archetypes()
@@ -356,32 +358,68 @@ def run(
     if arch.get("exemplar"):
         refs.append(Path(arch["exemplar"]))
     prompts = build_prompts(plan, specification, artwork is not None, bool(arch.get("exemplar")))[:max(1, views)]
-    report: dict[str, Any] = {"plan": plan, "prompts": prompts, "references": [str(r) for r in refs], "views": []}
+    return {
+        "plan": plan, "prompts": prompts, "references": [str(r) for r in refs], "out_dir": str(out_dir),
+        "views": [{"slot": slot, "prompt": prompt, "out_dir": str(out_dir)} for slot, prompt in enumerate(prompts, start=1)],
+    }
 
-    def one_view(slot: int, prompt: str) -> dict[str, Any]:
-        attempts = []
-        current_prompt = prompt
-        image = None
-        check = None
-        for attempt in range(max_regenerations + 1):
-            image = render(current_prompt, refs, out_dir / f"view-{slot}-try-{attempt + 1}.png", openclaw, runner, image_model)
-            with _CHECK_LOCK:
-                check = check_image(image, plan, openclaw, runner, vision_model, artwork)
-            attempts.append({"image": str(image), "check": check, "prompt": current_prompt})
-            if not check["failed"]:
-                break
-            problems = "; ".join(f"{cid}: {check['notes'].get(cid, 'failed')}" for cid in check["failed"])
-            current_prompt = prompt + f" Correct these problems from the previous attempt: {problems}."
-        return {
-            "slot": slot, "image": str(image), "passed": not check["failed"], "failed": check["failed"],
-            "unsure": check["unsure"], "notes": check["notes"], "attempts": len(attempts), "history": attempts,
-            **({"unchecked": True, "check_error": check.get("error")} if check.get("unchecked") else {}),
-        }
 
-    # The image calls run side by side; the vision checks run one at a time
-    # under a lock, since two at once is what the provider refused.
-    with ThreadPoolExecutor(max_workers=max(1, len(prompts))) as pool:
-        futures = [pool.submit(one_view, slot, prompt) for slot, prompt in enumerate(prompts, start=1)]
+def render_view(
+    view: dict[str, Any], plan: dict[str, Any], refs: list[Path], openclaw: str = "openclaw",
+    artwork: Path | None = None, vision_model: str | None = DEFAULT_VISION_MODEL, image_model: str | None = None,
+    runner: Runner = subprocess.run, max_regenerations: int = 1,
+) -> dict[str, Any]:
+    """Render one planned view, check it, regenerate a failing one once. One view, one tick's worth of work."""
+    out_dir = Path(view["out_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    slot = int(view["slot"])
+    prompt = str(view["prompt"])
+    attempts = []
+    current_prompt = prompt
+    image = None
+    check = None
+    for attempt in range(max_regenerations + 1):
+        image = render(current_prompt, refs, out_dir / f"view-{slot}-try-{attempt + 1}.png", openclaw, runner, image_model)
+        with _CHECK_LOCK:
+            check = check_image(image, plan, openclaw, runner, vision_model, artwork)
+        attempts.append({"image": str(image), "check": check, "prompt": current_prompt})
+        if not check["failed"]:
+            break
+        problems = "; ".join(f"{cid}: {check['notes'].get(cid, 'failed')}" for cid in check["failed"])
+        current_prompt = prompt + f" Correct these problems from the previous attempt: {problems}."
+    return {
+        "slot": slot, "image": str(image), "passed": not check["failed"], "failed": check["failed"],
+        "unsure": check["unsure"], "notes": check["notes"], "attempts": len(attempts), "history": attempts,
+        **({"unchecked": True, "check_error": check.get("error")} if check.get("unchecked") else {}),
+    }
+
+
+def run(
+    specification: dict[str, Any] | str,
+    out_dir: Path,
+    openclaw: str = "openclaw",
+    artwork: Path | None = None,
+    archetype: str | None = None,
+    context: str = "",
+    model: str | None = None,
+    vision_model: str | None = DEFAULT_VISION_MODEL,
+    image_model: str | None = None,
+    runner: Runner = subprocess.run,
+    max_regenerations: int = 1,
+    views: int = 2,
+) -> dict[str, Any]:
+    """Plan, render the views, check each, regenerate a failing one once. Returns the report.
+
+    The lab entry point (one call, side by side). The desk itself renders
+    one view per tick through `plan_piece` and `render_view`.
+    """
+    planned = plan_piece(specification, out_dir, openclaw, artwork=artwork, archetype=archetype, context=context,
+                         model=model, runner=runner, views=views)
+    refs = [Path(r) for r in planned["references"]]
+    report: dict[str, Any] = {"plan": planned["plan"], "prompts": planned["prompts"], "references": planned["references"], "views": []}
+    with ThreadPoolExecutor(max_workers=max(1, len(planned["views"]))) as pool:
+        futures = [pool.submit(render_view, view, planned["plan"], refs, openclaw, artwork, vision_model, image_model,
+                               runner, max_regenerations) for view in planned["views"]]
         report["views"] = [f.result() for f in futures]
     report["all_passed"] = all(v["passed"] for v in report["views"])
     return report

@@ -68,9 +68,14 @@ class Harness(GoldenPathTests):
     """Drives the desk without the golden path's own assertions, so faults can surface."""
 
     def raw_tick(self, ws: Path, world: World) -> dict:
+        """One tick, then the ticks queued right behind it while a rendering is under way (as on the pod)."""
         summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t",
                                      judge_runner=world.run)
-        self.run_render_jobs(ws, world)
+        for _ in range(8):
+            if not any(i.get("outcome") == "rendering_in_progress" for i in summary["inline"]):
+                break
+            summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=world.run, token="t",
+                                         judge_runner=world.run)
         return summary
 
     def raw_execute(self, ws: Path, world: World, card: dict) -> tuple[int, str]:

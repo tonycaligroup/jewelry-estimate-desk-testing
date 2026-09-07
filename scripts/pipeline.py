@@ -209,27 +209,33 @@ def _image_generate_argv(prompt: str, openclaw: str) -> list[str]:
     return [openclaw, "infer", "image", "generate", "--prompt", prompt, "--json"]
 
 
-def render_and_send(
-    p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any],
-    paths: dict[str, str], openclaw: str, command_runner: Runner,
-    model: str | None = None, judge_runner: Runner | None = None,
+PROGRESS_FILE = "rendering-progress.json"
+
+
+def _render_settings(p: dict[str, Path]) -> tuple[str | None, str | None]:
+    """The vision and image models: the profile may pin them; the defaults are named, never the environment's guess."""
+    import rendering
+
+    try:
+        profile_now = workflow_safe.read_object(p["shop_profile"]) if p.get("shop_profile") else {}
+    except (OSError, ValueError):
+        profile_now = {}
+    settings_block = profile_now.get("rendering") or {}
+    vision_model = str(settings_block.get("vision_model") or "").strip() or rendering.DEFAULT_VISION_MODEL
+    image_model = str(settings_block.get("image_model") or "").strip() or None
+    return vision_model, image_model
+
+
+def _plan_rendering(
+    p: dict[str, Path], message_id: str, record: dict[str, Any], paths: dict[str, str], openclaw: str,
+    command_runner: Runner, model: str | None, art: Path | None,
 ) -> dict[str, Any]:
-    """Plan, render two checked views, materialize them, and ask the owner."""
-    import artwork as artwork_module
+    """The whole rendering as data: every view to render, in order, plus the views a revision keeps."""
     import rendering
 
     work_dir = Path(paths["work_dir"])
     thread = workflow_safe.read_object(Path(paths["gmail_thread"])) if Path(paths["gmail_thread"]).exists() else {}
-    art = None
-    try:
-        import gateway_token  # local import; only needed when the thread carries images
-
-        found = artwork_module.collect(thread, work_dir / "artwork", gateway_token.load_token())
-        art = found[-1] if found else None
-    except Exception:  # noqa: BLE001 - artwork is a bonus; a render without it still goes to the owner
-        art = None
-    # A revision: the owner passed on the last views and said what should
-    # change. Only the pieces their words name are rendered again.
+    context = judge.thread_text(gmail_text.thread_digest(thread, message_id)) if thread else ""
     change_path = work_dir / "rendering-change.json"
     change = workflow_safe.read_object(change_path) if change_path.exists() else {}
     note = str(change.get("note") or "").strip()
@@ -240,33 +246,107 @@ def render_and_send(
         previous = workflow_safe.read_object(report_path) if report_path.exists() else None
         labels = [str(pc.get("label") or "") for pc in (previous or {}).get("pieces") or []]
         only = list(change.get("pieces") or []) or rendering.pieces_named(note, labels)
-    # The vision model that grades the views: the profile may pin one
-    # (rendering.vision_model); otherwise the desk's default, which is the
-    # model the pod's own image tool reports, never the job environment's
-    # guess (a one-shot job resolved a model the instance had no right to
-    # use, 6 September 2026).
-    try:
-        profile_now = workflow_safe.read_object(p["shop_profile"]) if p.get("shop_profile") else {}
-    except (OSError, ValueError):
-        profile_now = {}
-    rendering_settings = profile_now.get("rendering") or {}
-    vision_model = str(rendering_settings.get("vision_model") or "").strip() or rendering.DEFAULT_VISION_MODEL
-    image_model = str(rendering_settings.get("image_model") or "").strip() or None
-    try:
-        report = rendering.run_pieces(
-            record.get("specification") or {}, work_dir / "renders", openclaw, artwork=art,
-            context=judge.thread_text(gmail_text.thread_digest(thread, message_id)) if thread else "",
-            model=model, runner=command_runner, change=note, only=only, previous=previous, vision_model=vision_model,
-            image_model=image_model,
-        )
-    except judge.JudgmentError as exc:
-        raise ValueError(f"rendering plan failed: {exc}") from exc
+    specification = record.get("specification") or {}
+    pieces = estimate_record.pieces_of(specification)
+    views_each = 2 if len(pieces) <= 2 else 1
+    set_note = " The pieces are a matching set: one design language, the same metal finish and motifs, each piece its own size." \
+        if len(pieces) > 1 and estimate_record.is_set(specification) else ""
+    kept: dict[str, list[dict[str, Any]]] = {}
+    if note and only:
+        for view in (previous or {}).get("views") or []:
+            if view.get("piece") not in only and Path(str(view.get("image") or "")).exists():
+                kept.setdefault(str(view["piece"]), []).append(view)
+    plan: dict[str, Any] = {"pieces": [], "views": [], "prompts": [], "references": [],
+                            **({"revision": note, "round": int(change.get("round") or 2)} if note else {})}
+    slot = 1
+    for index, piece in enumerate(pieces[:4]):
+        label = estimate_record.piece_label(specification, index)
+        if label in kept:
+            previous_plan = next((pc.get("plan") for pc in (previous or {}).get("pieces") or [] if pc.get("label") == label), None)
+            plan["pieces"].append({"label": label, "plan": previous_plan or {}, "kept": True})
+            for view in kept[label]:
+                plan["views"].append({**view, "slot": slot, "piece": label, "kept": True, "done": True})
+                slot += 1
+            continue
+        piece_spec = {**piece, "notes": (str(piece.get("notes") or "") + set_note).strip()} if len(pieces) > 1 else dict(specification)
+        if note and (not only or label in only):
+            piece_spec = rendering._with_change(piece_spec, note)
+        out_dir = work_dir / "renders" / (f"piece-{index + 1}" if len(pieces) > 1 else "")
+        try:
+            planned = rendering.plan_piece(piece_spec, out_dir, openclaw, artwork=art, context=context, model=model,
+                                           runner=command_runner, views=views_each if len(pieces) > 1 else 2)
+        except judge.JudgmentError as exc:
+            raise ValueError(f"rendering plan failed: {exc}") from exc
+        plan["pieces"].append({"label": label, "plan": planned["plan"]})
+        plan["prompts"].extend(planned["prompts"])
+        plan["references"] = planned["references"]
+        for view in planned["views"]:
+            plan["views"].append({**view, "slot": slot, "piece": label, "done": False})
+            slot += 1
+    plan["plan"] = next((pc["plan"] for pc in plan["pieces"] if pc.get("plan")), {})
+    return plan
+
+
+def render_step(
+    p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any],
+    paths: dict[str, str], openclaw: str, command_runner: Runner,
+    model: str | None = None, judge_runner: Runner | None = None,
+) -> dict[str, Any]:
+    """One tick's worth of rendering: plan on the first call, one view per call, the card when the last view is done.
+
+    Progress lives in the claim's work folder (`rendering-progress.json`), so
+    a rendering spans ticks: each call renders one view and returns
+    `rendering_in_progress`; the caller releases the claim and the next tick
+    calls again. A crash costs one view. Nothing runs outside the watcher:
+    no job, no second environment, nothing in the owner's routines list
+    (RELEASE-PLAN-4.12.md follow-up, 7 September 2026).
+    """
+    import artwork as artwork_module
+    import rendering
+
+    work_dir = Path(paths["work_dir"])
+    progress_path = work_dir / PROGRESS_FILE
+    progress = workflow_safe.read_object(progress_path) if progress_path.exists() else None
+    art = None
+    if progress is None:
+        thread = workflow_safe.read_object(Path(paths["gmail_thread"])) if Path(paths["gmail_thread"]).exists() else {}
+        try:
+            import gateway_token  # local import; only needed when the thread carries images
+
+            found = artwork_module.collect(thread, work_dir / "artwork", gateway_token.load_token())
+            art = found[-1] if found else None
+        except Exception:  # noqa: BLE001 - artwork is a bonus; a render without it still goes to the owner
+            art = None
+        progress = _plan_rendering(p, message_id, record, paths, openclaw, command_runner, model, art)
+        progress["artwork"] = str(art) if art else None
+        workflow_safe.write_private(progress_path, progress)
+    art = Path(progress["artwork"]) if progress.get("artwork") else None
+    vision_model, image_model = _render_settings(p)
+    pending = [v for v in progress["views"] if not v.get("done")]
+    if pending:
+        view = pending[0]
+        piece_plan = next((pc.get("plan") for pc in progress["pieces"] if pc.get("label") == view.get("piece")), progress.get("plan") or {})
+        refs = [Path(r) for r in progress.get("references") or []]
+        result = rendering.render_view(view, piece_plan or {}, refs, openclaw, artwork=art, vision_model=vision_model,
+                                       image_model=image_model, runner=command_runner)
+        view.update({**result, "slot": view["slot"], "piece": view.get("piece"), "done": True})
+        workflow_safe.write_private(progress_path, progress)
+        remaining = len([v for v in progress["views"] if not v.get("done")])
+        if remaining:
+            return {"outcome": "rendering_in_progress", "done": len(progress["views"]) - remaining, "of": len(progress["views"]), "next": "again"}
+    report = {
+        "plan": progress.get("plan") or {}, "prompts": progress.get("prompts") or [], "references": progress.get("references") or [],
+        "pieces": progress["pieces"], "views": [{k: v for k, v in view.items() if k != "done"} for view in progress["views"]],
+        **({"revision": progress["revision"]} if progress.get("revision") else {}),
+    }
+    report["all_passed"] = all(v.get("passed") for v in report["views"])
+    note = str(progress.get("revision") or "")
     images: list[Path] = []
     # The slot files are write-once (a different image in a slot is refused).
     # A revision replaces the images the owner passed on, and a run after a
     # crash replaces what the dead run left; either way the previous file is
     # kept beside the slot as history, never sent, never lost.
-    label = f"r{int(change.get('round') or 2) - 1}" if note else "prev"
+    label = f"r{int(progress.get('round') or 2) - 1}" if note else "prev"
     for slot in range(1, 5):
         slot_path = Path(paths.get(f"rendering_image_{slot}") or "")
         if slot_path.is_file():
@@ -290,6 +370,7 @@ def render_and_send(
         for v in report["views"]
     )
     workflow_safe.write_private(work_dir / "rendering-report.json", report)
+    progress_path.unlink(missing_ok=True)
     # WORKFLOW.md 6.6: renderings are approval-gated at every stage. The owner
     # sees the views in chat and gets a card; nothing reaches the customer
     # until they approve.
@@ -299,8 +380,20 @@ def render_and_send(
         runner=command_runner, checker=checker,
         archetype=", ".join(dict.fromkeys(str((pc.get("plan") or {}).get("archetype") or "")
                                           for pc in report.get("pieces") or [{"plan": report["plan"]}])).strip(", "),
-        revised=note or None, revision=int(change.get("round") or 1) if note else 1,
+        revised=note or None, revision=int(progress.get("round") or 1) if note else 1,
     ))
+
+
+def render_and_send(
+    p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any],
+    paths: dict[str, str], openclaw: str, command_runner: Runner,
+    model: str | None = None, judge_runner: Runner | None = None,
+) -> dict[str, Any]:
+    """Every step at once: the lab and the tests call this; the desk calls `render_step` once per tick."""
+    while True:
+        done = render_step(p, message_id, estimate_id, record, paths, openclaw, command_runner, model=model, judge_runner=judge_runner)
+        if done.get("outcome") != "rendering_in_progress":
+            return done
 
 
 def _last_offered_times(p: dict[str, Path], estimate_id: str | None) -> list[dict[str, Any]]:
@@ -387,11 +480,7 @@ def post_estimate_actions(
         ))
         if not wants_rendering:
             return {"outcome": "appointment_approval_requested", "next": "done"}
-    if settings(p["monitor_root"].resolve().parent).get("render_job", True):
-        # The rendering runs in its own job with its own clock; the tick
-        # spawns it and moves on (ARCHITECTURE-OPTIONS.md C').
-        return {"outcome": "render_job_requested", "next": "spawn_render", "estimate_id": estimate_id}
-    return render_and_send(p, message_id, estimate_id, record, paths, openclaw, command_runner, model=model, judge_runner=judge_runner)
+    return render_step(p, message_id, estimate_id, record, paths, openclaw, command_runner, model=model, judge_runner=judge_runner)
 
 
 def process_claim(

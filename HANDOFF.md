@@ -75,6 +75,7 @@ otherwise.
 - Cards are binary (6 September 2026): the desk executes every approval
   from the audit trail, price cards included; a rejected price card asks
   the owner for the price and files a fresh card at it (`price_next`).
+- Unpublished on master (7 September 2026): renderings run one view per tick inside the watcher (`pipeline.render_step`, `rendering-progress.json`); the one-shot render job is gone; every owner answer returns in seconds (`_hand_to_tick`, `next-step.json`). See ARCHITECTURE.md's latest note.
 - 4.12.0 (6 September 2026): rendering reject loop (`rendering_next`),
   reading check before pricing (`reading_check.py`), rehearsal mode
   (`rehearsal.py`), "change" and "second piece" reopen the estimate

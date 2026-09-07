@@ -27,6 +27,7 @@ import cron_config
 import gateway_token
 import gmail_fetch
 import inbox_claim
+import estimate_record
 import inbox_monitor
 import judge
 import kolo_safe
@@ -66,45 +67,7 @@ def paths_for(workspace: Path) -> dict[str, Path]:
     }
 
 
-RENDER_JOB_PREFIX = "jed-render-"
-RENDER_JOB_TIMEOUT_SECONDS = 900
-RENDER_JOB_LEASE_SECONDS = 1020
-
-
-def render_job_command(base_dir: Path, workspace: Path, message_id: str, estimate_id: str) -> str:
-    return (f"python3 {base_dir.resolve()}/scripts/render_job.py --workspace {workspace.resolve()} "
-            f"--base-dir {base_dir.resolve()} --message-id {message_id} --estimate-id {estimate_id}")
-
-
-def render_job_create_argv(openclaw: str, workspace: Path, message_id: str, command: str) -> list[str]:
-    """One-shot command job in the watcher's own shape: isolated, no announce, its own clock."""
-    # --best-effort-deliver: the job's own delivery step (it has no chat
-    # target) must never mark a finished job errored, or --delete-after-run
-    # does not fire and the job sits in the owner's routines list.
-    return [
-        openclaw, "cron", "create", "--at", "+5s", "--delete-after-run", "--best-effort-deliver", "--session", "isolated",
-        "--name", f"{RENDER_JOB_PREFIX}{message_id[:12]}", "--command", command,
-        "--command-cwd", str(workspace.resolve()), "--timeout-seconds", str(RENDER_JOB_TIMEOUT_SECONDS), "--json",
-    ]
-
-
-def spawn_render_job(workspace: Path, base_dir: Path, openclaw: str, message_id: str, estimate_id: str,
-                     runner: Runner = subprocess.run) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", message_id or "") or not re.fullmatch(r"jed-[0-9a-f]{16}", estimate_id or ""):
-        raise ValueError("render job needs a plain message id and an estimate id")
-    command = render_job_command(base_dir, workspace, message_id, estimate_id)
-    # One seam for every desk subprocess (the tests fake it there too).
-    completed = kolo_safe.run_command(render_job_create_argv(openclaw, workspace, message_id, command), runner=runner)
-    raw = completed.stdout or ""
-    try:
-        job = json.loads(raw[raw.find("{"):])
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError("render job creation returned no job JSON") from exc
-    job = job.get("job", job)
-    job_id = job.get("id")
-    if not isinstance(job_id, str) or not job_id:
-        raise ValueError("render job creation returned no job id")
-    return job_id
+RENDER_JOB_PREFIX = "jed-render-"  # one-shot render jobs of 4.10 to 4.12; the sweep still removes leftovers
 
 
 def sweep_worker_jobs(openclaw: str, runner: Runner = subprocess.run, now_ms: int | None = None) -> int:
@@ -231,6 +194,25 @@ def run_inline_claim(
         held = {"message_id": message_id, "outcome": "held_for_live", "seconds": round(time.monotonic() - started, 2)}
         summary["inline"].append(held)
         return held
+    progress_path = Path(paths["work_dir"]) / pipeline.PROGRESS_FILE
+    if progress_path.exists():
+        # A rendering under way (RELEASE-PLAN-4.12.md follow-up): one more
+        # view this tick, no re-reading of the customer, the card when the
+        # last view is done.
+        intake_path = Path(paths["work_dir"]) / "intake-result.json"
+        estimate_id = str((workflow_safe.read_object(intake_path) if intake_path.exists() else {}).get("estimate_id") or "")
+        if not estimate_id:
+            raise ValueError("a rendering is under way but its estimate is unknown")
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        switch = pipeline.settings(workspace / "estimate-desk")
+        done = pipeline.render_step(p, message_id, estimate_id, record, paths, openclaw, runner,
+                                    model=switch.get("model"), judge_runner=judge_runner)
+        if done.get("outcome") == "rendering_in_progress":
+            return _rendering_continues(p, message_id, claim_token, done, summary, started, calls_before)
+        calls = judge.CALL_LOG[calls_before:]
+        summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome"),
+                                  "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls)})
+        return done
     step_path = Path(paths["work_dir"]) / workflow_safe.NEXT_STEP_FILE
     if step_path.exists():
         # An owner answer left one step for the tick (a price from the
@@ -283,19 +265,8 @@ def run_inline_claim(
         workspace, base_dir, message_id, result,
         model=inline.get("model"), judge_runner=judge_runner, command_runner=runner, openclaw=openclaw,
     )
-    if done.get("outcome") == "render_job_requested":
-        # The rendering runs in its own job. Count the spawn as an attempt:
-        # a job that never finishes lapses its lease, the tick retries, and
-        # after the bound the owner is asked.
-        inbox_claim.note_inline_attempt(p["claim_root"], message_id, claim_token,
-                                        "the rendering job started but did not finish", "transient")
-        inbox_claim.delegate(p["claim_root"], message_id, claim_token, RENDER_JOB_LEASE_SECONDS)
-        job_id = spawn_render_job(workspace, base_dir, openclaw, message_id, done.get("estimate_id") or result["estimate_id"], runner=runner)
-        summary["render_jobs"].append({"message_id": message_id, "job_id": job_id})
-        calls = judge.CALL_LOG[calls_before:]
-        summary["inline"].append({"message_id": message_id, "outcome": "render_job_spawned", "job_id": job_id,
-                                  "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls)})
-        return {"outcome": "render_job_spawned", "job_id": job_id}
+    if done.get("outcome") == "rendering_in_progress":
+        return _rendering_continues(p, message_id, claim_token, done, summary, started, calls_before)
     if done.get("outcome") == "needs_worker":
         # No worker agent exists any more (ARCHITECTURE-OPTIONS.md D): this
         # is a failure like any other, retried with the bound, then asked.
@@ -304,6 +275,18 @@ def run_inline_claim(
     summary["inline"].append({"message_id": message_id, "outcome": done.get("outcome"),
                               "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls),
                               "model_seconds": round(sum(c["seconds"] for c in calls), 2)})
+    return done
+
+
+def _rendering_continues(p: dict[str, Path], message_id: str, claim_token: str, done: dict[str, Any],
+                         summary: dict[str, Any], started: float, calls_before: int) -> dict[str, Any]:
+    """A view is done and more remain: release the claim for the next tick; not a failure, not an attempt."""
+    inbox_claim.release_lease(p["claim_root"], message_id, claim_token)
+    calls = judge.CALL_LOG[calls_before:]
+    entry = {"message_id": message_id, "outcome": "rendering_in_progress", "done": done.get("done"), "of": done.get("of"),
+             "seconds": round(time.monotonic() - started, 2), "model_calls": len(calls)}
+    summary["inline"].append(entry)
+    summary["render_jobs"].append({"message_id": message_id, "done": done.get("done"), "of": done.get("of")})
     return done
 
 

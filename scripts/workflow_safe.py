@@ -404,13 +404,14 @@ def _answer_rendering_next(args: argparse.Namespace, workspace: Path, p: dict[st
     estimate_record.record_rendering_revision(p["record_root"], estimate_id, message_id, note, named or labels)
     if question["status"] == "open":
         owner_questions.record_decision(root, question, args.answer, outcome)
-    # The rendering runs where every rendering runs: a one-shot job with its
-    # own clock; the claim is leased to it until it files the fresh card.
-    inbox_claim.delegate(p["claim_root"], message_id, inbox_claim.authoritative_claim_token(p["claim_root"], message_id),
-                         cron_config.WORKER_LEASE_SECONDS)
-    job_id = inbox_watcher.spawn_render_job(workspace, args.base_dir.resolve(), args.openclaw or inbox_watcher.default_openclaw(),
-                                            message_id, estimate_id, runner=runner)
-    result.update({"outcome": "re_render_started", "job_id": job_id, "pieces": named or labels, "note": note})
+    # The rendering runs where every rendering runs: in the watcher, one
+    # view per tick. A fresh plan is made for the named pieces on the next
+    # tick; the other pieces' views are kept from the last report.
+    import pipeline  # local import: pipeline imports this module
+
+    (work_dir / pipeline.PROGRESS_FILE).unlink(missing_ok=True)
+    result.update(_hand_to_tick(p, message_id))
+    result.update({"outcome": "re_render_started", "pieces": named or labels, "note": note})
     return result
 
 
@@ -1546,17 +1547,12 @@ def _answer_stuck_claim(args: argparse.Namespace, workspace: Path, p: dict[str, 
     message_id = _question_message_id(question)
     result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "stuck_claim", "decision": outcome}
     if outcome == "retry":
-        reopened = _resume_parked_claim(p, message_id)
-        token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
-        inbox_claim.mark_inline(p["claim_root"], message_id, token, False)
+        # The retry itself runs in the tick, with its own clock and a fresh
+        # budget (a reopen clears the counters); the answer only reopens.
+        _resume_parked_claim(p, message_id)
         if question["status"] == "open":
             owner_questions.record_decision(root, question, args.answer, outcome)
-        done = inbox_watcher.run_inline_claim(
-            workspace, args.base_dir.resolve(), p, message_id, "", args.openclaw or inbox_watcher.default_openclaw(),
-            getattr(args, "runner", subprocess.run), getattr(args, "judge_runner", subprocess.run),
-            getattr(args, "token", None),
-        )
-        result["pipeline"] = done.get("outcome")
+        result.update(_hand_to_tick(p, message_id))
         return result
     if _claim_parked(p, message_id):
         _close_parked_claim(p, message_id, f"owner_decided_{outcome}")

@@ -381,6 +381,30 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished, 7 September 2026: renderings run inside the watcher, one view per tick; the whole-desk pass.**
+The one-shot render job is retired (`render_job.py`, `spawn_render_job`,
+its create argv, its lease): `rendering.plan_piece` produces the views as
+data, `rendering.render_view` renders and checks one, and
+`pipeline.render_step` keeps `rendering-progress.json` in the claim's work
+folder, rendering one view per call and filing the card when the last is
+done; `run_inline_claim` continues an unfinished rendering before anything
+else and `_rendering_continues` releases the claim between views without
+counting an attempt. The next scheduled tick starts as soon as the running
+one ends (verified 2 September), so views follow each other back to back;
+a two-view rendering is about the time of the views themselves. Nothing is
+created in the owner's routines list, there is no second environment, and
+no rebind is needed. A revision answer clears the progress file and hands
+to the tick. The whole-desk pass in the same release: every reopen clears
+the retry budget; repeat failed-command questions get their own code;
+every question-to-message lookup tolerates a round suffix; the rate,
+stalled-follow-up, and stuck-retry answers hand their step to the tick
+(`next-step.json`, `_hand_to_tick`) and the price re-file drafts nothing
+in-session, so every session-run command finishes inside the session's
+10-second detach; the tick summary records held and stepped claims; the
+profile may pin the image model. Harness: 96 combinations through the
+trail, all ok or recovered, including a crash after an image call and a
+vision check that never works.
+
 **4.12.7 (built 6 September 2026): a denied own stone is not a claim.**
 "I don't have stone of my own" matched "my own" and the stall guard asked
 the owner; `reading_check._says_own_stone` ignores a phrase preceded (within

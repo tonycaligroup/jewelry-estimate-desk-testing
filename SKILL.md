@@ -79,10 +79,8 @@ model with thinking off. If Kolo cannot verify the model, stop.
   estimate records used as the authoritative inbox-routing index.
 - `scripts/inbox_watcher.py`: the scheduled tick: validate, reconcile,
   read approvals and rejections from the audit trail, discover, claim,
-  fetch, intake, judge each claim inline, and spawn a rendering job when a
-  rendering is due.
-- `scripts/render_job.py`: one rendering in a job of its own, with its own
-  clock: renders, checks, materializes, files the card, parks the claim.
+  fetch, intake, judge each claim inline, and render one view per tick
+  when a rendering is due (progress kept in the claim's work folder).
 - `scripts/skill_version.py`: the installed version, printed by readiness,
   the doctor, and every tick summary.
 - `scripts/owner_questions.py`: plain-English owner questions (a missing
@@ -250,13 +248,16 @@ The scheduled Kolo job is a command, not a model turn. Every tick it runs
 rejections of the cards it filed and acts on them, performs discovery,
 claims one message at a time, and judges each claim inline with a few
 stateless model calls. Nothing runs through a prompt-driven agent: there
-is no worker job. A rendering does not fit the tick's five-minute clock,
-so the tick spawns `render_job.py` as a one-shot command job in its own
-shape (isolated session, no announce, a 900-second clock, deleted after
-its run); the job renders each piece, checks the views, files the card,
-and parks the claim. A claim the tick or a job cannot finish is retried
-with a bound and then becomes one question to the owner. Watcher stdout is
-the run report or `NO_REPLY`; every summary carries the installed version.
+is no worker job and no render job. A rendering does not fit one tick's
+five-minute clock, so the tick renders it one view at a time: the plan and
+each finished view are written to `rendering-progress.json` in the claim's
+work folder, the claim is released, and the next tick (which starts as
+soon as this one ends) renders the next view; when the last view is done
+the tick materializes the images, sends the previews, files the card, and
+parks the claim. Nothing is created in the owner's routines list. A claim
+the tick cannot finish is retried with a bound and then becomes one
+question to the owner. Watcher stdout is the run report or `NO_REPLY`;
+every summary carries the installed version.
 
 ### Cron discovery phase
 
@@ -303,8 +304,8 @@ from the customer's artwork with its card. Each claim ends processed,
 parked behind a question, or on a card; a claim the tick cannot finish is
 retried with a bound (six tries for a gateway or model hiccup, two for a
 refusal) and then becomes one question to the owner. No worker agent job
-exists: a rendering runs in `render_job.py`, a command job that files
-cards and never emails a customer, and everything else runs in the tick.
+and no render job exist: everything, renderings included (one view per
+tick), runs in the tick.
 
 The main session does none of this. It runs the execute line on an
 approved card, runs `answer-question` with the owner's words, and runs
