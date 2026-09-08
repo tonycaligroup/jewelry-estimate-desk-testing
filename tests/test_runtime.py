@@ -17,7 +17,7 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 from unittest.mock import Mock, patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -37,6 +37,7 @@ import inbox_claim
 import inbox_watcher
 import owner_questions
 import gmail_text
+import image_provider
 import judge
 import spec_gate
 import pipeline
@@ -9076,3 +9077,139 @@ class KnownSpecificationTests(unittest.TestCase):
         self.assertEqual(estimate_record.known_specification({"specification": thin}), thin)
         self.assertEqual(estimate_record.known_specification({"specification": thin, "reopened_for": "second_piece",
                                                               "estimate_history": [{"specification": self.QUOTED}]}), thin)
+
+
+class ImageProviderTests(unittest.TestCase):
+    """Kolo's probe, 8 September 2026: the LiteLLM proxy answers a direct generation in 11 s; the CLI took 40 to 351 s."""
+
+    ENV = {"LITELLM_BASE_URL": "http://proxy.local:4000/", "LITELLM_API_KEY": "secret-key-value"}
+
+    def _opener(self, responses: list, log: list):
+        def opener(request, timeout=None):
+            log.append({"url": request.full_url, "timeout": timeout, "auth": request.get_header("Authorization"),
+                        "type": request.get_header("Content-type"), "body": request.data})
+            status_or_body = responses.pop(0)
+            if isinstance(status_or_body, int):
+                raise HTTPError(request.full_url, status_or_body, "nope", {}, io.BytesIO(b'{"error":"rate limited"}'))
+            if status_or_body == "timeout":
+                raise TimeoutError()
+            class Resp:
+                def __init__(self, data): self._data = data
+                def read(self): return self._data
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            return Resp(json.dumps(status_or_body).encode())
+        return opener
+
+    def test_availability_follows_the_mode_and_the_environment(self) -> None:
+        self.assertTrue(image_provider.available("auto", self.ENV))
+        self.assertFalse(image_provider.available("auto", {}))
+        self.assertFalse(image_provider.available("cli", self.ENV))
+        self.assertTrue(image_provider.available("direct", self.ENV))
+        with self.assertRaises(ValueError):
+            image_provider.available("direct", {})
+        with self.assertRaises(ValueError):
+            image_provider.available("sideways", self.ENV)
+        self.assertEqual(image_provider.model_name("litellm/gpt-image-2", "x"), "gpt-image-2")
+        self.assertEqual(image_provider.model_name(None, "kolo-best-available"), "kolo-best-available")
+        self.assertEqual(image_provider.timed(None, 180), 180)
+        self.assertEqual(image_provider.timed(100, 180), 80)
+        self.assertEqual(image_provider.timed(10, 180), 20, "never under the floor")
+
+    def test_a_generation_is_posted_as_json_and_the_image_written(self) -> None:
+        log: list = []
+        png = b"\x89PNG-fake"
+        opener = self._opener([{"created": 1, "data": [{"b64_json": base64.b64encode(png).decode(), "revised_prompt": "x", "url": ""}]}], log)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = image_provider.generate("a ring", Path(tmp) / "v.png", model="litellm/gpt-image-2", timeout=42, env=self.ENV, opener=opener)
+            self.assertEqual(out.read_bytes(), png)
+        self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/images/generations")
+        self.assertEqual(log[0]["timeout"], 42.0)
+        self.assertEqual(log[0]["auth"], "Bearer secret-key-value")
+        self.assertEqual(json.loads(log[0]["body"]), {"model": "gpt-image-2", "prompt": "a ring", "size": "1024x1024", "n": 1})
+
+    def test_an_edit_with_references_is_multipart(self) -> None:
+        log: list = []
+        opener = self._opener([{"data": [{"b64_json": base64.b64encode(b"img").decode()}]}], log)
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = Path(tmp) / "logo.png"; ref.write_bytes(b"LOGO")
+            image_provider.generate("with the logo", Path(tmp) / "v.png", refs=[ref], env=self.ENV, opener=opener)
+        self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/images/edits")
+        self.assertTrue(log[0]["type"].startswith("multipart/form-data; boundary="))
+        body = log[0]["body"]
+        self.assertIn(b'name="image[]"; filename="logo.png"', body)
+        self.assertIn(b"LOGO", body)
+        self.assertIn(b'name="prompt"\r\n\r\nwith the logo', body)
+
+    def test_failures_are_transient_errors_that_never_carry_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for response, words in ((429, "answered 429"), ("timeout", "did not answer within"), ({"data": []}, "no image")):
+                opener = self._opener([response], [])
+                with self.assertRaisesRegex(OSError, words) as caught:
+                    image_provider.generate("a ring", Path(tmp) / "v.png", timeout=30, env=self.ENV, opener=opener)
+                self.assertNotIn("secret-key-value", str(caught.exception))
+        with self.assertRaisesRegex(OSError, "not configured"):
+            image_provider.generate("a ring", Path("/tmp/never.png"), env={})
+
+    def test_the_vision_check_posts_the_image_and_returns_the_text(self) -> None:
+        log: list = []
+        opener = self._opener([{"choices": [{"message": {"content": '{"answers": {"a": "yes"}, "notes": {}}'}}]}], log)
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "v.png"; image.write_bytes(b"PNGDATA")
+            text = image_provider.describe(image, "is it a ring?", model="litellm/kolo-best-available", env=self.ENV, opener=opener)
+        self.assertIn('"answers"', text)
+        body = json.loads(log[0]["body"])
+        self.assertEqual(body["model"], "kolo-best-available")
+        self.assertEqual(body["messages"][0]["content"][0]["text"], "is it a ring?")
+        self.assertTrue(body["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/chat/completions")
+
+
+class DirectRenderPathTests(unittest.TestCase):
+    """With the provider reachable, the render and check steps never touch the CLI."""
+
+    ENV = {"LITELLM_BASE_URL": "http://proxy.local:4000", "LITELLM_API_KEY": "k"}
+
+    def test_render_view_uses_the_provider_and_not_the_runner(self) -> None:
+        calls: list[str] = []
+
+        def runner(argv, **kwargs):  # noqa: ANN001, ANN003
+            raise AssertionError("the CLI must not be called on the direct path")
+
+        def fake_generate(prompt, output, model=None, refs=None, timeout=None, **kw):  # noqa: ANN001, ANN003
+            calls.append(f"generate:{int(timeout or 0)}")
+            output.parent.mkdir(parents=True, exist_ok=True); output.write_bytes(b"png")
+            return output
+
+        def fake_describe(image, prompt, model=None, timeout=None, **kw):  # noqa: ANN001, ANN003
+            calls.append(f"describe:{int(timeout or 0)}")
+            ids = re.findall(r"^- (\w+):", prompt, re.MULTILINE)
+            return json.dumps({"answers": {i: "yes" for i in ids}, "notes": {}})
+
+        arch = next(iter(rendering.archetypes()))
+        with patch.dict(os.environ, self.ENV), patch.object(image_provider, "generate", fake_generate), \
+             patch.object(image_provider, "describe", fake_describe), tempfile.TemporaryDirectory() as tmp:
+            result = rendering.render_view({"slot": 1, "prompt": "a ring", "out_dir": tmp}, {"archetype": arch}, [], "openclaw",
+                                           runner=runner, deadline=time.monotonic() + 600)
+        self.assertTrue(result["passed"])
+        self.assertEqual(calls, ["generate:180", "describe:90"])
+        # The profile may force the CLI even when the environment is set.
+        with patch.dict(os.environ, self.ENV), patch.object(rendering, "PROVIDER_MODE", "cli"):
+            self.assertFalse(image_provider.available(rendering.PROVIDER_MODE))
+
+
+class RenderingSettingsTests(unittest.TestCase):
+    def test_provider_vision_check_and_parallel_are_validated_and_read(self) -> None:
+        base = json.loads((Path(__file__).resolve().parent.parent / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
+        for block, bad in (({"provider": "sideways"}, "rendering.provider"), ({"vision_check": "no"}, "rendering.vision_check"),
+                           ({"parallel": 9}, "rendering.parallel"), ({"parallel": True}, "rendering.parallel")):
+            base["rendering"] = block
+            self.assertTrue(any(bad in e for e in validate_profile.validate_profile(base)["errors"]), block)
+        base["rendering"] = {"provider": "cli", "vision_check": False, "parallel": 3, "views_per_piece": 1}
+        self.assertFalse(any("rendering." in e for e in validate_profile.validate_profile(base)["errors"]))
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "shop-profile.json"
+            profile.write_text(json.dumps(base), encoding="utf-8")
+            self.assertEqual(pipeline._render_options({"shop_profile": profile}), {"provider": "cli", "vision_check": False, "parallel": 3})
+            profile.write_text(json.dumps({}), encoding="utf-8")
+            self.assertEqual(pipeline._render_options({"shop_profile": profile}), {"provider": "auto", "vision_check": True, "parallel": 2})

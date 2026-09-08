@@ -19,7 +19,7 @@ outcome (the table below); after it, keep the receipts.
 |---|---|---|---|---|
 | 1 | First inquiry, complete | one email with every fact | one price card within a tick; no follow-up; approve → plain-text estimate with one total; record `estimate_sent` | brief id, sent Gmail id, tick log line |
 | 2 | First inquiry, incomplete | one email missing two facts | one follow-up asking both at once, nothing else; reply → price card | follow-up Gmail id, then brief id |
-| 3 | Rendering and revision | "renderings please" after 1 | previews arrive one view per tick (a slow view may take two ticks; no cron timeout notice), then one rendering card; reject with a change → only the named piece re-rendered, a fresh card with the Revised row | brief ids, image count per view |
+| 3 | Rendering and revision | "renderings please" after 1 | previews and one rendering card within one or two ticks (the provider is called directly; through the CLI it is one view per tick); reject with a change → only the named piece re-rendered, a fresh card with the Revised row | brief ids, image count per view |
 | 4 | Change after the estimate | "make it 14k rose gold" | owner question → "change" → one updated price card; estimate says "updated" | question code, brief id |
 | 5 | Second piece | "also quote a band" | owner question → "second piece" → one card with two lines; the first piece's grams, hours, stones identical to case 1's card; shipping once; title whole | both brief ids, side by side |
 | 6 | Same customer, new thread | new subject, "same ring as before" | owner question → "same" → the estimate continues on the new thread, no second record | question code, record route_history |

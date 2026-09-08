@@ -178,6 +178,15 @@ def _inline_retry_candidates(p: dict[str, Path]) -> list[str]:
     return sorted(found)
 
 
+def _rendering_under_way(p: dict[str, Path], message_id: str) -> bool:
+    """A claim whose work folder holds rendering progress: its next step is a view, not mail."""
+    try:
+        paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
+    except (OSError, ValueError):
+        return False
+    return (Path(paths["work_dir"]) / pipeline.PROGRESS_FILE).exists()
+
+
 def _error_kind(exc: BaseException) -> str:
     if isinstance(exc, judge.JudgmentError):
         return "transient" if exc.transient else "deterministic"
@@ -402,12 +411,14 @@ def tick(
     summary["swept_jobs"] = sweep_worker_jobs(openclaw, runner=runner)
 
     # Claims the tick itself owns whose last run ended without finishing (a
-    # deferral or a crash): retry them first, with a bound, then ask.
-    for message_id in _inline_retry_candidates(p):
-        if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
-            break
-        if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
-            break
+    # deferral or a crash): retry them first, with a bound, then ask. A
+    # rendering under way goes last, after new mail: views take minutes
+    # through the CLI and must never delay a customer's message (8
+    # September 2026).
+    candidates = _inline_retry_candidates(p)
+    rendering_later = [m for m in candidates if _rendering_under_way(p, m)]
+
+    def retry_or_ask(message_id: str) -> None:
         claim = inbox_claim.read_state(inbox_claim.claim_path(p["claim_root"], message_id))
         attempts = int(claim.get("inline_attempts") or 0)
         limit = DETERMINISTIC_ATTEMPTS if claim.get("last_error_kind") == "deterministic" else TRANSIENT_ATTEMPTS
@@ -415,9 +426,16 @@ def tick(
             asked = workflow_safe.ask_stuck_claim(p, message_id, str(claim.get("last_error") or "no error recorded"),
                                                  attempts, runner=runner)
             summary["stuck"].append({"message_id": message_id, "attempts": attempts, "question_id": asked.get("question_id")})
-            continue
+            return
         summary["retried"] += 1
         _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
+
+    for message_id in [m for m in candidates if m not in rendering_later]:
+        if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
+            break
+        if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
+            break
+        retry_or_ask(message_id)
 
     while len(summary["workers"]) + len(summary["inline"]) < max_workers:
         if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
@@ -433,6 +451,12 @@ def tick(
         message_id = claimed["queue_item"]["gmail_message_id"]
         summary["claimed"] += 1
         _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
+
+    # Now the renderings, with whatever clock is left.
+    for message_id in rendering_later:
+        if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
+            break
+        retry_or_ask(message_id)
 
     # The owner's channel may be a phone. Reviews reach the owner as approval
     # briefs, so the tick itself speaks only when something is wrong: an

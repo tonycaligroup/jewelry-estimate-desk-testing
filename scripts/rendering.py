@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
+import image_provider
 import judge
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -199,9 +200,15 @@ def _envelope(stdout: str) -> dict[str, Any]:
     return value
 
 
+PROVIDER_MODE = "auto"  # set from the profile by the desk (rendering.provider); "cli" forces the platform CLI
+
+
 def render(prompt: str, refs: list[Path], output: Path, openclaw: str, runner: Runner = subprocess.run,
            model: str | None = None, deadline: float | None = None) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
+    if image_provider.available(PROVIDER_MODE):
+        seconds = image_provider.timed(remaining_seconds(deadline), IMAGE_TIMEOUT_MS / 1000)
+        return image_provider.generate(prompt, output, model=model, refs=refs or None, timeout=seconds)
     timeout_ms = IMAGE_TIMEOUT_MS
     left = remaining_seconds(deadline)
     if left is not None:
@@ -259,6 +266,14 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
     # succeeds a moment later; 6 September 2026). Try again with a pause; if it
     # keeps failing the view goes to the owner unchecked rather than the
     # whole rendering dying and the owner being asked.
+    if image_provider.available(PROVIDER_MODE):
+        try:
+            text = image_provider.describe(image, prompt, model=vision_model,
+                                           timeout=image_provider.timed(remaining_seconds(deadline), 90))
+        except OSError as exc:
+            return {"answers": {}, "failed": [], "unsure": [c["id"] for c in arch["checks"]], "notes": {},
+                    "unchecked": True, "error": f"vision check unavailable: {str(exc)[:160]}"}
+        return _judge_answers(text, arch)
     completed = None
     last_error: Exception | None = None
     for attempt in range(DESCRIBE_TRIES):
@@ -278,7 +293,11 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
             detail = (last_error.stderr or last_error.stdout or "").strip()[:160]
         return {"answers": {}, "failed": [], "unsure": [c["id"] for c in arch["checks"]], "notes": {},
                 "unchecked": True, "error": f"vision check unavailable after {DESCRIBE_TRIES} tries" + (f": {detail}" if detail else "")}
-    text = _describe_text(completed.stdout)
+    return _judge_answers(_describe_text(completed.stdout), arch)
+
+
+def _judge_answers(text: str, arch: dict[str, Any]) -> dict[str, Any]:
+    """The vision model's text as yes/no per check, however it was obtained."""
     try:
         value = judge.extract_json(text)
     except ValueError:
@@ -427,9 +446,12 @@ def plan_piece(
 def render_view(
     view: dict[str, Any], plan: dict[str, Any], refs: list[Path], openclaw: str = "openclaw",
     artwork: Path | None = None, vision_model: str | None = DEFAULT_VISION_MODEL, image_model: str | None = None,
-    runner: Runner = subprocess.run, max_regenerations: int = 1, deadline: float | None = None,
+    runner: Runner = subprocess.run, max_regenerations: int = 1, deadline: float | None = None, check: bool = True,
 ) -> dict[str, Any]:
     """Render one planned view, check it, regenerate a failing one once. One view, one tick's worth of work.
+
+    With `check` off (the profile's rendering.vision_check false) the view is
+    rendered once and carded as not machine-checked: the owner is the check.
 
     With a `deadline` (monotonic seconds) the step keeps to the tick's clock:
     it returns `{"deferred": True}` without rendering when too little time is
@@ -443,7 +465,7 @@ def render_view(
     attempts = []
     current_prompt = prompt
     image = None
-    check = None
+    verdict: dict[str, Any] | None = None
     left = remaining_seconds(deadline)
     if left is not None and left < START_MIN_SECONDS:
         return {"slot": slot, "deferred": True, "seconds_left": round(left)}
@@ -453,17 +475,25 @@ def render_view(
             if left is not None and left < REGENERATE_MIN_SECONDS:
                 break  # the failed view stands as it is; the owner sees the checker line and can ask for a revision
         image = render(current_prompt, refs, out_dir / f"view-{slot}-try-{attempt + 1}.png", openclaw, runner, image_model, deadline)
-        with _CHECK_LOCK:
-            check = check_image(image, plan, openclaw, runner, vision_model, artwork, deadline)
-        attempts.append({"image": str(image), "check": check, "prompt": current_prompt})
-        if not check["failed"]:
+        if not check:
+            verdict = {"answers": {}, "failed": [], "unsure": [], "notes": {}, "unchecked": True,
+                       "error": "vision check off in the profile"}
+            attempts.append({"image": str(image), "check": verdict, "prompt": current_prompt})
             break
-        problems = "; ".join(f"{cid}: {check['notes'].get(cid, 'failed')}" for cid in check["failed"])
+        if image_provider.available(PROVIDER_MODE):
+            verdict = check_image(image, plan, openclaw, runner, vision_model, artwork, deadline)
+        else:
+            with _CHECK_LOCK:  # the CLI's describe call was flaky when overlapped
+                verdict = check_image(image, plan, openclaw, runner, vision_model, artwork, deadline)
+        attempts.append({"image": str(image), "check": verdict, "prompt": current_prompt})
+        if not verdict["failed"]:
+            break
+        problems = "; ".join(f"{cid}: {verdict['notes'].get(cid, 'failed')}" for cid in verdict["failed"])
         current_prompt = prompt + f" Correct these problems from the previous attempt: {problems}."
     return {
-        "slot": slot, "image": str(image), "passed": not check["failed"], "failed": check["failed"],
-        "unsure": check["unsure"], "notes": check["notes"], "attempts": len(attempts), "history": attempts,
-        **({"unchecked": True, "check_error": check.get("error")} if check.get("unchecked") else {}),
+        "slot": slot, "image": str(image), "passed": not verdict["failed"], "failed": verdict["failed"],
+        "unsure": verdict["unsure"], "notes": verdict["notes"], "attempts": len(attempts), "history": attempts,
+        **({"unchecked": True, "check_error": verdict.get("error")} if verdict.get("unchecked") else {}),
     }
 
 

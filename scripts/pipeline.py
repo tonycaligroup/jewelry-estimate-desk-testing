@@ -18,7 +18,9 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import threading
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -227,6 +229,25 @@ def _render_settings(p: dict[str, Path]) -> tuple[str | None, str | None]:
 
 
 DEFAULT_VIEWS_PER_PIECE = 2
+DEFAULT_PARALLEL_VIEWS = 2  # the platform's own media concurrency (tools.media.concurrency, Kolo 8 September 2026)
+
+
+def _render_options(p: dict[str, Path]) -> dict[str, Any]:
+    """The profile's rendering choices: provider (auto|direct|cli), vision_check (bool), parallel (1-4)."""
+    import image_provider
+
+    try:
+        profile_now = workflow_safe.read_object(p["shop_profile"]) if p.get("shop_profile") else {}
+    except (OSError, ValueError):
+        profile_now = {}
+    block = profile_now.get("rendering") or {}
+    provider = str(block.get("provider") or "auto").strip().lower()
+    if provider not in image_provider.MODES:
+        provider = "auto"
+    parallel = block.get("parallel")
+    if not isinstance(parallel, int) or isinstance(parallel, bool) or not 1 <= parallel <= 4:
+        parallel = DEFAULT_PARALLEL_VIEWS
+    return {"provider": provider, "vision_check": block.get("vision_check") is not False, "parallel": parallel}
 
 
 def _views_per_piece(p: dict[str, Path]) -> int:
@@ -351,10 +372,12 @@ def render_step(
         workflow_safe.write_private(progress_path, progress)
     art = Path(progress["artwork"]) if progress.get("artwork") else None
     vision_model, image_model = _render_settings(p)
+    options = _render_options(p)
+    rendering.PROVIDER_MODE = options["provider"]
+    import image_provider
+    direct = image_provider.available(options["provider"])
     pending = [v for v in progress["views"] if not v.get("done")]
     if pending:
-        view = pending[0]
-        piece_plan = next((pc.get("plan") for pc in progress["pieces"] if pc.get("label") == view.get("piece")), progress.get("plan") or {})
         refs = [Path(r) for r in progress.get("references") or []]
         done_count = len(progress["views"]) - len(pending)
         left = rendering.remaining_seconds(deadline)
@@ -362,37 +385,60 @@ def render_step(
             # Too little of the tick left to finish a view: nothing started, nothing counted; next tick.
             return {"outcome": "rendering_in_progress", "done": done_count, "of": len(progress["views"]), "next": "again",
                     "deferred": True}
+        # The provider reached directly answers in seconds and takes several
+        # calls at once (Kolo's probe, 8 September 2026): every pending view
+        # runs in this tick, `parallel` at a time. Through the CLI it is one
+        # view per tick, as before (one command at a time, minutes each).
+        batch = pending if direct else pending[:1]
         # A tick killed mid-view leaves no result behind, only this count; a
         # view that keeps dying is not tried forever (7 September 2026: a
         # regeneration ran the tick past its 300 s and the job was killed).
-        view["started"] = int(view.get("started") or 0) + 1
-        if view["started"] > MAX_VIEW_STARTS:
-            # The owner is asked (the stuck-claim question); "retry" or a
-            # requeue gets a fresh count of starts, like a fresh retry budget.
-            view["started"] = 0
-            workflow_safe.write_private(progress_path, progress)
-            raise ValueError(f"rendering view {view['slot']} did not finish in {MAX_VIEW_STARTS} ticks; "
-                             "the image or vision step is too slow for the watcher")
+        for view in batch:
+            view["started"] = int(view.get("started") or 0) + 1
+            if view["started"] > MAX_VIEW_STARTS:
+                # The owner is asked (the stuck-claim question); "retry" or a
+                # requeue gets a fresh count of starts, like a fresh retry budget.
+                view["started"] = 0
+                workflow_safe.write_private(progress_path, progress)
+                raise ValueError(f"rendering view {view['slot']} did not finish in {MAX_VIEW_STARTS} ticks; "
+                                 "the image or vision step is too slow for the watcher")
         workflow_safe.write_private(progress_path, progress)
-        try:
-            result = rendering.render_view(view, piece_plan or {}, refs, openclaw, artwork=art, vision_model=vision_model,
-                                           image_model=image_model, runner=command_runner, deadline=deadline)
-        except Exception:
-            # A failure that raises is counted by the claim's retry budget
-            # already; only a silent death (the tick killed) keeps the start.
-            view["started"] -= 1
-            workflow_safe.write_private(progress_path, progress)
-            raise
-        if result.get("deferred"):
-            view["started"] -= 1
-            workflow_safe.write_private(progress_path, progress)
-            return {"outcome": "rendering_in_progress", "done": done_count, "of": len(progress["views"]), "next": "again",
-                    "deferred": True}
-        view.update({**result, "slot": view["slot"], "piece": view.get("piece"), "done": True})
-        workflow_safe.write_private(progress_path, progress)
+        lock = threading.Lock()
+        failures: list[BaseException] = []
+
+        def one(view: dict[str, Any]) -> None:
+            piece_plan = next((pc.get("plan") for pc in progress["pieces"] if pc.get("label") == view.get("piece")),
+                              progress.get("plan") or {})
+            try:
+                result = rendering.render_view(view, piece_plan or {}, refs, openclaw, artwork=art, vision_model=vision_model,
+                                               image_model=image_model, runner=command_runner, deadline=deadline,
+                                               check=options["vision_check"])
+            except Exception as exc:  # noqa: BLE001 - recorded, re-raised below
+                with lock:
+                    # A failure that raises is counted by the claim's retry budget
+                    # already; only a silent death (the tick killed) keeps the start.
+                    view["started"] -= 1
+                    failures.append(exc)
+                    workflow_safe.write_private(progress_path, progress)
+                return
+            with lock:
+                if result.get("deferred"):
+                    view["started"] -= 1
+                else:
+                    view.update({**result, "slot": view["slot"], "piece": view.get("piece"), "done": True})
+                workflow_safe.write_private(progress_path, progress)
+
+        if len(batch) == 1:
+            one(batch[0])
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, min(options["parallel"], len(batch)))) as pool:
+                list(pool.map(one, batch))
+        if failures:
+            raise failures[0]
         remaining = len([v for v in progress["views"] if not v.get("done")])
         if remaining:
-            return {"outcome": "rendering_in_progress", "done": len(progress["views"]) - remaining, "of": len(progress["views"]), "next": "again"}
+            return {"outcome": "rendering_in_progress", "done": len(progress["views"]) - remaining, "of": len(progress["views"]),
+                    "next": "again", **({"deferred": True} if len(progress["views"]) - remaining == done_count else {})}
     report = {
         "plan": progress.get("plan") or {}, "prompts": progress.get("prompts") or [], "references": progress.get("references") or [],
         "pieces": progress["pieces"], "views": [{k: v for k, v in view.items() if k != "done"} for view in progress["views"]],

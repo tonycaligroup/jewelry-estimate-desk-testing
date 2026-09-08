@@ -381,6 +381,29 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.10 (8 September 2026): the image provider, called directly; views in parallel; mail first.**
+Kolo (asked in a fresh thread, then a self-deleting command job on the
+pod): the CLI's image calls go to a LiteLLM proxy whose base URL and key
+sit in `LITELLM_BASE_URL` / `LITELLM_API_KEY` in every process the agent
+spawns, cron-run commands included; a direct `POST /v1/images/generations`
+answered in 11 s (OpenAI shape, `data[0].b64_json`); no policy forbids
+it; `tools.media.concurrency` is 2. New `scripts/image_provider.py`:
+`credentials`/`available(mode)` (auto|direct|cli), `generate` (JSON
+generation, or multipart `/v1/images/edits` with `image[]` when there are
+reference images), `describe` (`/v1/chat/completions` with a data-URI
+image), own timeouts (`timed`), every failure an `OSError` that never
+carries the key. `rendering.render`/`check_image` use it when
+`available(PROVIDER_MODE)`; the CLI path (`run_cli`, lock retries, the
+`_CHECK_LOCK`) stays for the lab and as fallback. `pipeline.render_step`
+renders every pending view in the tick on the direct path,
+`rendering.parallel` (default 2) at a time via a thread pool, progress
+written under a lock after each view; one view per tick through the CLI
+as before. `render_view(check=False)` (profile `rendering.vision_check`)
+cards the view as not machine-checked. `inbox_watcher.tick` runs
+non-rendering retries, then new claims, then rendering retries
+(`_rendering_under_way`), with the stuck-claim check shared by both
+loops. `validate_profile` knows `provider`, `vision_check`, `parallel`.
+
 **4.13.10 (built 8 September 2026): discovery overlaps the watermark.**
 Live: a customer reply sat in the inbox through a dozen idle ticks
 ("disc 0"); an earlier reply had been found only because the platform's

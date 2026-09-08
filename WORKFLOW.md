@@ -437,6 +437,15 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.13.10): renderings call the
+  image provider directly when its address and key are in the desk's
+  environment (the platform CLI took 40 to 351 seconds per image and ran
+  one command at a time; the provider answers in about ten seconds and
+  takes several calls at once), so every view of a rendering is made in
+  the tick that plans it, two at a time; the CLI remains the fallback. New
+  mail is always handled before a rendering under way. The profile may
+  turn the vision check off (the owner is the check) and set the views per
+  piece and how many run at once (6.6, 10).
 - Built 8 September 2026 (4.13.10): discovery asks Gmail
   for messages since the watermark minus two hours, so a message the
   search index lists late is still found; messages already queued are

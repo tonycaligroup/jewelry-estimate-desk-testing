@@ -20,6 +20,7 @@ import ast
 import base64
 import io
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -45,6 +46,7 @@ import doctor  # noqa: E402
 import estimate_record  # noqa: E402
 import gateway_token  # noqa: E402
 import gmail_safe  # noqa: E402
+import image_provider  # noqa: E402
 import inbox_claim  # noqa: E402
 import inbox_monitor  # noqa: E402
 import inbox_watcher  # noqa: E402
@@ -1550,6 +1552,80 @@ class OwnStoneAndStallTests(SideBranchTests):
                 self.assertEqual(len(world.renders), renders_before, "no re-render")
                 self.assertTrue((work_dir / "rendering-approval-stale-1.json").exists(), "the dead run's binding is history")
                 self.assertFalse((work_dir / pipeline.PROGRESS_FILE).exists(), "progress cleared once the card is filed")
+        self.run_branch(branch)
+
+    def _direct_provider(self, world: World):
+        """The provider reached directly: fakes for generate and describe, and the environment that enables them."""
+        def fake_generate(prompt, output, model=None, refs=None, timeout=None, **kw):  # noqa: ANN001, ANN003
+            world.calls.append("image_direct")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(PNG + len(world.renders).to_bytes(4, "big"))
+            world.renders.append(["direct", prompt])
+            return output
+
+        def fake_describe(image, prompt, model=None, timeout=None, **kw):  # noqa: ANN001, ANN003
+            world.calls.append("image_describe_direct")
+            ids = re.findall(r"^- (\w+):", prompt, re.MULTILINE)
+            return json.dumps({"answers": {i: "yes" for i in ids}, "notes": {}})
+
+        return (patch.dict(os.environ, {"LITELLM_BASE_URL": "http://proxy.local:4000", "LITELLM_API_KEY": "k"}),
+                patch.object(image_provider, "generate", fake_generate), patch.object(image_provider, "describe", fake_describe))
+
+    def test_with_the_provider_reachable_a_two_piece_rendering_lands_in_one_tick(self) -> None:
+        """Kolo's probe, 8 September 2026: the proxy answers a generation in 11 s and takes calls in parallel.
+        Every view runs in the tick that plans it; no CLI image call is made."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            two = {"metal": "gold", "metal_karat": "18k", "pieces": [
+                {"piece_type": "wedding band", "metal_color": "yellow", "finger_size": "10", "notes": "plain, polished, no stones"},
+                {"piece_type": "wedding band", "metal_color": "rose", "finger_size": "10", "notes": "plain, polished, no stones"}]}
+            thread, _estimate_id = self._estimate_sent(ws, world, spec=two, text="Two plain polished 18k bands, one yellow one rose, size 10.\n\nPat")
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send renderings?\n\nPat")
+            env, gen, desc = self._direct_provider(world)
+            with env, gen, desc:
+                summary = self.one_tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["rendering_approval_requested"], summary)
+            self.assertEqual(world.calls.count("image_direct"), 4, "four views, all in this tick")
+            self.assertEqual(world.calls.count("image"), 0, "no CLI image call")
+            self.assertEqual(world.cards[-1]["kind"], "send_rendering")
+            self.assertEqual(len([n for n in world.notices if n["file"]]), 4, "four previews")
+        self.run_branch(branch)
+
+    def test_the_vision_check_can_be_turned_off_in_the_profile(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["rendering"] = {"vision_check": False, "views_per_piece": 1}
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            env, gen, desc = self._direct_provider(world)
+            with env, gen, desc:
+                summary = self.one_tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["rendering_approval_requested"], summary)
+            self.assertEqual(world.calls.count("image_describe_direct"), 0, "no vision call")
+            self.assertIn("not machine-checked", world.cards[-1]["details"].get("Checker", "") if isinstance(world.cards[-1].get("details"), dict) else world.cards[-1]["title"])
+        self.run_branch(branch)
+
+    def test_new_mail_is_handled_before_a_rendering_under_way(self) -> None:
+        """8 September 2026: a view takes minutes through the CLI; a customer's message must not wait behind it."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            first = self.one_tick(ws, world)
+            self.assertEqual([i["outcome"] for i in first["inline"]], ["rendering_in_progress"], first)
+            # A second customer writes while the rendering is between views.
+            world.spec = {"piece_type": "pendant", "metal": "yellow gold", "metal_karat": "14k", "dimensions": "18 inch chain",
+                          "notes": "plain, no stones"}
+            world.customer_message("p1", "thread-pendant", "A plain 14k gold pendant on an 18 inch chain please.\n\nSam",
+                                   subject="Pendant", sender="sam@example.org")
+            second = self.one_tick(ws, world)
+            outcomes = [(i["message_id"], i["outcome"]) for i in second["inline"]]
+            self.assertEqual(outcomes[0][0], "p1", f"the new message went first: {outcomes}")
+            self.assertEqual(outcomes[-1], ("s2", "rendering_approval_requested"), outcomes)
         self.run_branch(branch)
 
     def test_a_rendering_between_views_is_in_flight_and_the_owner_hears_nothing(self) -> None:

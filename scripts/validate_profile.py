@@ -54,6 +54,14 @@ def validate_profile(data: Any) -> dict[str, Any]:
                 value = rendering_block.get(key)
                 if value is not None and not re.match(r"^[a-z0-9_.-]+/[A-Za-z0-9_.:-]+$", str(value)):
                     errors.append(f"rendering.{key} must be provider/model, for example litellm/kolo-best-available")
+            provider = rendering_block.get("provider")
+            if provider is not None and provider not in ("auto", "direct", "cli"):
+                errors.append("rendering.provider must be auto, direct, or cli")
+            if rendering_block.get("vision_check") is not None and not isinstance(rendering_block.get("vision_check"), bool):
+                errors.append("rendering.vision_check must be true or false")
+            parallel = rendering_block.get("parallel")
+            if parallel is not None and (isinstance(parallel, bool) or not isinstance(parallel, int) or not 1 <= parallel <= 4):
+                errors.append("rendering.parallel must be a whole number from 1 to 4 (two is the default)")
             views = rendering_block.get("views_per_piece")
             if views is not None and (isinstance(views, bool) or not isinstance(views, int) or not 1 <= views <= 2):
                 errors.append("rendering.views_per_piece must be 1 or 2 (two views per piece is the default)")
