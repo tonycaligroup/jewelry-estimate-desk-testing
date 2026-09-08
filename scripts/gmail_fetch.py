@@ -136,6 +136,16 @@ def list_discovery(
     )
 
 
+# Gmail's search index can list a new message minutes after it arrives.
+# The watermark moves to "now" every tick, so a message indexed late would
+# fall behind it and never be asked for again (8 September 2026: a reply
+# sat in the inbox through a dozen idle ticks; an earlier one was found
+# only because a backoff had frozen the watermark for an hour). Discovery
+# therefore asks for messages since the watermark minus this overlap; ones
+# already queued are skipped by `discover_complete`, so nothing repeats.
+DISCOVERY_OVERLAP_MS = 2 * 60 * 60 * 1000
+
+
 def discover(
     monitor_root: Path,
     token: str,
@@ -153,12 +163,14 @@ def discover(
     work = inbox_monitor.prepare_run_work(monitor_root)
     batch_path = Path(work["discovery_batch"])
     try:
-        batch = list_discovery(window_start_ms, token, opener)
+        listed_from_ms = max(state["activated_at_ms"], window_start_ms - DISCOVERY_OVERLAP_MS)
+        batch = list_discovery(listed_from_ms, token, opener)
         inbox_monitor.atomic_write_json(batch_path, batch)
         result = inbox_monitor.discover_complete(
             monitor_root, batch, window_start_ms, window_end_ms
         )
-        return {"discovered": len(batch), **result}
+        # "discovered" is what is new to the desk; the overlap re-lists known messages every tick.
+        return {"discovered": result["inserted"], "listed": len(batch), **result}
     finally:
         inbox_monitor.cleanup_run_work(monitor_root, batch_path)
 

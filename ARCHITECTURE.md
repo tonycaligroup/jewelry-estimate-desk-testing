@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.9 (8 September 2026): discovery overlaps the watermark.**
+Live: a customer reply sat in the inbox through a dozen idle ticks
+("disc 0"); an earlier reply had been found only because the platform's
+backoff had frozen the watermark for an hour. `gmail_fetch.discover`
+lists `in:inbox after:<watermark - DISCOVERY_OVERLAP_MS>` (2 h, never
+before `activated_at_ms`); `discover_complete` already skips queued ids
+and still moves the watermark to the window end; the tick's
+"discovered" count is `inserted` (new to the desk) and `listed` is the
+raw count. Gmail's `messages.list` with a query is served from the
+search index, which can lag a new message by minutes.
+
 **4.13.9 (built 8 September 2026): the quoted estimate is the base, not the last review.**
 Live (question 9CD6F2): the change had been reviewed thin on 4.13.6, so
 `record.specification` was the thin read and the quoted facts lived only

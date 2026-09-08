@@ -2577,6 +2577,43 @@ class InboxMonitorTests(unittest.TestCase):
             self.assertEqual(calls[0][2], "Bearer token")
             self.assertEqual(inbox_monitor.load_queue_item(root, "message-1")["thread_id"], "thread-1")
 
+    def test_discovery_overlaps_the_watermark_so_a_late_indexed_message_is_still_found(self) -> None:
+        """8 September 2026: a reply sat in the inbox through a dozen idle ticks; Gmail listed it late and the
+        watermark had already moved past it."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.active_root(directory)  # activated at 1_000 ms
+            listing = {"messages": [{"id": "message-1", "threadId": "thread-1"}]}
+            details = {"message-1": ("thread-1", "1500")}
+            calls: list[dict[str, list[str]]] = []
+
+            def opener(request, timeout=0):
+                parsed = urlsplit(request.full_url)
+                if parsed.path.endswith("/messages"):
+                    calls.append(parse_qs(parsed.query))
+                    return FakeHTTPResponse(listing)
+                message_id = parsed.path.rsplit("/", 1)[-1]
+                thread_id, internal = details[message_id]
+                return FakeHTTPResponse({"id": message_id, "threadId": thread_id, "internalDate": internal})
+
+            first = gmail_fetch.discover(root, "token", now_ms=3_600_000, opener=opener)
+            self.assertEqual(first["discovered"], 1)
+            # Gmail now lists a message that arrived at 3_500_000, before the watermark (3_600_000), plus the old one.
+            listing["messages"].append({"id": "message-2", "threadId": "thread-2"})
+            details["message-2"] = ("thread-2", "3500000")
+            second = gmail_fetch.discover(root, "token", now_ms=3_700_000, opener=opener)
+            self.assertEqual(calls[-1]["q"], [f"in:inbox after:{max(1_000, 3_600_000 - gmail_fetch.DISCOVERY_OVERLAP_MS) // 1000 - 1}"],
+                             "listed from the watermark minus the overlap, never before activation")
+            self.assertEqual(second["discovered"], 1, "only the late message is new")
+            self.assertEqual(second["existing"], 1, "the known one is re-listed and skipped")
+            self.assertEqual(second["listed"], 2)
+            self.assertEqual(inbox_monitor.load_queue_item(root, "message-2")["internal_date_ms"], 3_500_000)
+            self.assertEqual(inbox_monitor.load_monitor_state(root)["discovery_watermark_ms"], 3_700_000)
+            # Never before activation.
+            third_calls_before = len(calls)
+            gmail_fetch.discover(root, "token", now_ms=3_800_000, opener=opener)
+            self.assertGreaterEqual(int(calls[-1]["q"][0].split("after:")[1]), 0)
+            self.assertEqual(len(calls), third_calls_before + 1)
+
     def test_fetch_claimed_writes_only_authoritative_work_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self.active_root(directory)
