@@ -249,17 +249,26 @@ The scheduled Kolo job is a command, not a model turn. Every tick it runs
 `inbox_watcher.py`, which reads the audit trail for approvals and
 rejections of the cards it filed and acts on them, performs discovery,
 claims one message at a time, and judges each claim inline with a few
-stateless model calls. Nothing runs through a prompt-driven agent: there
+stateless model calls, made to the model provider directly when its address
+and key are in the tick's environment (about a second a call, thinking off;
+readiness names the transport) and through the platform CLI otherwise.
+Nothing runs through a prompt-driven agent: there
 is no worker job and no render job. When the image provider's address and
 key are in the tick's environment (they are on a Kolo pod) the tick calls
-it directly, every view of a rendering at once, two at a time, and the
-whole rendering lands in the tick that plans it; through the platform CLI
+it directly, every view of a rendering at once, and the whole rendering
+lands in the tick that plans it, in about the time of one image; through the platform CLI
 (one command at a time, minutes per image) it renders one view per tick.
 Either way the plan and each finished view are written to
 `rendering-progress.json` in the claim's work folder, a released claim
 resumes there on the next tick, and when the last view is done the tick
 materializes the images, sends the previews, files the card, and parks
-the claim. New mail is always handled before a rendering under way.
+the claim. New mail is always handled before a rendering under way. The
+profile's `rendering` block may set `provider`, `views_per_piece`,
+`parallel`, `size`, `quality`, and `vision_check`; its `model` block
+`provider` (auto, direct, cli); its `desk` block `claims_per_tick` (default
+16) and `parallel_claims` (default 1: one customer at a time; above 1,
+different customers' claims run side by side and one customer's stay in
+order).
 Nothing is created in the owner's routines list. A claim
 the tick cannot finish is retried with a bound and then becomes one
 question to the owner. Watcher stdout is the run report or `NO_REPLY`;
@@ -310,8 +319,9 @@ from the customer's artwork with its card. Each claim ends processed,
 parked behind a question, or on a card; a claim the tick cannot finish is
 retried with a bound (six tries for a gateway or model hiccup, two for a
 refusal) and then becomes one question to the owner. No worker agent job
-and no render job exist: everything, renderings included (one view per
-tick), runs in the tick, and the rendering step files cards and never
+and no render job exist: everything, renderings included (every view at
+once when the provider is reachable, one view per tick through the CLI),
+runs in the tick, and the rendering step files cards and never
 emails a customer; only the approved card's executor sends.
 
 The main session does none of this. It runs the execute line on an

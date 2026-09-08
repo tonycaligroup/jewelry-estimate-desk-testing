@@ -405,3 +405,39 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
   cwd, timeoutSeconds: 300}`, `delivery: {mode: "announce", channel: "kolo",
   to: "kolo:<session>"}`, schedule `{kind: "cron", expr, tz}`.
 
+
+
+## Verified 8 September 2026 (Tony's team, self-deleting command jobs on the desk's pod)
+
+- The platform CLI (`openclaw`) keeps its state in SQLite: two commands at
+  once fail at once with "database is locked"; `--timeout-ms` on
+  `infer image generate` is not a ceiling (one call ran 351 s). A skill
+  that must not be killed by its job's timeout cuts its own calls off.
+- Every process the agent spawns, cron-run commands included, sees
+  `LITELLM_BASE_URL` (`http://litellm-proxy.kolo-system.svc.cluster.local:4000`)
+  and `LITELLM_API_KEY`; the same values sit in
+  `/home/node/.openclaw/openclaw.json` under `models.providers.litellm`.
+  No documented policy forbids calling the proxy directly. Never write the
+  key anywhere; read it from the environment at call time.
+- Direct `POST /v1/images/generations` (gpt-image-2): 14 to 25 s at
+  1024x1024 or 1536x1024 default quality; 80 to 130 s at quality high; 72
+  at once finished in 45 s with no rate limit; replies carry
+  `data[0].b64_json` (~1 MB). Quality is the only expensive setting.
+- Direct `POST /v1/chat/completions` (proxy model id `qwen-3-7-plus` for
+  the CLI's `litellm-fireworks/qwen-3-7-plus`): 1.0 to 1.7 s with
+  `reasoning_effort: "none"` (24 at once in 1.7 s, 24 of 24 parsing);
+  with thinking on, Qwen spends the whole `max_tokens` on
+  `reasoning_content` and returns empty content. The CLI's
+  `--thinking off` is that parameter. `chat_template_kwargs:
+  {"enable_thinking": false}` works too; `reasoning_effort: "low"` does not.
+- Kolo's own cron *tool* cannot create command-kind jobs; the CLI can:
+  `openclaw cron create --name X --at +1m --command '...' --timeout-seconds 300 --delete-after-run --json`.
+  The chat composer collapses indentation and sends on a newline: give
+  Kolo a file to run, not code to retype.
+- Publishing packages whatever folder it is pointed at: a stale folder
+  published the original 11-script skill as 4.13.7 and 4.13.10's files as
+  4.13.11. Refresh the folder to the exact commit and count the scripts
+  before every publish; a registry version cannot be replaced.
+- After five failed runs the platform backs a cron job off by an hour;
+  one forced run clears it. The Chrome-side Kolo workspace here is a
+  different pod from the desk's.
