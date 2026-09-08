@@ -125,6 +125,39 @@ prints `model transport: direct (proxy reachable)` or `cli`.
 | `tests/test_runtime.py` | `chat` client tests (body, headers, timeout, thinking off, failures without the key), transport choice, model id mapping, parallel tick tests (N claims in one tick, summary integrity, budget) |
 | SKILL.md, ARCHITECTURE.md, HANDOFF, OWNER-GUIDE, KOLO-SKILL-PLAYBOOK | transport, settings, the new ceiling; the "exec 10 s" note stays for the chat session |
 
+### 2.4 What parallel claims must never do (review, 8 September 2026)
+
+Two hazards the first draft of this plan missed, found by reading the
+code again:
+
+- **Two claims on one record.** A reply and a second message from the
+  same customer in one burst would be read and reviewed concurrently
+  against the same record: every write is locked, the read-decide-write
+  sequence is not, and two follow-ups or a conflicting review could
+  result. The tick therefore groups claims by thread (the queue item's
+  `thread_id`, and a known sender's other threads by `identity_key`) and
+  runs each group in order on one worker; only different customers run
+  in parallel.
+- **Shared files written by several claims.** The brief registry
+  (`brief_registry.register`), the owner-question codes
+  (`owner_questions.create_*`, which check the directory for a free
+  code), and the tick mark are single files one claim at a time touches
+  today. Each gets a process-wide lock (`threading.Lock` in the module,
+  the file lock already used for claim state where one exists); no
+  registry entry or card may be lost to a concurrent write. A test runs
+  eight claims at once and checks every card is in the registry and
+  every question code is unique.
+
+### 2.5 Rollout: two switches, flipped one at a time
+
+4.14.0 ships with `model.provider: auto` (direct when the proxy is
+reachable) and `desk.parallel_claims: 1`. That gives the whole speed
+gain per claim with today's one-at-a-time safety. The burst test on the
+pod then raises `parallel_claims` in the profile, no version needed, and
+the tick log's timing block shows the effect. If anything looks wrong,
+setting it back to 1 is one line, and `model.provider: cli` restores
+4.13.11's behaviour entirely.
+
 ## 4. Risks and how each is held
 
 - **Readings drift between transports.** Same prompt, same model,
@@ -133,10 +166,12 @@ prints `model transport: direct (proxy reachable)` or `cli`.
   compares one inquiry's record read both ways before the version is
   installed for real (`model.provider: cli` then `direct` on the same
   email).
-- **Threads and shared state.** Everything per claim is already file
-  locked; the tick summary gets a lock; module globals are set before the
-  pool starts and read only inside it. A test runs eight claims in one
-  tick under the fake and checks every record, claim and card once.
+- **Threads and shared state.** Per-claim state is file locked; claims
+  of one customer run in order (2.4); the registry, question codes, tick
+  mark and summary are locked; module globals are set before the pool
+  starts and read only inside it. A test runs eight claims in one tick,
+  two of them one customer's, and checks every record, claim, card and
+  code once. The parallelism ships at 1 (2.5).
 - **The kolo CLI under overlap.** Unknown lock; the retry makes a
   collision a five-second pause; a test injects "database is locked" on a
   card call and expects the card filed.
@@ -164,7 +199,7 @@ prints `model transport: direct (proxy reachable)` or `cli`.
 | | Today (4.13.11) | 4.14.0 |
 |---|---|---|
 | Model time per inquiry | 30 to 90 s | 3 to 5 s |
-| Claims per tick | 2 | up to 16, 8 at a time |
-| Twenty inquiries at once | ~10 ticks, 20 min | one or two ticks, 2 to 4 min |
+| Claims per tick | 2 | up to 16; 1 at a time as shipped, 8 after the burst test |
+| Twenty inquiries at once | ~10 ticks, 20 min | two ticks at parallel 1 (~5 s a claim); one tick at parallel 8 |
 | Several renderings at once | one after another, ~40 s each | together, ~40 s |
 | CLI use per tick | every model call | a few `kolo` card/notice calls |
