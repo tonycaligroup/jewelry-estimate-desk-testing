@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.5 (8 September 2026): a run killed while filing the card resumes to the card.**
+**4.13.6 (built 8 September 2026): a run killed while filing the card resumes to the card.**
 Live (question A12E11): the last view landed, `render_step` unlinked the
 progress file and was killed inside `request_rendering_approval` (the
 binding written, the previews going out, the CLI busy); the next run found
