@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.11 (8 September 2026, RELEASE-PLAN-4.14.md): the model off the CLI; claims in parallel.**
+**4.14.0 (built 8 September 2026, RELEASE-PLAN-4.14.md): the model off the CLI; claims in parallel.**
 Measured on the desk's pod: a judgement 13 s through the CLI, 1.2 s
 direct with `reasoning_effort: "none"` (with thinking on, Qwen spends the
 budget on reasoning and returns nothing), 24 at once in 1.7 s, 24 of 24
