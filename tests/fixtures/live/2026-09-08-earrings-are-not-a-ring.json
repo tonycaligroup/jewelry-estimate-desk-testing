@@ -1,0 +1,32 @@
+{
+  "defect": "a customer asking for earrings like the pair in their photo was asked 'What finger size is she?'; the gate treated any piece whose name contains 'ring' as a ring, and 'earrings' does",
+  "seen_on": "4.14.1",
+  "fixed_in": "unpublished after 4.14.1",
+  "text_is": "paraphrase",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "customer": {
+        "id": "e1",
+        "thread": "new",
+        "subject": "Anniversary gift",
+        "text": "Hello Tony,\n\nI want to gift my wife something special for our 20th anniversary; she has been obsessed with these earrings.\n\nDo you have or can you make something similar?"
+      },
+      "spec": {
+        "piece_type": "earrings"
+      },
+      "expect": {
+        "outcomes": [
+          "followup_sent"
+        ],
+        "sent": 1,
+        "missing_required_fields": [
+          "dimensions",
+          "metal",
+          "metal_color",
+          "metal_karat"
+        ]
+      }
+    }
+  ]
+}

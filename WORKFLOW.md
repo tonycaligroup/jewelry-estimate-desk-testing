@@ -437,6 +437,9 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.14.1): a piece is a ring
+  only when "ring" or "band" is a whole word of its name; earrings are
+  asked for their size, never for a finger size (6.2).
 - Built 8 September 2026 (unpublished, after 4.14.1): a rendering's
   reference images come only from the customer's own messages, never from
   the desk's earlier rendering emails on the thread; the vision check

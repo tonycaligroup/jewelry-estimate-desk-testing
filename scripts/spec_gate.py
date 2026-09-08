@@ -12,6 +12,7 @@ by the record helper on top.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import estimate_record
@@ -23,9 +24,19 @@ PLACEHOLDERS = {
 NO_KARAT_METALS = {"platinum", "silver", "palladium", "titanium", "tungsten", "steel"}
 RING_PIECES = {"ring", "band", "engagement ring", "wedding band", "signet ring", "eternity band"}
 DIMENSION_PIECES = {"chain", "necklace", "bracelet", "pendant", "anklet", "cuff", "bangle", "earring", "earrings"}
+# A whole word: "earrings" and "keyring" contain "ring" and are not rings.
+_RING_WORD_RE = re.compile(r"\b(?:ring|rings|band|bands)\b")
 STONE_KEYS = ("stone_type", "stone_origin", "stone_carat", "stone_color", "stone_clarity", "stone_cut")
 # Pieces that carry a center stone by definition: a carat or a stone is implied even when no stone is named.
 STONE_PIECES = ("engagement ring", "solitaire", "halo", "three stone", "three-stone", "tennis", "eternity", "cocktail ring")
+
+
+def is_ring_piece(piece: str) -> bool:
+    """A finger-sized piece: a ring or a band named as a whole word ("earrings" is not)."""
+    piece = (piece or "").strip().lower()
+    if any(piece == p or piece.endswith(" " + p) for p in RING_PIECES):
+        return True
+    return bool(_RING_WORD_RE.search(piece))
 
 
 def present(value: Any) -> bool:
@@ -97,7 +108,7 @@ def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None
             missing.add("metal_color")
     piece = _text(spec, "piece_type")
     if piece:
-        if any(piece == p or piece.endswith(" " + p) for p in RING_PIECES) or "ring" in piece:
+        if is_ring_piece(piece):
             if not present(spec.get("finger_size")):
                 missing.add("finger_size")
         elif any(word in piece for word in DIMENSION_PIECES) and not present(spec.get("dimensions")):

@@ -7010,6 +7010,19 @@ class SpecGateTests(unittest.TestCase):
         spec = dict(full); spec["stone_origin"] = "jeweler's choice"
         self.assertEqual(spec_gate.missing_required_fields(spec, self.profile("ask_always")), ["stone_origin"])
 
+    def test_earrings_are_not_a_ring(self) -> None:
+        """Live 8 Sep: 'earrings' contains 'ring'; the desk asked a customer wanting earrings for a finger size."""
+        for piece in ("earrings", "earring", "hoop earrings", "diamond stud earrings", "keyring", "herringbone chain"):
+            with self.subTest(piece=piece):
+                self.assertFalse(spec_gate.is_ring_piece(piece))
+                missing = spec_gate.missing_required_fields({"piece_type": piece, "metal": "14k yellow gold"}, self.profile())
+                self.assertNotIn("finger_size", missing, piece)
+        self.assertIn("dimensions", spec_gate.missing_required_fields({"piece_type": "earrings", "metal": "14k yellow gold"}, self.profile()))
+        for piece in ("ring", "signet ring", "men's ring", "cocktail ring", "wedding band", "wedding bands", "eternity band"):
+            with self.subTest(piece=piece):
+                self.assertTrue(spec_gate.is_ring_piece(piece))
+                self.assertIn("finger_size", spec_gate.missing_required_fields({"piece_type": piece, "metal": "14k yellow gold"}, self.profile()))
+
 
 class InlinePipelineTests(unittest.TestCase):
     """The tick finishes a claim with one-shot judgments; no worker job."""
@@ -7630,6 +7643,13 @@ class AppointmentScenarioTests(unittest.TestCase):
 
     def test_owner_typed_times_become_a_new_offer_card_not_an_email(self) -> None:
         import email.utils
+        from zoneinfo import ZoneInfo
+        # The owner's times must lie ahead of the wall clock, whatever day the suite runs: next Tuesday two days out or later.
+        shop_now = datetime.now(ZoneInfo("America/Los_Angeles"))
+        tuesday = (shop_now + timedelta(days=2)).replace(hour=14, minute=0, second=0, microsecond=0)
+        while tuesday.weekday() != 1:
+            tuesday += timedelta(days=1)
+        wednesday = (tuesday + timedelta(days=1)).replace(hour=11)
         with tempfile.TemporaryDirectory() as directory:
             ws, p, record, _approval = self.seeded_offer(directory)
             runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
@@ -7640,7 +7660,7 @@ class AppointmentScenarioTests(unittest.TestCase):
             )
             judged = Mock(return_value=subprocess.CompletedProcess(
                 [], 0, json.dumps({"ok": True, "capability": "model.run", "outputs": [{"text": json.dumps(
-                    {"requested_times": ["Tuesday 2pm", "Wednesday at 11"], "resolved_times": ["2026-09-08T14:00", "2026-09-09T11:00"]}
+                    {"requested_times": ["Tuesday 2pm", "Wednesday at 11"], "resolved_times": [tuesday.strftime("%Y-%m-%dT%H:%M"), wednesday.strftime("%Y-%m-%dT%H:%M")]}
                 )}]}), ""))
             now = datetime.now(timezone.utc)
             class Response:
@@ -7672,7 +7692,7 @@ class AppointmentScenarioTests(unittest.TestCase):
                 ))
             self.assertEqual(out["decision"], "times_given")
             self.assertEqual(out["outcome"], "offer_card_filed")
-            self.assertEqual(out["options"], ["2026-09-08T14:00:00-07:00", "2026-09-09T11:00:00-07:00"])
+            self.assertEqual(out["options"], [tuesday.isoformat(), wednesday.isoformat()])
             send.assert_not_called()
             argv = next(c.args[0] for c in runner.call_args_list if c.args[0][:2] == ["kolo", "request-approval"])
             self.assertTrue(argv[argv.index("--action") + 1].startswith("Offer times to "))
