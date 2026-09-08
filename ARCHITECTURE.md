@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.9 (8 September 2026): discovery overlaps the watermark.**
+**4.13.10 (built 8 September 2026): discovery overlaps the watermark.**
 Live: a customer reply sat in the inbox through a dozen idle ticks
 ("disc 0"); an earlier reply had been found only because the platform's
 backoff had frozen the watermark for an hour. `gmail_fetch.discover`

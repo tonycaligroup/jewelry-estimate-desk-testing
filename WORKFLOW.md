@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.13.9): discovery asks Gmail
+- Built 8 September 2026 (4.13.10): discovery asks Gmail
   for messages since the watermark minus two hours, so a message the
   search index lists late is still found; messages already queued are
   skipped, so nothing is handled twice (10).
