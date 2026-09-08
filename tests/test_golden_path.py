@@ -1472,6 +1472,86 @@ class OwnStoneAndStallTests(SideBranchTests):
             self.assertEqual([f["code"] for f in doctor.scan(ws) if f["code"] == "tick_killed"], [], "a finished tick is not a killed one")
         self.run_branch(branch)
 
+    def _later_clock(self):
+        class LaterClock(datetime):
+            offset = timedelta()
+
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) + cls.offset
+        return LaterClock
+
+    def test_a_run_killed_while_filing_the_card_resumes_to_the_card_and_does_not_render_again(self) -> None:
+        """7 September 2026, live: the last view landed, the run was killed filing the card, the next run
+        planned and rendered four new views, then refused its own card: 'binding changed'."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            clock = self._later_clock()
+            with patch.object(inbox_watcher, "STALE_AFTER_SECONDS", 1), patch.object(inbox_claim, "datetime", clock):
+                world.crash_after.add("kolo_card")
+                killed = False
+                for _ in range(6):
+                    clock.offset += timedelta(minutes=10)
+                    try:
+                        self.one_tick(ws, world)
+                    except Crash:
+                        killed = True
+                        break
+                self.assertTrue(killed, "the tick was not killed at the card step")
+                # The card reached Kolo before the kill (the fake records it, then dies).
+                renders_before, cards_before = len(world.renders), len(world.cards)
+                self.assertEqual(world.cards[-1]["kind"], "send_rendering")
+                for _ in range(4):
+                    clock.offset += timedelta(minutes=10)
+                    summary = self.one_tick(ws, world)
+                    if self.claim(ws, "s2")["status"] == "awaiting_owner":
+                        break
+                self.assertEqual(self.claim(ws, "s2")["status"], "awaiting_owner", summary)
+                self.assertEqual(len(world.cards), cards_before, "the card in Kolo's audit trail is found, not filed twice")
+                self.assertEqual(len(world.renders), renders_before, "nothing rendered again: the finished views were carded")
+                self.assertEqual([i["outcome"] for i in summary["inline"]], ["rendering_approval_requested"], summary)
+        self.run_branch(branch)
+
+    def test_the_state_the_old_code_left_behind_is_carded_from_the_report(self) -> None:
+        """The live state on 4.13.4: progress gone, a finished report on disk, and a binding from the dead run
+        that no card was filed against. The next run cards the report's views and keeps the stale binding as history."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            clock = self._later_clock()
+            with patch.object(inbox_watcher, "STALE_AFTER_SECONDS", 1), patch.object(inbox_claim, "datetime", clock):
+                world.crash_after.add("kolo_notify")  # the previews go out before the card call
+                killed = False
+                for _ in range(6):
+                    clock.offset += timedelta(minutes=10)
+                    try:
+                        self.one_tick(ws, world)
+                    except Crash:
+                        killed = True
+                        break
+                self.assertTrue(killed, "the tick was not killed during the previews")
+                work_root = ws / "estimate-desk" / "work"
+                work_dir = next(d for d in work_root.iterdir() if (d / "rendering-report.json").exists())
+                (work_dir / pipeline.PROGRESS_FILE).unlink()  # what the old code did before filing
+                binding = json.loads((work_dir / "rendering-approval.json").read_text(encoding="utf-8"))
+                binding["images"] = [{"slot": 1, "sha256": "0" * 64}]  # the dead run's images, not these
+                (work_dir / "rendering-approval.json").write_text(json.dumps(binding), encoding="utf-8")
+                renders_before, cards_before = len(world.renders), len(world.cards)
+                for _ in range(4):
+                    clock.offset += timedelta(minutes=10)
+                    summary = self.one_tick(ws, world)
+                    if len(world.cards) > cards_before:
+                        break
+                self.assertEqual(len(world.cards), cards_before + 1, summary)
+                self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)
+                self.assertEqual(len(world.renders), renders_before, "no re-render")
+                self.assertTrue((work_dir / "rendering-approval-stale-1.json").exists(), "the dead run's binding is history")
+                self.assertFalse((work_dir / pipeline.PROGRESS_FILE).exists(), "progress cleared once the card is filed")
+        self.run_branch(branch)
+
     def test_a_rendering_between_views_is_in_flight_and_the_owner_hears_nothing(self) -> None:
         """7 September 2026, rehearsal: every rendering tick announced "1 claimed item(s) still processing"."""
         def branch(ws: Path, world: World) -> None:

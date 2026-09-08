@@ -437,6 +437,12 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.13.5): a rendering run that
+  dies while filing its card resumes to the card; it never renders again.
+  The finished report is the rendering; the progress file outlives the card
+  step; a card binding no card was ever filed against (the run died before
+  filing) is kept as history and the images the owner will see are bound;
+  a card already in Kolo's audit trail is found, not filed twice (6.6).
 - Built 7 September 2026 (4.13.5): a rendering view keeps
   to the watcher tick's clock. The desk cuts an image or vision call off
   itself at the tick's deadline (the platform's own timeout flag is not

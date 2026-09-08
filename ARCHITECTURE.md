@@ -381,6 +381,24 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.5 (8 September 2026): a run killed while filing the card resumes to the card.**
+Live (question A12E11): the last view landed, `render_step` unlinked the
+progress file and was killed inside `request_rendering_approval` (the
+binding written, the previews going out, the CLI busy); the next run found
+no progress, planned again (failing once on the lock), rendered four new
+views, and was refused by its own binding check ("existing rendering
+approval binding changed"), twice, then asked. Now: the progress file is
+unlinked only after the card is filed; with no progress but a finished
+`rendering-report.json` whose images exist and no `rendering-change.json`,
+`render_step` takes the report as the rendering (slot files untouched)
+and goes straight to the card; in `request_rendering_approval` a binding
+that differs is replaced when the claim journal holds no external action
+for the card's key (the run died before filing; the old binding is kept
+as `rendering-approval-stale-N.json`) and refused as before when it does.
+A card already journaled is found by the existing audit check, not filed
+twice. Two golden tests: killed at the card call; the exact 4.13.4 state
+(progress gone, report present, foreign binding).
+
 **4.13.5 (built 7 September 2026): the view step keeps to the tick's clock.**
 Live: "cron: job execution timed out" while renders were under way. One
 view is an image call (180 s timeout) plus a vision check (3 tries at 90 s)

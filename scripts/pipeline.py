@@ -326,6 +326,17 @@ def render_step(
     progress_path = work_dir / PROGRESS_FILE
     progress = workflow_safe.read_object(progress_path) if progress_path.exists() else None
     art = None
+    resumed = False
+    report_path = work_dir / "rendering-report.json"
+    if progress is None and report_path.exists() and not (work_dir / "rendering-change.json").exists():
+        # Every view was rendered and the run died filing the card (7 September
+        # 2026: killed during the previews, the next run planned and rendered
+        # again). The finished report is the rendering; only the card is owed.
+        finished = workflow_safe.read_object(report_path)
+        views = finished.get("views") or []
+        if views and all(Path(str(v.get("image") or "")).is_file() for v in views):
+            progress = {**finished, "views": [{**v, "done": True} for v in views]}
+            resumed = True
     if progress is None:
         thread = workflow_safe.read_object(Path(paths["gmail_thread"])) if Path(paths["gmail_thread"]).exists() else {}
         try:
@@ -395,7 +406,7 @@ def render_step(
     # crash replaces what the dead run left; either way the previous file is
     # kept beside the slot as history, never sent, never lost.
     label = f"r{int(progress.get('round') or 2) - 1}" if note else "prev"
-    for slot in range(1, 5):
+    for slot in range(1, 5) if not resumed else ():
         slot_path = Path(paths.get(f"rendering_image_{slot}") or "")
         if slot_path.is_file():
             archived = slot_path.with_name(f"{slot_path.stem}-{label}{slot_path.suffix}")
@@ -418,11 +429,11 @@ def render_step(
         for v in report["views"]
     )
     workflow_safe.write_private(work_dir / "rendering-report.json", report)
-    progress_path.unlink(missing_ok=True)
     # WORKFLOW.md 6.6: renderings are approval-gated at every stage. The owner
     # sees the views in chat and gets a card; nothing reaches the customer
-    # until they approve.
-    return workflow_safe.request_rendering_approval(argparse.Namespace(
+    # until they approve. The progress file outlives the card step: a run
+    # that dies here resumes to the card, it does not render again.
+    carded = workflow_safe.request_rendering_approval(argparse.Namespace(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
         runner=command_runner, checker=checker,
@@ -430,6 +441,8 @@ def render_step(
                                           for pc in report.get("pieces") or [{"plan": report["plan"]}])).strip(", "),
         revised=note or None, revision=int(progress.get("round") or 1) if note else 1,
     ))
+    progress_path.unlink(missing_ok=True)
+    return carded
 
 
 def render_and_send(

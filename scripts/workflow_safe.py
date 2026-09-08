@@ -2070,11 +2070,24 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
     }
     revision = int(getattr(args, "revision", 1) or 1)
     approval_path = Path(paths["work_dir"]) / "rendering-approval.json"
+    suffix = f":r{revision}" if revision > 1 else ""
+    action_key = f"rendering_approval:{args.estimate_id}:{args.message_id}{suffix}"
     if approval_path.exists() and read_object(approval_path) != details:
         existing = read_object(approval_path)
+        claim_state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, args.message_id))
+        carded = (claim_state.get("external_actions") or {}).get(action_key) is not None
         if revision > int(existing.get("revision") or 1):
             # The owner passed on those views; keep them as history, bind the new ones.
             write_private(Path(paths["work_dir"]) / f"rendering-approval-r{int(existing.get('revision') or 1)}.json", existing)
+        elif not carded:
+            # A binding no card was ever filed against: a run that died between
+            # writing it and filing (7 September 2026: killed during the
+            # previews; the next run rendered again and was refused). History,
+            # then the images the owner will actually see.
+            stale = 1
+            while (Path(paths["work_dir"]) / f"rendering-approval-stale-{stale}.json").exists():
+                stale += 1
+            write_private(Path(paths["work_dir"]) / f"rendering-approval-stale-{stale}.json", existing)
         else:
             raise ValueError("existing rendering approval binding changed")
     write_private(approval_path, details)
@@ -2105,10 +2118,8 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
             image, runner=runner,
         )
     approver = activation_binding.load(activation_binding.binding_path(args.monitor_root))
-    suffix = f":r{revision}" if revision > 1 else ""
     kolo_safe.request_rendering_approval_claimed(
-        args.claim_root, args.message_id, token,
-        f"rendering_approval:{args.estimate_id}:{args.message_id}{suffix}",
+        args.claim_root, args.message_id, token, action_key,
         args.estimate_id, approval_path, approver["session_key"], runner=runner,
     )
     inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "rendering_approval")
