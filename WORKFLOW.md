@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.13.10): renderings call the
+- Built 8 September 2026 (4.13.11): renderings call the
   image provider directly when its address and key are in the desk's
   environment (the platform CLI took 40 to 351 seconds per image and ran
   one command at a time; the provider answers in about ten seconds and

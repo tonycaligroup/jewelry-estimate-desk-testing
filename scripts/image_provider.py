@@ -106,9 +106,12 @@ def _first_image(value: dict[str, Any], what: str) -> bytes:
     raise OSError(f"{what}: the image provider returned no image")
 
 
+QUALITIES = ("auto", "low", "medium", "high")
+
+
 def generate(prompt: str, output: Path, model: str | None = None, refs: list[Path] | None = None,
-             timeout: float | None = None, size: str = "1024x1024", env: dict[str, str] | None = None,
-             opener: Opener = urlopen) -> Path:
+             timeout: float | None = None, size: str = "1024x1024", quality: str = "auto",
+             env: dict[str, str] | None = None, opener: Opener = urlopen) -> Path:
     """One image, written to `output`. With reference images it is an edit; without, a generation."""
     found = credentials(env)
     if found is None:
@@ -119,7 +122,7 @@ def generate(prompt: str, output: Path, model: str | None = None, refs: list[Pat
     if refs:
         boundary = "jed" + secrets.token_hex(12)
         parts: list[bytes] = []
-        for field, value in (("model", name), ("prompt", prompt), ("size", size), ("n", "1")):
+        for field, value in (("model", name), ("prompt", prompt), ("size", size), ("quality", quality), ("n", "1")):
             parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n".encode())
         for ref in refs:
             parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"image[]\"; filename=\"{Path(ref).name}\"\r\n"
@@ -128,7 +131,7 @@ def generate(prompt: str, output: Path, model: str | None = None, refs: list[Pat
         value = _post(f"{base}/v1/images/edits", key, b"".join(parts), f"multipart/form-data; boundary={boundary}",
                       seconds, "image edit", opener)
     else:
-        body = json.dumps({"model": name, "prompt": prompt, "size": size, "n": 1}).encode()
+        body = json.dumps({"model": name, "prompt": prompt, "size": size, "quality": quality, "n": 1}).encode()
         value = _post(f"{base}/v1/images/generations", key, body, "application/json", seconds, "image generation", opener)
     image = _first_image(value, "image edit" if refs else "image generation")
     output.parent.mkdir(parents=True, exist_ok=True)

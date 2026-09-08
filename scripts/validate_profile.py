@@ -60,8 +60,14 @@ def validate_profile(data: Any) -> dict[str, Any]:
             if rendering_block.get("vision_check") is not None and not isinstance(rendering_block.get("vision_check"), bool):
                 errors.append("rendering.vision_check must be true or false")
             parallel = rendering_block.get("parallel")
-            if parallel is not None and (isinstance(parallel, bool) or not isinstance(parallel, int) or not 1 <= parallel <= 4):
-                errors.append("rendering.parallel must be a whole number from 1 to 4 (two is the default)")
+            if parallel is not None and (isinstance(parallel, bool) or not isinstance(parallel, int) or not 1 <= parallel <= 12):
+                errors.append("rendering.parallel must be a whole number from 1 to 12 (eight is the default)")
+            size = rendering_block.get("size")
+            if size is not None and not re.fullmatch(r"\d{3,4}x\d{3,4}", str(size)):
+                errors.append("rendering.size must look like 1024x1024 or 1536x1024")
+            quality = rendering_block.get("quality")
+            if quality is not None and str(quality) not in ("auto", "low", "medium", "high"):
+                errors.append("rendering.quality must be auto, low, medium, or high (auto is the default; high takes five times longer)")
             views = rendering_block.get("views_per_piece")
             if views is not None and (isinstance(views, bool) or not isinstance(views, int) or not 1 <= views <= 2):
                 errors.append("rendering.views_per_piece must be 1 or 2 (two views per piece is the default)")

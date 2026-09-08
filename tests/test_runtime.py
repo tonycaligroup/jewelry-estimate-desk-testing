@@ -9126,7 +9126,7 @@ class ImageProviderTests(unittest.TestCase):
         self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/images/generations")
         self.assertEqual(log[0]["timeout"], 42.0)
         self.assertEqual(log[0]["auth"], "Bearer secret-key-value")
-        self.assertEqual(json.loads(log[0]["body"]), {"model": "gpt-image-2", "prompt": "a ring", "size": "1024x1024", "n": 1})
+        self.assertEqual(json.loads(log[0]["body"]), {"model": "gpt-image-2", "prompt": "a ring", "size": "1024x1024", "quality": "auto", "n": 1})
 
     def test_an_edit_with_references_is_multipart(self) -> None:
         log: list = []
@@ -9202,14 +9202,17 @@ class RenderingSettingsTests(unittest.TestCase):
     def test_provider_vision_check_and_parallel_are_validated_and_read(self) -> None:
         base = json.loads((Path(__file__).resolve().parent.parent / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
         for block, bad in (({"provider": "sideways"}, "rendering.provider"), ({"vision_check": "no"}, "rendering.vision_check"),
-                           ({"parallel": 9}, "rendering.parallel"), ({"parallel": True}, "rendering.parallel")):
+                           ({"parallel": 13}, "rendering.parallel"), ({"parallel": True}, "rendering.parallel"),
+                           ({"size": "big"}, "rendering.size"), ({"quality": "ultra"}, "rendering.quality")):
             base["rendering"] = block
             self.assertTrue(any(bad in e for e in validate_profile.validate_profile(base)["errors"]), block)
-        base["rendering"] = {"provider": "cli", "vision_check": False, "parallel": 3, "views_per_piece": 1}
+        base["rendering"] = {"provider": "cli", "vision_check": False, "parallel": 3, "views_per_piece": 1, "size": "1536x1024", "quality": "high"}
         self.assertFalse(any("rendering." in e for e in validate_profile.validate_profile(base)["errors"]))
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp) / "shop-profile.json"
             profile.write_text(json.dumps(base), encoding="utf-8")
-            self.assertEqual(pipeline._render_options({"shop_profile": profile}), {"provider": "cli", "vision_check": False, "parallel": 3})
+            self.assertEqual(pipeline._render_options({"shop_profile": profile}),
+                             {"provider": "cli", "vision_check": False, "parallel": 3, "size": "1536x1024", "quality": "high"})
             profile.write_text(json.dumps({}), encoding="utf-8")
-            self.assertEqual(pipeline._render_options({"shop_profile": profile}), {"provider": "auto", "vision_check": True, "parallel": 2})
+            self.assertEqual(pipeline._render_options({"shop_profile": profile}),
+                             {"provider": "auto", "vision_check": True, "parallel": 8, "size": "1024x1024", "quality": "auto"})

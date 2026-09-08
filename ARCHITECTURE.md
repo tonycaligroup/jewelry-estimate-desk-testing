@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.10 (8 September 2026): the image provider, called directly; views in parallel; mail first.**
+**4.13.11 (built 8 September 2026): the image provider, called directly; views in parallel; mail first.**
 Kolo (asked in a fresh thread, then a self-deleting command job on the
 pod): the CLI's image calls go to a LiteLLM proxy whose base URL and key
 sit in `LITELLM_BASE_URL` / `LITELLM_API_KEY` in every process the agent

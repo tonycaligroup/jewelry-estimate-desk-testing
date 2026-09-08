@@ -201,6 +201,8 @@ def _envelope(stdout: str) -> dict[str, Any]:
 
 
 PROVIDER_MODE = "auto"  # set from the profile by the desk (rendering.provider); "cli" forces the platform CLI
+IMAGE_SIZE = "1024x1024"  # rendering.size; size costs nothing (probe, 8 September 2026)
+IMAGE_QUALITY = "auto"  # rendering.quality; "high" costs 80 to 130 s per image against 15 to 25 for auto
 
 
 def render(prompt: str, refs: list[Path], output: Path, openclaw: str, runner: Runner = subprocess.run,
@@ -208,7 +210,8 @@ def render(prompt: str, refs: list[Path], output: Path, openclaw: str, runner: R
     output.parent.mkdir(parents=True, exist_ok=True)
     if image_provider.available(PROVIDER_MODE):
         seconds = image_provider.timed(remaining_seconds(deadline), IMAGE_TIMEOUT_MS / 1000)
-        return image_provider.generate(prompt, output, model=model, refs=refs or None, timeout=seconds)
+        return image_provider.generate(prompt, output, model=model, refs=refs or None, timeout=seconds,
+                                       size=IMAGE_SIZE, quality=IMAGE_QUALITY)
     timeout_ms = IMAGE_TIMEOUT_MS
     left = remaining_seconds(deadline)
     if left is not None:

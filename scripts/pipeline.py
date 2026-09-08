@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import threading
 from datetime import datetime
@@ -229,7 +230,8 @@ def _render_settings(p: dict[str, Path]) -> tuple[str | None, str | None]:
 
 
 DEFAULT_VIEWS_PER_PIECE = 2
-DEFAULT_PARALLEL_VIEWS = 2  # the platform's own media concurrency (tools.media.concurrency, Kolo 8 September 2026)
+DEFAULT_PARALLEL_VIEWS = 8  # every view of a rendering at once (72 at once ran clean on the proxy, 8 September 2026)
+MAX_PARALLEL_VIEWS = 12
 
 
 def _render_options(p: dict[str, Path]) -> dict[str, Any]:
@@ -245,9 +247,16 @@ def _render_options(p: dict[str, Path]) -> dict[str, Any]:
     if provider not in image_provider.MODES:
         provider = "auto"
     parallel = block.get("parallel")
-    if not isinstance(parallel, int) or isinstance(parallel, bool) or not 1 <= parallel <= 4:
+    if not isinstance(parallel, int) or isinstance(parallel, bool) or not 1 <= parallel <= MAX_PARALLEL_VIEWS:
         parallel = DEFAULT_PARALLEL_VIEWS
-    return {"provider": provider, "vision_check": block.get("vision_check") is not False, "parallel": parallel}
+    size = str(block.get("size") or "").strip()
+    if not re.fullmatch(r"\d{3,4}x\d{3,4}", size):
+        size = "1024x1024"
+    quality = str(block.get("quality") or "").strip().lower()
+    if quality not in image_provider.QUALITIES:
+        quality = "auto"
+    return {"provider": provider, "vision_check": block.get("vision_check") is not False, "parallel": parallel,
+            "size": size, "quality": quality}
 
 
 def _views_per_piece(p: dict[str, Path]) -> int:
@@ -374,6 +383,8 @@ def render_step(
     vision_model, image_model = _render_settings(p)
     options = _render_options(p)
     rendering.PROVIDER_MODE = options["provider"]
+    rendering.IMAGE_SIZE = options["size"]
+    rendering.IMAGE_QUALITY = options["quality"]
     import image_provider
     direct = image_provider.available(options["provider"])
     pending = [v for v in progress["views"] if not v.get("done")]
