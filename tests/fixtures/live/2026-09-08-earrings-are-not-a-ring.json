@@ -1,7 +1,7 @@
 {
   "defect": "a customer asking for earrings like the pair in their photo was asked 'What finger size is she?'; the gate treated any piece whose name contains 'ring' as a ring, and 'earrings' does",
   "seen_on": "4.14.1",
-  "fixed_in": "unpublished after 4.14.1",
+  "fixed_in": "4.14.2",
   "text_is": "paraphrase",
   "kind": "golden_path",
   "steps": [

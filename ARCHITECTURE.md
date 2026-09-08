@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.14.1 (8 September 2026): earrings are not a ring.**
+**4.14.2 (built 8 September 2026): earrings are not a ring.**
 Live, a customer asking for earrings like the pair in their photo was
 asked "What finger size is she?". `spec_gate._missing_for_piece` treated
 any piece whose name contains "ring" as a ring, and "earrings" does. Now
@@ -391,7 +391,7 @@ the dimensions branch. Fixture
 `tests/fixtures/live/2026-09-08-earrings-are-not-a-ring.json` replays the
 inquiry and fails with the old rule.
 
-**Unpublished after 4.14.1 (8 September 2026): the customer's images only; the vision check direct.**
+**4.14.2 (built 8 September 2026): the customer's images only; the vision check direct.**
 Live, a second-piece rendering on a thread that already carried the
 band's approved renderings: all four views were the band, and every
 checker line read "not machine-checked (the vision check was
