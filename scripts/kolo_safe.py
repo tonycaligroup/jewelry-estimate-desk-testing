@@ -803,7 +803,10 @@ def run_command(
     argv: Sequence[str],
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> subprocess.CompletedProcess[str]:
-    return runner(list(argv), check=True, capture_output=True, text=True, shell=False)
+    """One kolo command: a busy CLI ("database is locked") is tried again, a hung one is cut off (RELEASE-PLAN-4.14.md 2.2)."""
+    import cli  # local import: cli depends on nothing here
+
+    return cli.run(argv, runner, None, what=" ".join(str(a) for a in argv[:2]), timeout=cli.DEFAULT_TIMEOUT_SECONDS)
 
 
 def request_approval_claimed(

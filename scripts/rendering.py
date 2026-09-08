@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
+import cli
 import image_provider
 import judge
 
@@ -58,35 +59,13 @@ def remaining_seconds(deadline: float | None) -> float | None:
 # "database is locked" (the CLI's SQLite state). So the desk cuts a call off
 # itself at the tick's deadline (the tick is never killed), and a locked call
 # is tried again a few seconds later inside the same tick.
-LOCK_TEXT = "database is locked"
-LOCK_TRIES = 4
-LOCK_PAUSE_SECONDS = 5
-CUTOFF_MARGIN_SECONDS = 20
-CUTOFF_MIN_SECONDS = 30
+LOCK_TEXT, LOCK_TRIES, LOCK_PAUSE_SECONDS = cli.LOCK_TEXT, cli.LOCK_TRIES, cli.LOCK_PAUSE_SECONDS
+CUTOFF_MARGIN_SECONDS, CUTOFF_MIN_SECONDS = cli.CUTOFF_MARGIN_SECONDS, cli.CUTOFF_MIN_SECONDS
 
 
 def run_cli(argv: list[str], runner: Runner, deadline: float | None, what: str) -> subprocess.CompletedProcess:
-    """Run one openclaw command: cut off at the deadline, tried again on the CLI's database lock."""
-    last_lock: Exception | None = None
-    for attempt in range(LOCK_TRIES):
-        seconds = None
-        left = remaining_seconds(deadline)
-        if left is not None:
-            seconds = max(CUTOFF_MIN_SECONDS, left - CUTOFF_MARGIN_SECONDS)
-        try:
-            return runner(argv, check=True, capture_output=True, text=True, shell=False, timeout=seconds)
-        except subprocess.TimeoutExpired as exc:
-            raise OSError(f"{what} cut off after {int(seconds or 0)} s at the tick's deadline") from exc
-        except subprocess.CalledProcessError as exc:
-            text = ((exc.stderr or "") + (exc.stdout or "")).lower()
-            if LOCK_TEXT not in text:
-                raise
-            last_lock = exc
-            left = remaining_seconds(deadline)
-            if attempt + 1 >= LOCK_TRIES or (left is not None and left < CUTOFF_MIN_SECONDS + LOCK_PAUSE_SECONDS):
-                break
-            time.sleep(LOCK_PAUSE_SECONDS)
-    raise OSError(f"{what}: the openclaw CLI was busy ({LOCK_TEXT}) {LOCK_TRIES} times running") from last_lock
+    """One openclaw command through the shared runner (cli.py): cutoff at the deadline, retry on the lock."""
+    return cli.run(argv, runner, deadline, what)
 MARK_SOURCES = ("artwork", "initials", "none")
 
 

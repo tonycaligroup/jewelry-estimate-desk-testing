@@ -408,7 +408,7 @@ def tick(
     )
     discovery = gmail_fetch.discover(p["monitor_root"], token)
     summary["discovered"] = discovery.get("discovered", 0)
-    summary["swept_jobs"] = sweep_worker_jobs(openclaw, runner=runner)
+    # The sweep of one-shot jobs is gone with the jobs (4.13.0); one fewer CLI call per tick (RELEASE-PLAN-4.14.md 2.2).
 
     # Claims the tick itself owns whose last run ended without finishing (a
     # deferral or a crash): retry them first, with a bound, then ask. A

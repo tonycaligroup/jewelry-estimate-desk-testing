@@ -42,6 +42,7 @@ import judge
 import spec_gate
 import pipeline
 import slots
+import cli
 import cost_components as cost_components_module
 import inbox_monitor
 import estimate_record
@@ -9292,3 +9293,34 @@ class ChatTransportTests(unittest.TestCase):
         self.assertEqual(judge.CALL_LOG[-1]["transport"], "cli")
         with patch.dict(os.environ, {"LITELLM_BASE_URL": "", "LITELLM_API_KEY": ""}):
             self.assertEqual(judge.complete("hello", runner=runner), '{"via": "cli"}')
+
+
+class SharedCliRunnerTests(unittest.TestCase):
+    """RELEASE-PLAN-4.14.md 2.2: kolo commands get the same lock retry and cutoff as image commands."""
+
+    def test_a_kolo_command_is_retried_on_the_lock_and_cut_off_when_hung(self) -> None:
+        calls: list = []
+
+        def runner(argv, **kwargs):  # noqa: ANN001, ANN003
+            calls.append(kwargs.get("timeout"))
+            if len(calls) < 3:
+                raise subprocess.CalledProcessError(1, argv, "", "[openclaw] Reason: database is locked")
+            return Mock(returncode=0, stdout="{}", stderr="")
+        with patch.object(cli, "LOCK_PAUSE_SECONDS", 0):
+            done = kolo_safe.run_command(["kolo", "notify-owner", "-m", "hi"], runner=runner)
+        self.assertEqual(done.returncode, 0)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0], cli.DEFAULT_TIMEOUT_SECONDS, "a kolo command has a ceiling now")
+
+        def hung(argv, **kwargs):  # noqa: ANN001, ANN003
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        with self.assertRaisesRegex(OSError, "cut off"):
+            kolo_safe.run_command(["kolo", "ping"], runner=hung)
+
+        def other(argv, **kwargs):  # noqa: ANN001, ANN003
+            raise subprocess.CalledProcessError(2, argv, "", "brief not found")
+        with self.assertRaises(subprocess.CalledProcessError):
+            kolo_safe.run_command(["kolo", "update-brief"], runner=other)
+
+    def test_the_tick_no_longer_lists_cron_jobs(self) -> None:
+        self.assertNotIn("sweep_worker_jobs(openclaw", Path(inbox_watcher.__file__).read_text(encoding="utf-8").split("def tick(")[1])
