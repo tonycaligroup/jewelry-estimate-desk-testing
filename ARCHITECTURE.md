@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.14.0 (8 September 2026): eternity and channel-set bands have no center stone.**
+**4.14.1 (built 8 September 2026): eternity and channel-set bands have no center stone.**
 Live: "a .2 ct diamond eternity band in the middle, channel set" drew a
 follow-up asking for "the carat weight of the center stone" and the cut.
 `cost_components.has_center_stone` consulted a stated carat before the

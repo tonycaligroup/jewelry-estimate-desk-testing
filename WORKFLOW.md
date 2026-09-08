@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.14.0): an eternity,
+- Built 8 September 2026 (4.14.1): an eternity,
   channel-set, pave, or all-around band has no center stone whatever the
   reading says; its stated carat is the total of the small stones; the
   desk never asks such a customer for a center stone's carat or cut (6.2).
