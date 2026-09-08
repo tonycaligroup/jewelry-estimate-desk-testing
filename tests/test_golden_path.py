@@ -309,8 +309,8 @@ class World:
         self.other.append(argv)
         return ok(argv, "")
 
-    def complete(self, prompt, model=None, runner=None, openclaw=None, timeout=None) -> str:
-        return REAL_COMPLETE(prompt, model, self.run, openclaw)
+    def complete(self, prompt, model=None, runner=None, openclaw=None, timeout=None, temperature=0.0, **_kw) -> str:
+        return REAL_COMPLETE(prompt, model, self.run, openclaw, temperature=temperature)
 
     def _openclaw(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
         if argv[1:4] == ["infer", "model", "run"]:
@@ -1560,7 +1560,9 @@ class OwnStoneAndStallTests(SideBranchTests):
             world.calls.append("image_direct")
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(PNG + len(world.renders).to_bytes(4, "big"))
-            world.renders.append(["direct", prompt])
+            # Recorded in the CLI's argv shape so the golden path's checks read either transport.
+            world.renders.append(["openclaw", "infer", "image", "edit" if refs else "generate",
+                                  *sum((["--file", str(r)] for r in (refs or [])), []), "--prompt", prompt, "--direct"])
             return output
 
         def fake_describe(image, prompt, model=None, timeout=None, **kw):  # noqa: ANN001, ANN003
@@ -1568,8 +1570,18 @@ class OwnStoneAndStallTests(SideBranchTests):
             ids = re.findall(r"^- (\w+):", prompt, re.MULTILINE)
             return json.dumps({"answers": {i: "yes" for i in ids}, "notes": {}})
 
+        def fake_chat(prompt, model=None, timeout=None, temperature=0.0, max_tokens=1500, **kw):  # noqa: ANN001, ANN003
+            # The same routing the CLI fake uses, so a test's readings are the same on either transport.
+            world.prompts.append(prompt)
+            world.calls.append("model_direct")
+            if world.fail_next.get("model", 0) > 0:
+                world.fail_next["model"] -= 1
+                raise OSError("judgement: the model provider answered 503")
+            return json.dumps(world.answer(prompt))
+
         return (patch.dict(os.environ, {"LITELLM_BASE_URL": "http://proxy.local:4000", "LITELLM_API_KEY": "k"}),
-                patch.object(image_provider, "generate", fake_generate), patch.object(image_provider, "describe", fake_describe))
+                patch.object(image_provider, "generate", fake_generate), patch.object(image_provider, "describe", fake_describe),
+                patch.object(image_provider, "chat", fake_chat))
 
     def test_with_the_provider_reachable_a_two_piece_rendering_lands_in_one_tick(self) -> None:
         """Kolo's probe, 8 September 2026: the proxy answers a generation in 11 s and takes calls in parallel.
@@ -1582,8 +1594,8 @@ class OwnStoneAndStallTests(SideBranchTests):
             thread, _estimate_id = self._estimate_sent(ws, world, spec=two, text="Two plain polished 18k bands, one yellow one rose, size 10.\n\nPat")
             world.intents = ["rendering_request"]
             world.customer_message("s2", thread, "Could you send renderings?\n\nPat")
-            env, gen, desc = self._direct_provider(world)
-            with env, gen, desc:
+            env, gen, desc, chat = self._direct_provider(world)
+            with env, gen, desc, chat:
                 summary = self.one_tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["rendering_approval_requested"], summary)
             self.assertEqual(world.calls.count("image_direct"), 4, "four views, all in this tick")
@@ -1601,8 +1613,8 @@ class OwnStoneAndStallTests(SideBranchTests):
             thread, _estimate_id = self._estimate_sent(ws, world)
             world.intents = ["rendering_request"]
             world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
-            env, gen, desc = self._direct_provider(world)
-            with env, gen, desc:
+            env, gen, desc, chat = self._direct_provider(world)
+            with env, gen, desc, chat:
                 summary = self.one_tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["rendering_approval_requested"], summary)
             self.assertEqual(world.calls.count("image_describe_direct"), 0, "no vision call")
@@ -1626,6 +1638,16 @@ class OwnStoneAndStallTests(SideBranchTests):
             outcomes = [(i["message_id"], i["outcome"]) for i in second["inline"]]
             self.assertEqual(outcomes[0][0], "p1", f"the new message went first: {outcomes}")
             self.assertEqual(outcomes[-1], ("s2", "rendering_approval_requested"), outcomes)
+        self.run_branch(branch)
+
+    def test_the_whole_golden_path_runs_on_the_direct_transport(self) -> None:
+        """RELEASE-PLAN-4.14.md: the same prompts and checks, the proxy instead of the CLI; no CLI model call is made."""
+        def branch(ws: Path, world: World) -> None:
+            env, gen, desc, chat = self._direct_provider(world)
+            with env, gen, desc, chat:
+                self._golden_path(ws, world)
+            self.assertGreater(world.calls.count("model_direct"), 5, "the judgements went direct")
+            self.assertEqual(world.calls.count("model"), 0, "no CLI model call")
         self.run_branch(branch)
 
     def test_a_rendering_between_views_is_in_flight_and_the_owner_hears_nothing(self) -> None:

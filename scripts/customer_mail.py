@@ -184,7 +184,7 @@ def draft(
         'Answer with one JSON object only: {"body": "..."}'
     )
     try:
-        out = judge.ask_json(prompt, _check(kind, facts, previous), model, runner, openclaw)
+        out = judge.ask_json(prompt, _check(kind, facts, previous), model, runner, openclaw, temperature=judge.DRAFT_TEMPERATURE)
         return out["body"], "model"
     except (judge.JudgmentError, ValueError, KeyError):
         return fallback, "fallback"

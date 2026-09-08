@@ -55,9 +55,9 @@ def available(mode: str = "auto", env: dict[str, str] | None = None) -> bool:
 
 
 def model_name(model: str | None, default: str) -> str:
-    """'litellm/gpt-image-2' (the CLI's form) is 'gpt-image-2' at the proxy."""
+    """'litellm/gpt-image-2' or 'litellm-fireworks/qwen-3-7-plus' (the CLI's forms) is the part after the last '/' at the proxy."""
     value = str(model or "").strip() or default
-    return value.split("/", 1)[1] if "/" in value else value
+    return value.rsplit("/", 1)[1] if "/" in value else value
 
 
 def _post(url: str, key: str, body: bytes, content_type: str, timeout: float, what: str, opener: Opener = urlopen) -> dict[str, Any]:
@@ -164,6 +164,42 @@ def describe(image: Path, prompt: str, model: str | None = None, timeout: float 
         content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
     if not isinstance(content, str) or not content.strip():
         raise OSError("vision check: the model returned no text")
+    return content
+
+
+CHAT_TIMEOUT_SECONDS = 60
+DEFAULT_CHAT_MODEL = "qwen-3-7-plus"
+
+
+def chat(prompt: str, model: str | None = None, timeout: float | None = None, temperature: float = 0.0,
+         max_tokens: int = 1500, env: dict[str, str] | None = None, opener: Opener = urlopen) -> str:
+    """One judgement: the prompt as a single user message, thinking off, the answer's text.
+
+    Probed on the desk's pod, 8 September 2026: with thinking on, Qwen spends
+    the whole token budget on reasoning and returns an empty answer;
+    `reasoning_effort: "none"` gives the clean JSON the desk needs in about a
+    second (13 s through the CLI), ~180 completion tokens.
+    """
+    found = credentials(env)
+    if found is None:
+        raise OSError("the model provider is not configured in this environment")
+    base, key = found
+    body = json.dumps({
+        "model": model_name(model, DEFAULT_CHAT_MODEL),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": float(temperature),
+        "max_tokens": int(max_tokens),
+        "reasoning_effort": "none",
+    }).encode()
+    value = _post(f"{base}/v1/chat/completions", key, body, "application/json",
+                  float(timeout or CHAT_TIMEOUT_SECONDS), "judgement", opener)
+    choices = value.get("choices")
+    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    if not isinstance(content, str) or not content.strip():
+        raise OSError("judgement: the model returned no text")
     return content
 
 

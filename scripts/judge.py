@@ -22,6 +22,8 @@ from typing import Any, Callable
 import cost_components
 import estimate_record
 
+import image_provider  # noqa: E402 - sibling module
+
 DEFAULT_MODEL = "litellm-fireworks/qwen-3-7-plus"
 CALL_TIMEOUT_SECONDS = 90
 PROMPT_LIMIT = 60_000
@@ -120,9 +122,14 @@ def stats() -> dict[str, Any]:
     """Calls made so far and the time they took; the tick puts this in its summary."""
     return {
         "model_calls": len(CALL_LOG),
+        "model_direct": sum(1 for c in CALL_LOG if c.get("transport") == "direct"),
         "model_seconds": round(sum(c["seconds"] for c in CALL_LOG), 2),
         "prompt_chars": sum(c["prompt_chars"] for c in CALL_LOG),
     }
+
+
+MODEL_PROVIDER_MODE = "auto"  # profile model.provider: auto (direct when the proxy is reachable) | direct | cli
+DRAFT_TEMPERATURE = 0.3  # drafts (customer emails) may vary a little; judgements run at 0
 
 
 def complete(
@@ -131,19 +138,37 @@ def complete(
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
     timeout: int = CALL_TIMEOUT_SECONDS,
+    temperature: float = 0.0,
 ) -> str:
+    """One model call: the proxy directly when it is reachable, the platform CLI otherwise.
+
+    Every judgement the desk makes passes through here (RELEASE-PLAN-4.14.md
+    2.1): the transport is one decision, the prompts and checks are the same
+    either way, and the key is read from the environment at call time.
+    """
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be non-empty text")
     if len(prompt) > PROMPT_LIMIT:
         raise ValueError("prompt exceeds the size limit")
+    if image_provider.available(MODEL_PROVIDER_MODE):
+        started = time.monotonic()
+        try:
+            text = image_provider.chat(prompt, model=model or DEFAULT_MODEL, timeout=min(timeout, image_provider.CHAT_TIMEOUT_SECONDS),
+                                       temperature=temperature)
+        except OSError as exc:
+            CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": False, "transport": "direct"})
+            refused = "answered 4" in str(exc)  # a 4xx is the request, not the weather
+            raise JudgmentError(f"completion call failed: {exc}", transient=not refused) from exc
+        CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": True, "transport": "direct"})
+        return text
     argv = infer_argv(prompt, model or DEFAULT_MODEL, openclaw or default_openclaw())
     started = time.monotonic()
     try:
         completed = runner(argv, check=False, capture_output=True, text=True, shell=False, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": False})
+        CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": False, "transport": "cli"})
         raise JudgmentError(f"completion call failed: {exc}", transient=True) from exc
-    CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": completed.returncode == 0})
+    CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": completed.returncode == 0, "transport": "cli"})
     if completed.returncode != 0:
         raise JudgmentError(
             f"completion exited {completed.returncode}: {(completed.stderr or completed.stdout or '')[:200]}",
@@ -178,12 +203,13 @@ def ask_json(
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
     attempts: int = 2,
+    temperature: float = 0.0,
 ) -> dict[str, Any]:
     """Ask once, validate, and ask once more with the error if the shape was wrong."""
     last = "no attempt made"
     current = prompt
     for attempt in range(attempts):
-        text = complete(current, model, runner, openclaw)
+        text = complete(current, model, runner, openclaw, temperature=temperature)
         try:
             return check(extract_json(text))
         except (ValueError, json.JSONDecodeError) as exc:
@@ -573,7 +599,7 @@ def draft_followup(
         f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
-    return ask_json(prompt, check_body_covers(list(missing_fields)), model, runner, openclaw)
+    return ask_json(prompt, check_body_covers(list(missing_fields)), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
 
 
 LOCAL_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")

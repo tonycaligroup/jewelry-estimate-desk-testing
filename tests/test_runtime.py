@@ -9216,3 +9216,79 @@ class RenderingSettingsTests(unittest.TestCase):
             profile.write_text(json.dumps({}), encoding="utf-8")
             self.assertEqual(pipeline._render_options({"shop_profile": profile}),
                              {"provider": "auto", "vision_check": True, "parallel": 8, "size": "1024x1024", "quality": "auto"})
+
+
+class ChatTransportTests(unittest.TestCase):
+    """RELEASE-PLAN-4.14.md 2.1: every judgement through one function; the proxy when reachable, thinking off."""
+
+    ENV = {"LITELLM_BASE_URL": "http://proxy.local:4000", "LITELLM_API_KEY": "secret-key-value"}
+
+    def _opener(self, response, log):
+        def opener(request, timeout=None):
+            log.append({"url": request.full_url, "timeout": timeout, "body": json.loads(request.data)})
+            if isinstance(response, int):
+                raise HTTPError(request.full_url, response, "nope", {}, io.BytesIO(b"{}"))
+            if response == "timeout":
+                raise TimeoutError()
+            class Resp:
+                def read(self_inner): return json.dumps(response).encode()
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return Resp()
+        return opener
+
+    def test_a_judgement_is_one_user_message_with_thinking_off(self) -> None:
+        log: list = []
+        text = image_provider.chat("read this", model="litellm-fireworks/qwen-3-7-plus", timeout=42, temperature=0.3,
+                                   env=self.ENV, opener=self._opener({"choices": [{"message": {"content": '{"kind": "x"}'}}]}, log))
+        self.assertEqual(text, '{"kind": "x"}')
+        self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/chat/completions")
+        self.assertEqual(log[0]["timeout"], 42.0)
+        body = log[0]["body"]
+        self.assertEqual(body["model"], "qwen-3-7-plus", "the CLI's provider prefix is dropped")
+        self.assertEqual(body["messages"], [{"role": "user", "content": "read this"}])
+        self.assertEqual(body["reasoning_effort"], "none")
+        self.assertEqual(body["temperature"], 0.3)
+        self.assertEqual(body["max_tokens"], 1500)
+        # Content may arrive as parts; empty content is an error; failures never carry the key.
+        parts = image_provider.chat("x", env=self.ENV, opener=self._opener({"choices": [{"message": {"content": [{"type": "text", "text": "{\"a\":1}"}]}}]}, []))
+        self.assertEqual(parts, '{"a":1}')
+        for response, words in ({"choices": [{"message": {"content": ""}}]}, "no text"), (503, "answered 503"), ("timeout", "did not answer"):
+            with self.assertRaisesRegex(OSError, words) as caught:
+                image_provider.chat("x", env=self.ENV, opener=self._opener(response, []))
+            self.assertNotIn("secret-key-value", str(caught.exception))
+
+    def test_complete_chooses_the_transport_and_maps_failures(self) -> None:
+        judge.reset_stats()
+        with patch.dict(os.environ, self.ENV), patch.object(image_provider, "chat", lambda prompt, **kw: '{"ok": true}') as _:
+            self.assertEqual(judge.complete("hello"), '{"ok": true}')
+        self.assertEqual(judge.CALL_LOG[-1]["transport"], "direct")
+        self.assertEqual(judge.stats()["model_direct"], 1)
+
+        def refused(prompt, **kw):  # noqa: ANN001, ANN003
+            raise OSError("judgement: the model provider answered 400: bad request")
+
+        def down(prompt, **kw):  # noqa: ANN001, ANN003
+            raise OSError("judgement: the model provider did not answer within 60 s")
+
+        with patch.dict(os.environ, self.ENV), patch.object(image_provider, "chat", refused):
+            with self.assertRaises(judge.JudgmentError) as caught:
+                judge.complete("hello")
+            self.assertFalse(caught.exception.transient, "a 4xx is the request, not the weather")
+        with patch.dict(os.environ, self.ENV), patch.object(image_provider, "chat", down):
+            with self.assertRaises(judge.JudgmentError) as caught:
+                judge.complete("hello")
+            self.assertTrue(caught.exception.transient)
+        # The profile may force the CLI; without the environment the CLI runs.
+        runner_calls: list = []
+
+        def runner(argv, **kwargs):  # noqa: ANN001, ANN003
+            runner_calls.append(argv)
+            return Mock(returncode=0, stdout=json.dumps({"ok": True, "outputs": [{"text": "{\"via\": \"cli\"}"}]}), stderr="")
+
+        with patch.dict(os.environ, self.ENV), patch.object(judge, "MODEL_PROVIDER_MODE", "cli"):
+            self.assertEqual(judge.complete("hello", runner=runner), '{"via": "cli"}')
+        self.assertIn("--thinking", runner_calls[0])
+        self.assertEqual(judge.CALL_LOG[-1]["transport"], "cli")
+        with patch.dict(os.environ, {"LITELLM_BASE_URL": "", "LITELLM_API_KEY": ""}):
+            self.assertEqual(judge.complete("hello", runner=runner), '{"via": "cli"}')
