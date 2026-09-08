@@ -372,7 +372,11 @@ def render_step(
         try:
             import gateway_token  # local import; only needed when the thread carries images
 
-            found = artwork_module.collect(thread, work_dir / "artwork", gateway_token.load_token())
+            try:
+                mailbox = (workflow_safe.read_object(p["shop_profile"]).get("shop") or {}).get("outbound_mailbox") if p.get("shop_profile") else None
+            except (OSError, ValueError):
+                mailbox = None
+            found = artwork_module.collect(thread, work_dir / "artwork", gateway_token.load_token(), mailbox=mailbox)
             art = found[-1] if found else None
         except Exception:  # noqa: BLE001 - artwork is a bonus; a render without it still goes to the owner
             art = None

@@ -30,12 +30,30 @@ def _parts(payload: Any):
         yield from _parts(child)
 
 
-def image_parts(thread: dict[str, Any]) -> list[dict[str, Any]]:
-    """(message id, attachment id, mime, filename) for every image, newest message first."""
+def _sender(message: dict[str, Any]) -> str:
+    headers = (message.get("payload") or {}).get("headers") if isinstance(message.get("payload"), dict) else None
+    for header in headers or []:
+        if isinstance(header, dict) and str(header.get("name") or "").lower() == "from":
+            return str(header.get("value") or "").lower()
+    return ""
+
+
+def image_parts(thread: dict[str, Any], mailbox: str | None = None) -> list[dict[str, Any]]:
+    """(message id, attachment id, mime, filename) for every image the customer sent, newest message first.
+
+    The shop's own messages are skipped: the desk mails its renderings as
+    attachments, and on a thread that already carried a rendering the newest
+    image was the desk's band, which then became the reference every view
+    of the next piece was edited from (live, 8 September 2026: an engagement
+    ring rendered as four men's bands).
+    """
     found: list[dict[str, Any]] = []
     messages = list(thread.get("messages") or [])
     messages.sort(key=lambda m: int(m.get("internalDate") or 0), reverse=True)
+    shop = str(mailbox or "").strip().lower()
     for message in messages:
+        if shop and shop in _sender(message):
+            continue
         for part in _parts(message.get("payload")):
             mime = str(part.get("mimeType") or "").lower()
             body = part.get("body") if isinstance(part.get("body"), dict) else {}
@@ -48,9 +66,9 @@ def image_parts(thread: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def collect(thread: dict[str, Any], out_dir: Path, token: str, opener: Callable[..., Any] | None = None,
-            limit: int = MAX_FILES) -> list[Path]:
-    """Fetch the newest image attachments into out_dir; returns their paths, newest first."""
-    parts = image_parts(thread)[:limit]
+            limit: int = MAX_FILES, mailbox: str | None = None) -> list[Path]:
+    """Fetch the customer's newest image attachments into out_dir; returns their paths, newest first."""
+    parts = image_parts(thread, mailbox)[:limit]
     if not parts:
         return []
     out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

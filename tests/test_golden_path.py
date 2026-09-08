@@ -228,8 +228,8 @@ class World:
             raise AssertionError("unexpected Gmail fetch: " + path)
         return self.thread(match.group(1))
 
-    def fake_collect(self, thread: dict, out_dir: Path, token: str, opener=None, limit: int = 3) -> list[Path]:
-        parts = artwork.image_parts(thread)
+    def fake_collect(self, thread: dict, out_dir: Path, token: str, opener=None, limit: int = 3, mailbox: str | None = None) -> list[Path]:
+        parts = artwork.image_parts(thread, mailbox)  # the shop's own attachments are never references
         if not parts:
             return []
         out_dir.mkdir(parents=True, exist_ok=True)

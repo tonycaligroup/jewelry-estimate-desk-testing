@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
+import artwork
 import brief_registry
 import activation_binding
 import business_state_reset
@@ -9160,7 +9161,7 @@ class ImageProviderTests(unittest.TestCase):
             text = image_provider.describe(image, "is it a ring?", model="litellm/kolo-best-available", env=self.ENV, opener=opener)
         self.assertIn('"answers"', text)
         body = json.loads(log[0]["body"])
-        self.assertEqual(body["model"], "kolo-best-available")
+        self.assertEqual(body["model"], image_provider.DIRECT_VISION_MODEL, "the CLI alias becomes a proxy model")
         self.assertEqual(body["messages"][0]["content"][0]["text"], "is it a ring?")
         self.assertTrue(body["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
         self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/chat/completions")
@@ -9375,3 +9376,62 @@ class EternityBandTests(unittest.TestCase):
         settled_two = estimate_record.settle_center_stone(two, words)
         self.assertEqual(settled_two["pieces"][0]["center_stone"], "no")
         self.assertNotIn("center_stone", settled_two["pieces"][1])
+
+
+class PieceTypeNeverSharedTests(unittest.TestCase):
+    """8 September 2026, live: a top-level piece_type reached the engagement ring, which lacked one, and its views were a band."""
+
+    def test_a_top_level_piece_type_never_reaches_a_piece(self) -> None:
+        spec = {"piece_type": "men's wedding band", "metal": "gold", "metal_karat": 18, "engraving": "TL", "pieces": [
+            {"piece_type": "men's wedding band", "finger_size": 10},
+            {"finger_size": 6, "stone_type": "diamond", "stone_carat": 1, "center_stone": "yes"}]}
+        pieces = estimate_record.pieces_of(spec)
+        self.assertEqual(pieces[0]["piece_type"], "men's wedding band")
+        self.assertNotIn("piece_type", pieces[1], "the ring does not become a band")
+        self.assertNotIn("engraving", pieces[1])
+        self.assertEqual(pieces[1]["metal_karat"], 18, "the metal is still shared")
+        self.assertEqual(estimate_record.piece_label(spec, 1), "piece 2")
+        self.assertIn("pieces.1.piece_type", spec_gate.missing_required_fields(spec, json.loads(
+            (Path(__file__).resolve().parent.parent / "templates" / "shop-profile.json").read_text(encoding="utf-8"))),
+            "a piece without a type is asked for one, not guessed")
+
+
+class ArtworkFromTheCustomerOnlyTests(unittest.TestCase):
+    """8 September 2026, live: the desk's own band rendering, attached to its email, became the reference the ring was edited from."""
+
+    def _message(self, mid: str, sender: str, date: int, filename: str) -> dict:
+        return {"id": mid, "internalDate": str(date), "payload": {"mimeType": "multipart/mixed",
+                "headers": [{"name": "From", "value": sender}],
+                "parts": [{"mimeType": "image/png", "filename": filename, "body": {"attachmentId": f"att-{mid}", "size": 1000}}]}}
+
+    def test_the_shops_own_attachments_are_skipped(self) -> None:
+        thread = {"messages": [
+            self._message("c1", "Pat <pat@example.net>", 1000, "logo.png"),
+            self._message("s1", "Kolo Jewelers <shop@example.com>", 2000, "rendering-1.png"),
+            self._message("s2", "shop@example.com", 2100, "rendering-2.png"),
+        ]}
+        parts = artwork.image_parts(thread, mailbox="shop@example.com")
+        self.assertEqual([p["filename"] for p in parts], ["logo.png"])
+        self.assertEqual([p["filename"] for p in artwork.image_parts(thread)][0], "rendering-2.png", "without a mailbox the old order stands")
+        self.assertEqual(artwork.image_parts({"messages": [self._message("s3", "shop@example.com", 3000, "r.png")]}, "shop@example.com"), [])
+
+    def test_the_direct_vision_call_uses_a_model_the_proxy_knows_with_thinking_off(self) -> None:
+        log: list = []
+
+        def opener(request, timeout=None):
+            log.append(json.loads(request.data))
+            class Resp:
+                def read(self_inner): return json.dumps({"choices": [{"message": {"content": '{"answers": {}}'}}]}).encode()
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return Resp()
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "v.png"; image.write_bytes(b"png")
+            image_provider.describe(image, "is it a ring?", model="litellm/kolo-best-available",
+                                    env={"LITELLM_BASE_URL": "http://proxy.local", "LITELLM_API_KEY": "k"}, opener=opener)
+            image_provider.describe(image, "is it a ring?", model="litellm/claude-haiku-4-5",
+                                    env={"LITELLM_BASE_URL": "http://proxy.local", "LITELLM_API_KEY": "k"}, opener=opener)
+        self.assertEqual(log[0]["model"], image_provider.DIRECT_VISION_MODEL, "the CLI alias is not a proxy model")
+        self.assertEqual(log[0]["reasoning_effort"], "none")
+        self.assertEqual(log[0]["max_tokens"], 1500)
+        self.assertEqual(log[1]["model"], "claude-haiku-4-5", "a named model is used as named")

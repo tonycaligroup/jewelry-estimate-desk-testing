@@ -731,6 +731,9 @@ SHARED_KEYS = (
 PIECE_PREFIX = "pieces."
 
 
+NEVER_SHARED = ("pieces", "notes", "piece_type", "engraving")
+
+
 def pieces_of(specification: Any) -> list[dict[str, Any]]:
     """The pieces in a specification: [spec] for one piece, one merged dict per entry otherwise.
 
@@ -748,8 +751,12 @@ def pieces_of(specification: Any) -> list[dict[str, Any]]:
     # shared by definition (the model put it there for both): metal, and
     # the stone facts too ("diamond, lab-grown, D" at the top with two
     # pieces below, 7 September 2026). Each piece's own facts win.
+    # What a piece *is* is never shared: a top-level piece_type beside a
+    # pieces list is the model's slip, and handing it to a piece without one
+    # rendered an engagement ring as a second men's band (live, 8 September
+    # 2026). An engraving is the one piece's too.
     shared = {k: v for k, v in specification.items()
-              if k not in ("pieces", "notes") and not isinstance(v, (list, dict)) and v not in (None, "", [])}
+              if k not in NEVER_SHARED and not isinstance(v, (list, dict)) and v not in (None, "", [])}
     merged = []
     for piece in raw:
         if isinstance(piece, dict):

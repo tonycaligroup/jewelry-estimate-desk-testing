@@ -381,6 +381,20 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.1 (8 September 2026): the customer's images only; the vision check direct.**
+Live, a second-piece rendering on a thread that already carried the
+band's approved renderings: all four views were the band, and every
+checker line read "not machine-checked (the vision check was
+unavailable)". `artwork.image_parts` took the newest image attachment
+from any message, and the newest was the desk's own rendering, so every
+view of the ring was an edit of the band. Now `image_parts(thread,
+mailbox)` skips messages from the shop's mailbox and
+`pipeline.render_step` passes it. The direct `image_provider.describe`
+sent the CLI's alias `kolo-best-available` as the model and left
+thinking on; `vision_model_name` maps the alias to `qwen-3-7-plus`
+(`DIRECT_VISION_MODEL`) and the call carries `reasoning_effort: "none"`,
+`max_tokens` 1500, temperature 0.
+
 **4.14.1 (built 8 September 2026): eternity and channel-set bands have no center stone.**
 Live: "a .2 ct diamond eternity band in the middle, channel set" drew a
 follow-up asking for "the carat weight of the center stone" and the cut.

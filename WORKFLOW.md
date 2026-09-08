@@ -437,6 +437,10 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.14.1): a rendering's
+  reference images come only from the customer's own messages, never from
+  the desk's earlier rendering emails on the thread; the vision check
+  reaches the provider with thinking off and a model it knows (6.6).
 - Built 8 September 2026 (4.14.1): an eternity,
   channel-set, pave, or all-around band has no center stone whatever the
   reading says; its stated carat is the total of the small stones; the

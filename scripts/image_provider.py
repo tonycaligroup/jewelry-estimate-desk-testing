@@ -26,7 +26,15 @@ from urllib.request import Request, urlopen
 BASE_URL_VAR = "LITELLM_BASE_URL"
 API_KEY_VAR = "LITELLM_API_KEY"
 DEFAULT_IMAGE_MODEL = "gpt-image-2"
-DEFAULT_VISION_MODEL = "kolo-best-available"
+DEFAULT_VISION_MODEL = "kolo-best-available"  # the CLI's alias
+DIRECT_VISION_MODEL = "qwen-3-7-plus"  # what the proxy knows; vision-capable (platform facts, 4 Sep 2026)
+CLI_ALIASES = ("kolo-best-available",)
+
+
+def vision_model_name(model: str | None) -> str:
+    """The proxy's id for the vision model: the CLI's alias becomes a real model."""
+    name = model_name(model, DEFAULT_VISION_MODEL)
+    return DIRECT_VISION_MODEL if name in CLI_ALIASES else name
 GENERATE_TIMEOUT_SECONDS = 180
 DESCRIBE_TIMEOUT_SECONDS = 90
 MODES = ("auto", "direct", "cli")
@@ -149,12 +157,14 @@ def describe(image: Path, prompt: str, model: str | None = None, timeout: float 
     seconds = float(timeout or DESCRIBE_TIMEOUT_SECONDS)
     encoded = base64.b64encode(Path(image).read_bytes()).decode("ascii")
     body = json.dumps({
-        "model": model_name(model, DEFAULT_VISION_MODEL),
+        "model": vision_model_name(model),
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
         ]}],
-        "max_tokens": 600,
+        "max_tokens": 1500,
+        "temperature": 0,
+        "reasoning_effort": "none",  # live, 8 September 2026: every vision check came back empty with thinking on
     }).encode()
     value = _post(f"{base}/v1/chat/completions", key, body, "application/json", seconds, "vision check", opener)
     choices = value.get("choices")
