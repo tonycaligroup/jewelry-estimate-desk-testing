@@ -28,7 +28,8 @@ outcome (the table below); after it, keep the receipts.
 
 ## After a run
 
-- The doctor prints `state: clean`, or every open item is explained.
+- The doctor prints `state: clean`, or every open item is explained; a `tick_killed` line names a tick the platform killed and what it was doing.
+- Nothing else on the pod is generating images during a rendering case: the platform CLI runs one command at a time, and a chat generating images in the background stretches or fails the desk's calls.
 - Every card and email is accounted for in the audit trail; nothing sent twice.
 - A defect found live becomes a fixture under `tests/fixtures/live/` the
   same day, before the fix (see the README there).

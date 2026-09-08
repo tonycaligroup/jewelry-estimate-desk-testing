@@ -226,6 +226,21 @@ def _render_settings(p: dict[str, Path]) -> tuple[str | None, str | None]:
     return vision_model, image_model
 
 
+DEFAULT_VIEWS_PER_PIECE = 2
+
+
+def _views_per_piece(p: dict[str, Path]) -> int:
+    """How many views each piece gets: the profile's rendering.views_per_piece (1 or 2), default two."""
+    try:
+        profile_now = workflow_safe.read_object(p["shop_profile"]) if p.get("shop_profile") else {}
+    except (OSError, ValueError):
+        profile_now = {}
+    value = (profile_now.get("rendering") or {}).get("views_per_piece")
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 2:
+        return value
+    return DEFAULT_VIEWS_PER_PIECE
+
+
 def _plan_rendering(
     p: dict[str, Path], message_id: str, record: dict[str, Any], paths: dict[str, str], openclaw: str,
     command_runner: Runner, model: str | None, art: Path | None,
@@ -248,7 +263,7 @@ def _plan_rendering(
         only = list(change.get("pieces") or []) or rendering.pieces_named(note, labels)
     specification = record.get("specification") or {}
     pieces = estimate_record.pieces_of(specification)
-    views_each = 2 if len(pieces) <= 2 else 1
+    views_each = min(_views_per_piece(p), 2 if len(pieces) <= 2 else 1)
     set_note = " The pieces are a matching set: one design language, the same metal finish and motifs, each piece its own size." \
         if len(pieces) > 1 and estimate_record.is_set(specification) else ""
     kept: dict[str, list[dict[str, Any]]] = {}

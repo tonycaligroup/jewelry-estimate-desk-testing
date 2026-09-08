@@ -122,6 +122,26 @@ DETERMINISTIC_ATTEMPTS = 2
 TICK_LOG_KEEP = 40
 
 
+TICK_MARK_FILE = "tick-started.json"
+
+
+def mark_tick(workspace: Path, **fields: Any) -> None:
+    """A tick writes its start (and each claim it takes) here; a tick that dies leaves this behind, unmatched by a log entry."""
+    try:
+        root = workspace / "estimate-desk" / "run-work"
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = root / TICK_MARK_FILE
+        current: dict[str, Any] = {}
+        if fields.get("started") is None:
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                current = {}
+        workflow_safe.write_private(path, {**(current if isinstance(current, dict) else {}), **fields})
+    except (OSError, ValueError):
+        pass
+
+
 def keep_summary(workspace: Path, summary: dict[str, Any]) -> None:
     """The last ticks' summaries, on disk, so a handoff or a deferral is never lost with the process."""
     try:
@@ -180,6 +200,7 @@ def run_inline_claim(
     and every external effect is journaled by the code it calls.
     """
     summary = summary if summary is not None else {"workers": [], "render_jobs": [], "spawn_failures": 0, "inline": [], "closed": 0, "manual_review": 0}
+    mark_tick(workspace, message_id=message_id, step="claim")
     started = time.monotonic()
     calls_before = len(judge.CALL_LOG)
     claim_token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
@@ -210,6 +231,7 @@ def run_inline_claim(
         switch = pipeline.settings(workspace / "estimate-desk")
         tick_started = summary.get("tick_started")
         deadline = (tick_started + cron_config.WATCHER_TIMEOUT_SECONDS - TICK_MARGIN_SECONDS) if tick_started else None
+        mark_tick(workspace, message_id=message_id, step="rendering view")
         done = pipeline.render_step(p, message_id, estimate_id, record, paths, openclaw, runner,
                                     model=switch.get("model"), judge_runner=judge_runner, deadline=deadline)
         if done.get("outcome") == "rendering_in_progress":
@@ -346,6 +368,7 @@ def tick(
     }
     started = time.monotonic()
     summary["tick_started"] = started
+    mark_tick(workspace, started=datetime.now(timezone.utc).isoformat(), message_id=None, step=None)
     judge.reset_stats()
     profile_result = validate_profile.validate_profile(
         validate_profile.load_profile(p["shop_profile"])

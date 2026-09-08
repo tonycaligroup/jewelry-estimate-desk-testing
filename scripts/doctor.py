@@ -26,6 +26,8 @@ import brief_registry
 import estimate_record
 import gateway_token
 import inbox_claim
+import cron_config
+import inbox_watcher
 import inbox_monitor
 import owner_questions
 import rehearsal
@@ -138,6 +140,22 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
             if item.get("outcome") in ("deferred", "needs_worker") and item.get("error"):
                 add("tick_trouble", f"tick {entry.get('at', '?')[:19]} message {item.get('message_id')}",
                     f"{item['outcome']}: {item['error']}", "nothing to run; recorded for the record", level="info")
+
+    mark = _read(desk / "run-work" / inbox_watcher.TICK_MARK_FILE)
+    if isinstance(mark, dict) and mark.get("started"):
+        last_logged = str((entries or [{}])[-1].get("at") or "") if isinstance(entries, list) and entries else ""
+        try:
+            started_at = datetime.fromisoformat(str(mark["started"]))
+            age = (datetime.now(timezone.utc) - started_at).total_seconds()
+        except ValueError:
+            started_at, age = None, 0.0
+        if started_at is not None and str(mark["started"]) > last_logged and age > cron_config.WATCHER_TIMEOUT_SECONDS + 60:
+            # Started, never logged, and older than the watcher's limit: killed.
+            where = f" on message {mark.get('message_id')} ({mark.get('step')})" if mark.get("message_id") else ""
+            add("tick_killed", f"tick {str(mark['started'])[:19]}",
+                f"this tick started and never finished{where}; the platform killed it at the {cron_config.WATCHER_TIMEOUT_SECONDS} s limit",
+                "nothing to run; the next tick retries the claim after its lease lapses; repeated kills on one message mean a call that "
+                "cannot finish inside a tick", level="info")
 
     for q in open_questions:
         if q.get("kind") not in PARKING_KINDS:

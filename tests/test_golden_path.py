@@ -112,6 +112,7 @@ class World:
     def __init__(self, ws: Path) -> None:
         self.ws = ws
         self.fail_next: dict[str, int] = {}
+        self.timeout_next: dict[str, int] = {}
         self.crash_after: set[str] = set()
         self.calls: list[str] = []
         self.threads: dict[str, list[dict]] = {}
@@ -319,6 +320,11 @@ class World:
                 return subprocess.CompletedProcess(argv, 1, "", "model down")
             return self._after("model", ok(argv, json.dumps({"text": json.dumps(self.answer(prompt))})))
         if argv[1:3] == ["infer", "image"] and argv[3] in ("generate", "edit"):
+            if self.timeout_next.get("image", 0) > 0:
+                # The provider ran past the tick's deadline; the desk cut the call off itself.
+                self.timeout_next["image"] -= 1
+                self.calls.append("image")
+                raise subprocess.TimeoutExpired(argv, 1)
             self._service("image", argv, "checked")
             output = Path(flag(argv, "--output"))
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -1441,6 +1447,29 @@ class OwnStoneAndStallTests(SideBranchTests):
                     if world.cards and world.cards[-1]["kind"] == "send_rendering":
                         break
                 self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)
+        self.run_branch(branch)
+
+    def test_an_image_call_that_runs_past_the_deadline_is_cut_off_and_the_view_retried_next_tick(self) -> None:
+        """Kolo's probe, 7 September 2026: --timeout-ms is not honoured (a generate ran 351 s) and killed the tick.
+        The desk cuts the call off itself; the tick ends on time; the next tick renders the view."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            world.timeout_next["image"] = 1
+            summary = self.one_tick(ws, world)
+            deferred = [i for i in summary["inline"] if i["outcome"] == "deferred"]
+            self.assertEqual(len(deferred), 1, summary)
+            self.assertIn("cut off", deferred[0]["error"])
+            self.assertEqual(deferred[0]["kind"], "transient", "a cut-off call is retried, not asked about")
+            for _ in range(4):
+                summary = self.one_tick(ws, world)
+                if world.cards and world.cards[-1]["kind"] == "send_rendering":
+                    break
+            self.assertEqual(world.cards[-1]["kind"], "send_rendering", summary)
+            mark = json.loads((ws / "estimate-desk" / "run-work" / inbox_watcher.TICK_MARK_FILE).read_text(encoding="utf-8"))
+            self.assertIn("started", mark)
+            self.assertEqual([f["code"] for f in doctor.scan(ws) if f["code"] == "tick_killed"], [], "a finished tick is not a killed one")
         self.run_branch(branch)
 
     def test_a_rendering_between_views_is_in_flight_and_the_owner_hears_nothing(self) -> None:

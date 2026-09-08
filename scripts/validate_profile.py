@@ -54,6 +54,9 @@ def validate_profile(data: Any) -> dict[str, Any]:
                 value = rendering_block.get(key)
                 if value is not None and not re.match(r"^[a-z0-9_.-]+/[A-Za-z0-9_.:-]+$", str(value)):
                     errors.append(f"rendering.{key} must be provider/model, for example litellm/kolo-best-available")
+            views = rendering_block.get("views_per_piece")
+            if views is not None and (isinstance(views, bool) or not isinstance(views, int) or not 1 <= views <= 2):
+                errors.append("rendering.views_per_piece must be 1 or 2 (two views per piece is the default)")
 
     mode = _read_path(data, "shop.mode")
     if mode is not None and mode != "retailer":

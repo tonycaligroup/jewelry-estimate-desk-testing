@@ -398,6 +398,21 @@ budget counts that) or defers; the fourth start of one view raises
 "did not finish in 3 ticks", which the watcher turns into the stuck-claim
 question, and the count resets so "retry" or a requeue starts fresh.
 `render_and_send` (lab and tests) passes no deadline and is unchanged.
+Kolo's probe the same evening (three `openclaw infer image generate` at
+once): two failed at once with "database is locked" (the CLI's SQLite
+state; concurrency is one), and the third ran 351 s with
+`--timeout-ms 180000`, so the flag is not a ceiling. Hence
+`rendering.run_cli`: every image and vision call runs with a subprocess
+`timeout` of what remains before the deadline minus 20 s (floor 30 s), a
+`TimeoutExpired` becomes an `OSError` ("cut off", transient, retried next
+tick), and a "database is locked" failure is tried again after 5 s up to
+four times inside the tick. Parallel views inside a tick are therefore
+off the table via the CLI. `inbox_watcher.mark_tick` writes
+`run-work/tick-started.json` at tick start and on each claim and view;
+`doctor` reports `tick_killed` when the mark is newer than the last
+tick-log entry and older than the watcher limit, naming the message and
+step. `pipeline._views_per_piece` reads `rendering.views_per_piece`
+(1 or 2, validated), default 2.
 
 **Unpublished after 4.13.4 (7 September 2026): a twin piece takes the quoted numbers.**
 Live case 5: the customer asked for the same band in rose gold, specs

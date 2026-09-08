@@ -50,6 +50,42 @@ IMAGE_MIN_TIMEOUT_MS = 60_000
 
 def remaining_seconds(deadline: float | None) -> float | None:
     return None if deadline is None else deadline - time.monotonic()
+
+
+# Kolo's probe, 7 September 2026: the CLI's --timeout-ms is not honoured (one
+# generate ran 351 s) and two openclaw commands at once fail at once with
+# "database is locked" (the CLI's SQLite state). So the desk cuts a call off
+# itself at the tick's deadline (the tick is never killed), and a locked call
+# is tried again a few seconds later inside the same tick.
+LOCK_TEXT = "database is locked"
+LOCK_TRIES = 4
+LOCK_PAUSE_SECONDS = 5
+CUTOFF_MARGIN_SECONDS = 20
+CUTOFF_MIN_SECONDS = 30
+
+
+def run_cli(argv: list[str], runner: Runner, deadline: float | None, what: str) -> subprocess.CompletedProcess:
+    """Run one openclaw command: cut off at the deadline, tried again on the CLI's database lock."""
+    last_lock: Exception | None = None
+    for attempt in range(LOCK_TRIES):
+        seconds = None
+        left = remaining_seconds(deadline)
+        if left is not None:
+            seconds = max(CUTOFF_MIN_SECONDS, left - CUTOFF_MARGIN_SECONDS)
+        try:
+            return runner(argv, check=True, capture_output=True, text=True, shell=False, timeout=seconds)
+        except subprocess.TimeoutExpired as exc:
+            raise OSError(f"{what} cut off after {int(seconds or 0)} s at the tick's deadline") from exc
+        except subprocess.CalledProcessError as exc:
+            text = ((exc.stderr or "") + (exc.stdout or "")).lower()
+            if LOCK_TEXT not in text:
+                raise
+            last_lock = exc
+            left = remaining_seconds(deadline)
+            if attempt + 1 >= LOCK_TRIES or (left is not None and left < CUTOFF_MIN_SECONDS + LOCK_PAUSE_SECONDS):
+                break
+            time.sleep(LOCK_PAUSE_SECONDS)
+    raise OSError(f"{what}: the openclaw CLI was busy ({LOCK_TEXT}) {LOCK_TRIES} times running") from last_lock
 MARK_SOURCES = ("artwork", "initials", "none")
 
 
@@ -170,7 +206,7 @@ def render(prompt: str, refs: list[Path], output: Path, openclaw: str, runner: R
     left = remaining_seconds(deadline)
     if left is not None:
         timeout_ms = int(min(IMAGE_TIMEOUT_MS, max(IMAGE_MIN_TIMEOUT_MS, (left - 30) * 1000)))
-    completed = runner(image_argv(prompt, refs, output, openclaw, model, timeout_ms), check=True, capture_output=True, text=True, shell=False)
+    completed = run_cli(image_argv(prompt, refs, output, openclaw, model, timeout_ms), runner, deadline, "image generation")
     envelope = _envelope(completed.stdout)
     outputs = envelope.get("outputs") or []
     path = outputs[0].get("path") if outputs and isinstance(outputs[0], dict) else None
@@ -227,7 +263,7 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
     last_error: Exception | None = None
     for attempt in range(DESCRIBE_TRIES):
         try:
-            completed = runner(describe_argv(image, prompt, openclaw, vision_model), check=True, capture_output=True, text=True, shell=False)
+            completed = run_cli(describe_argv(image, prompt, openclaw, vision_model), runner, deadline, "vision check")
             break
         except (OSError, subprocess.CalledProcessError) as exc:
             last_error = exc

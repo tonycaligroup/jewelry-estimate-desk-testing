@@ -31,6 +31,7 @@ import business_state_reset
 import customer_content_guard
 import customer_mail
 import cron_config
+import doctor
 import customer_state_reset
 import inbox_claim
 import inbox_watcher
@@ -8893,3 +8894,79 @@ class TwinPieceTests(unittest.TestCase):
         self.assertEqual([p["finished_grams"] for p in chosen["pieces"]], [12.0, 12.0])
         self.assertNotIn("twin_of", chosen["pieces"][1])
         self.assertEqual(chosen["pieces"][1]["label"], "band, rose gold")
+
+
+class CliCutoffTests(unittest.TestCase):
+    """Kolo's probe, 7 September 2026: --timeout-ms not honoured; two openclaw calls at once fail 'database is locked'."""
+
+    def test_a_call_past_the_deadline_is_cut_off_as_a_transient_failure(self) -> None:
+        seen = {}
+
+        def runner(argv, **kwargs):  # noqa: ANN001, ANN003
+            seen.update(kwargs)
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        with self.assertRaisesRegex(OSError, "cut off"):
+            rendering.run_cli(["openclaw", "infer"], runner, time.monotonic() + 100, "image generation")
+        self.assertAlmostEqual(seen["timeout"], 80, delta=1, msg="what remains, minus the margin")
+        with self.assertRaisesRegex(OSError, "cut off"):
+            rendering.run_cli(["openclaw", "infer"], runner, time.monotonic() + 10, "image generation")
+        self.assertEqual(seen["timeout"], rendering.CUTOFF_MIN_SECONDS, "never less than the floor")
+        seen.clear()
+        with self.assertRaises(OSError):
+            rendering.run_cli(["openclaw", "infer"], runner, None, "image generation")
+        self.assertIsNone(seen["timeout"], "no deadline, no cutoff (the lab path)")
+
+    def test_the_cli_lock_is_tried_again_inside_the_tick(self) -> None:
+        calls = []
+
+        def runner(argv, **kwargs):  # noqa: ANN001, ANN003
+            calls.append(1)
+            if len(calls) < 3:
+                raise subprocess.CalledProcessError(1, argv, "", "[openclaw] Could not start the CLI.\n[openclaw] Reason: database is locked")
+            return Mock(returncode=0, stdout="{}", stderr="")
+        with patch.object(rendering, "LOCK_PAUSE_SECONDS", 0):
+            done = rendering.run_cli(["openclaw", "infer"], runner, time.monotonic() + 300, "vision check")
+        self.assertEqual(done.returncode, 0)
+        self.assertEqual(len(calls), 3)
+
+        def always_locked(argv, **kwargs):  # noqa: ANN001, ANN003
+            raise subprocess.CalledProcessError(1, argv, "", "database is locked")
+        with patch.object(rendering, "LOCK_PAUSE_SECONDS", 0), self.assertRaisesRegex(OSError, "busy"):
+            rendering.run_cli(["openclaw", "infer"], always_locked, time.monotonic() + 300, "vision check")
+
+        def other_error(argv, **kwargs):  # noqa: ANN001, ANN003
+            raise subprocess.CalledProcessError(1, argv, "", "model down")
+        with self.assertRaises(subprocess.CalledProcessError):
+            rendering.run_cli(["openclaw", "infer"], other_error, None, "vision check")
+
+
+class ViewsPerPieceTests(unittest.TestCase):
+    def test_the_profile_may_set_one_or_two_views_per_piece(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "shop-profile.json"
+            for value, want in ((None, 2), (1, 1), (2, 2), (3, 2), ("1", 2)):
+                profile.write_text(json.dumps({"rendering": {"views_per_piece": value}} if value is not None else {}), encoding="utf-8")
+                self.assertEqual(pipeline._views_per_piece({"shop_profile": profile}), want, value)
+        base = json.loads((Path(__file__).resolve().parent.parent / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
+        base["rendering"] = {"views_per_piece": 3}
+        self.assertTrue(any("views_per_piece" in e for e in validate_profile.validate_profile(base)["errors"]))
+        base["rendering"] = {"views_per_piece": 1}
+        self.assertFalse(any("views_per_piece" in e for e in validate_profile.validate_profile(base)["errors"]))
+
+
+class KilledTickTests(unittest.TestCase):
+    def test_the_doctor_names_a_tick_that_started_and_never_finished(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp)
+            run_work = ws / "estimate-desk" / "run-work"; run_work.mkdir(parents=True)
+            old = (datetime.now(timezone.utc) - timedelta(seconds=cron_config.WATCHER_TIMEOUT_SECONDS + 120)).isoformat()
+            (run_work / "tick-log.json").write_text(json.dumps([{"at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), "inline": []}]), encoding="utf-8")
+            inbox_watcher.mark_tick(ws, started=old, message_id=None, step=None)
+            inbox_watcher.mark_tick(ws, message_id="1a07e22157bb624a", step="rendering view")
+            found = [f for f in doctor.scan(ws) if f["code"] == "tick_killed"]
+            self.assertEqual(len(found), 1, doctor.scan(ws))
+            self.assertIn("1a07e22157bb624a", found[0]["detail"])
+            self.assertIn("rendering view", found[0]["detail"])
+            # A tick that finished (its log entry is newer than the mark) is not reported.
+            (run_work / "tick-log.json").write_text(json.dumps([{"at": datetime.now(timezone.utc).isoformat(), "inline": []}]), encoding="utf-8")
+            self.assertEqual([f for f in doctor.scan(ws) if f["code"] == "tick_killed"], [])
