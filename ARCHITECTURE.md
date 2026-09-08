@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.4 (7 September 2026): the view step keeps to the tick's clock.**
+**4.13.5 (built 7 September 2026): the view step keeps to the tick's clock.**
 Live: "cron: job execution timed out" while renders were under way. One
 view is an image call (180 s timeout) plus a vision check (3 tries at 90 s)
 and, on a failed check, the same again for a regeneration: up to 900 s
@@ -414,7 +414,7 @@ tick-log entry and older than the watcher limit, naming the message and
 step. `pipeline._views_per_piece` reads `rendering.views_per_piece`
 (1 or 2, validated), default 2.
 
-**Unpublished after 4.13.4 (7 September 2026): a twin piece takes the quoted numbers.**
+**4.13.5 (built 7 September 2026): a twin piece takes the quoted numbers.**
 Live case 5: the customer asked for the same band in rose gold, specs
 copied exactly, and the model weighed it again (12 g to 10 g, 1.8 ct to 1.2
 ct, other fees). `cost_components.is_twin(new, quoted)`: same piece type,
@@ -427,7 +427,7 @@ differ. `prepare` gives a twin the quoted piece's `prior_quantities`
 nothing when every piece is covered. Fixture:
 `tests/fixtures/live/2026-09-07-twin-band-rose-gold.json`.
 
-**Unpublished after 4.13.4 (7 September 2026): twin piece labels.**
+**4.13.5 (built 7 September 2026): twin piece labels.**
 Live case 5 on 4.13.4 passed (brief #46 kept brief #45's band to the cent,
 shipping once, title whole) but both bands were labelled "(men's wedding
 band)". `estimate_record.piece_label` now appends the first differing fact

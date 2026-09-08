@@ -1,7 +1,7 @@
 {
   "defect": "the customer asked for the same band again in rose gold (specs copied exactly); the second piece was weighed again by the model (12 g became 10 g, 1.8 ct melee became 1.2 ct, different fees) instead of taking the quoted band's numbers",
   "seen_on": "4.13.4",
-  "fixed_in": "unpublished",
+  "fixed_in": "4.13.5",
   "text_is": "paraphrase",
   "kind": "golden_path",
   "steps": [

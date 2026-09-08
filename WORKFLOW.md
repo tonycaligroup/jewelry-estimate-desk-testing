@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 7 September 2026 (unpublished, after 4.13.4): a rendering view keeps
+- Built 7 September 2026 (4.13.5): a rendering view keeps
   to the watcher tick's clock. The desk cuts an image or vision call off
   itself at the tick's deadline (the platform's own timeout flag is not
   honoured; one generation ran 351 s and killed the tick), so a tick is
@@ -448,13 +448,13 @@ closed by follow-up changes:
   The doctor names a tick that started and never finished. The profile may
   set `rendering.views_per_piece` to 1 (default 2) for speed over angles
   (6.6, 10).
-- Built 7 September 2026 (unpublished, after 4.13.4): a new piece that is a
+- Built 7 September 2026 (4.13.5): a new piece that is a
   quoted piece in another colour or finish (every fact that drives weight,
   stones and labour the same; colour, finish, engraving and stone grade may
   differ) takes the quoted piece's grams, hours, stones and fees; the model
   is not asked. A changed size, width, metal, karat, stone or setting is a
   different piece and is estimated (6.8).
-- Built 7 September 2026 (unpublished, after 4.13.4): two pieces of one
+- Built 7 September 2026 (4.13.5): two pieces of one
   kind are told apart on the card by what differs ("men's wedding band,
   rose gold", or "size 5"; a still-identical pair is numbered), so every
   assumption line names its piece (6.3).
