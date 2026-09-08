@@ -79,9 +79,15 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
         add("inline judgment", "SKIP", "pipeline.json turns it off; worker jobs will be used")
     else:
         try:
-            proc = _run(judge.infer_argv('Reply with exactly {"ok":true}', model, openclaw), runner, timeout=90)
-            text = judge._unwrap(proc.stdout) if proc.returncode == 0 else ""
-            add("inline judgment", "PASS" if '"ok"' in text else "FAIL", f"model {model}: " + (text[:80] or proc.stderr[:120]))
+            import image_provider
+            import inbox_watcher
+
+            profile_now = validate_profile.load_profile(desk / "shop-profile.json")
+            mode = inbox_watcher.desk_settings(profile_now if isinstance(profile_now, dict) else None)["model_provider"]
+            judge.MODEL_PROVIDER_MODE = mode
+            transport = "direct (proxy reachable)" if image_provider.available(mode) else "cli"
+            text = judge.complete('Reply with exactly {"ok":true}', model, runner, openclaw, timeout=90)
+            add("inline judgment", "PASS" if '"ok"' in text else "FAIL", f"model {model} via {transport}: " + text[:80])
         except Exception as exc:  # noqa: BLE001 - a readiness check reports, never crashes
             add("inline judgment", "FAIL", f"model {model}: {exc}")
 

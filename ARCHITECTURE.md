@@ -381,6 +381,33 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.11 (8 September 2026, RELEASE-PLAN-4.14.md): the model off the CLI; claims in parallel.**
+Measured on the desk's pod: a judgement 13 s through the CLI, 1.2 s
+direct with `reasoning_effort: "none"` (with thinking on, Qwen spends the
+budget on reasoning and returns nothing), 24 at once in 1.7 s, 24 of 24
+parsing. `judge.complete` is the one transport decision:
+`image_provider.chat` (`/v1/chat/completions`, one user message,
+temperature 0, drafts 0.3, `max_tokens` 1500) when
+`image_provider.available(judge.MODEL_PROVIDER_MODE)`, the CLI otherwise;
+a 4xx is a deterministic `JudgmentError`, a timeout or 5xx transient;
+`CALL_LOG` carries `transport`, the tick's timing block `model_direct`.
+`cli.py` is the one runner for platform commands (lock retry, cutoff);
+`kolo_safe.run_command` uses it with a 120 s ceiling; `rendering.run_cli`
+delegates; the cron sweep is gone. `inbox_watcher.desk_settings` reads
+`desk.claims_per_tick` (default 16, the old `DEFAULT_MAX_WORKERS` of 2 was
+the desk's real ceiling), `desk.parallel_claims` (default 1) and
+`model.provider`; `tick` sets `judge.MODEL_PROVIDER_MODE`, reports
+`transport`, and at parallel 1 runs the unchanged sequential path; above
+1, `_run_claims_in_parallel` lists retries, then claims new mail up to the
+cap, then renderings, groups the list by thread, runs each group in order
+on one worker and groups `parallel` at a time, each task with its own
+summary merged under a lock. The tick mark lists claims in flight
+(`_MARK_LOCK`). Readiness runs its judgement check through
+`judge.complete` and names the transport. The brief registry and the
+questions are per-file atomic writes with content-hashed names, so they
+need no lock. Rollout: direct on, parallel 1 as shipped; raised in the
+profile after the burst test (plan 2.5).
+
 **4.13.11 (built 8 September 2026): the image provider, called directly; views in parallel; mail first.**
 Kolo (asked in a fresh thread, then a self-deleting command job on the
 pod): the CLI's image calls go to a LiteLLM proxy whose base URL and key

@@ -1650,6 +1650,78 @@ class OwnStoneAndStallTests(SideBranchTests):
             self.assertEqual(world.calls.count("model"), 0, "no CLI model call")
         self.run_branch(branch)
 
+    def _parallel_profile(self, ws: Path, parallel: int, claims: int = 16) -> None:
+        profile_path = ws / "estimate-desk" / "shop-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile["desk"] = {"claims_per_tick": claims, "parallel_claims": parallel}
+        profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+    def test_a_burst_of_six_customers_is_handled_in_one_tick_on_the_pooled_path(self) -> None:
+        """RELEASE-PLAN-4.14.md 2.2: claims of different customers run side by side; every record, claim and card once."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            self._parallel_profile(ws, parallel=4)
+            world.spec = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                          "setting_style": "bead set", "engraving": "our logo on the face",
+                          "accent_stones": "small lab-grown diamonds along the shoulders",
+                          "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS"}
+            for n in range(1, 7):
+                world.customer_message(f"b{n}", f"thread-b{n}", f"A 14k signet ring, size 10, logo on the face, small lab-grown diamonds G VS bead set. Customer {n}\n\nPat {n}",
+                                       subject=f"Signet {n}", sender=f"customer{n}@example.org")
+            env, gen, desc, chat = self._direct_provider(world)
+            with env, gen, desc, chat:
+                summary = self.one_tick(ws, world)
+            self.assertEqual(summary["transport"], "direct")
+            outcomes = sorted((i["message_id"], i["outcome"]) for i in summary["inline"])
+            self.assertEqual(outcomes, [(f"b{n}", "approval_requested") for n in range(1, 7)], summary)
+            self.assertEqual(summary["claimed"], 6)
+            self.assertEqual(len(sorted((ws / "estimate-desk" / "records").glob("*.json"))), 6, "one record per customer")
+            self.assertEqual(len([c for c in world.cards if c["kind"] == "price_approval" or "Price approval" in c["title"]]), 6)
+            self.assertEqual(sorted(self.claim(ws, f"b{n}")["status"] for n in range(1, 7)), ["processed"] * 6, "a carded claim is finished; the record waits for the owner")
+            mark = json.loads((ws / "estimate-desk" / "run-work" / inbox_watcher.TICK_MARK_FILE).read_text(encoding="utf-8"))
+            self.assertEqual(sorted(mark["claims"]), [f"b{n}" for n in range(1, 7)], "the tick mark lists every claim in flight")
+        self.run_branch(branch)
+
+    def test_a_reply_on_a_thread_runs_after_its_first_message_on_the_pooled_path(self) -> None:
+        """RELEASE-PLAN-4.14.md 2.4: one customer's claims stay in order; a reply never races its own thread."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            self._parallel_profile(ws, parallel=4)
+            world.spec = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k",
+                          "engraving": "our logo on the face", "accent_stones": "small lab-grown diamonds along the shoulders",
+                          "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS"}
+            world.customer_message("t1", "thread-t", "A 14k signet ring, logo on the face, small lab-grown diamonds G VS.\n\nPat", subject="Signet")
+            env, gen, desc, chat = self._direct_provider(world)
+            with env, gen, desc, chat:
+                first = self.one_tick(ws, world)
+                self.assertEqual([i["outcome"] for i in first["inline"]], ["followup_sent"], first)
+                # The customer answers the follow-up, and a stranger writes at the same moment.
+                world.spec = {**world.spec, "finger_size": "10", "setting_style": "bead set"}
+                world.customer_message("t2", "thread-t", "Size 10, bead set please.\n\nPat", subject="Re: Signet")
+                world.customer_message("x1", "thread-x", "A 14k signet ring, size 10, logo on the face, small lab-grown diamonds G VS bead set.\n\nSam",
+                                       subject="Signet for Sam", sender="sam@example.org")
+                second = self.one_tick(ws, world)
+            outcomes = sorted((i["message_id"], i["outcome"]) for i in second["inline"])
+            self.assertEqual(outcomes, [("t2", "approval_requested"), ("x1", "approval_requested")], second)
+            self.assertEqual(len(sorted((ws / "estimate-desk" / "records").glob("*.json"))), 2, "one record per customer")
+            self.assertEqual(len([c for c in world.cards if "Price approval" in c["title"]]), 2)
+            self.assertEqual(len(world.sent), 1, "one follow-up, sent once")
+        self.run_branch(branch)
+
+    def test_parallel_one_is_the_sequential_path(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._parallel_profile(ws, parallel=1, claims=2)
+            world.spec = {"piece_type": "wedding band", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "7",
+                          "notes": "plain, polished, no stones"}
+            for n in range(1, 4):
+                world.customer_message(f"s{n}", f"thread-s{n}", f"A plain band, size 7. {n}\n\nPat", subject=f"Band {n}",
+                                       sender=f"seq{n}@example.org")
+            first = self.one_tick(ws, world)
+            self.assertEqual(len(first["inline"]), 2, "two claims per tick when the cap is two")
+            second = self.one_tick(ws, world)
+            self.assertEqual(len(second["inline"]), 1)
+        self.run_branch(branch)
+
     def test_a_rendering_between_views_is_in_flight_and_the_owner_hears_nothing(self) -> None:
         """7 September 2026, rehearsal: every rendering tick announced "1 claimed item(s) still processing"."""
         def branch(ws: Path, world: World) -> None:

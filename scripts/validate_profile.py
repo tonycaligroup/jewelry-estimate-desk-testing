@@ -72,6 +72,22 @@ def validate_profile(data: Any) -> dict[str, Any]:
             if views is not None and (isinstance(views, bool) or not isinstance(views, int) or not 1 <= views <= 2):
                 errors.append("rendering.views_per_piece must be 1 or 2 (two views per piece is the default)")
 
+    desk_block = data.get("desk")
+    if desk_block is not None:
+        if not isinstance(desk_block, dict):
+            errors.append("desk must be an object")
+        else:
+            for key, ceiling in (("claims_per_tick", 64), ("parallel_claims", 16)):
+                value = desk_block.get(key)
+                if value is not None and (isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= ceiling):
+                    errors.append(f"desk.{key} must be a whole number from 1 to {ceiling}")
+    model_block = data.get("model")
+    if model_block is not None:
+        if not isinstance(model_block, dict):
+            errors.append("model must be an object")
+        elif model_block.get("provider") is not None and model_block.get("provider") not in ("auto", "direct", "cli"):
+            errors.append("model.provider must be auto, direct, or cli")
+
     mode = _read_path(data, "shop.mode")
     if mode is not None and mode != "retailer":
         # WORKFLOW.md: retail only. A missing mode means retailer.

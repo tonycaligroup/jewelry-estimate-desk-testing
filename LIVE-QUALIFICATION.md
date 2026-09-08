@@ -24,6 +24,8 @@ outcome (the table below); after it, keep the receipts.
 | 5 | Second piece | "also quote a band" | owner question → "second piece" → one card with two lines; the first piece's grams, hours, stones identical to case 1's card; shipping once; title whole | both brief ids, side by side |
 | 6 | Same customer, new thread | new subject, "same ring as before" | owner question → "same" → the estimate continues on the new thread, no second record | question code, record route_history |
 | 7 | Time outside the hours | "Saturday 6 pm" | offer card row "(outside your hours: …)"; email states the hours and offers open times; nothing booked outside | brief id, sent Gmail id |
+| 9 | Transport comparison (4.14) | one inquiry with `model.provider: cli`, then the same inquiry with `auto` | the same reading and card both ways; readiness names the transport; the tick log's timing shows `model_direct` | both records' specifications |
+| 10 | Burst (4.14) | twelve inquiries from distinct addresses within a minute, `desk.parallel_claims` 8 | all twelve carded within two ticks; one record and one card each; no duplicate follow-ups | tick-log lines, send-to-card time of the last one |
 | 8 | Rehearsal on | any of the above from the owner's address; one real-looking mail from another address | the owner's mail runs with [REHEARSAL] everywhere; the other is held, released on `--off` | held item in the doctor, release line |
 
 ## After a run

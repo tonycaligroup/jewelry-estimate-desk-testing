@@ -8963,14 +8963,14 @@ class CliCutoffTests(unittest.TestCase):
             if len(calls) < 3:
                 raise subprocess.CalledProcessError(1, argv, "", "[openclaw] Could not start the CLI.\n[openclaw] Reason: database is locked")
             return Mock(returncode=0, stdout="{}", stderr="")
-        with patch.object(rendering, "LOCK_PAUSE_SECONDS", 0):
+        with patch.object(cli, "LOCK_PAUSE_SECONDS", 0):
             done = rendering.run_cli(["openclaw", "infer"], runner, time.monotonic() + 300, "vision check")
         self.assertEqual(done.returncode, 0)
         self.assertEqual(len(calls), 3)
 
         def always_locked(argv, **kwargs):  # noqa: ANN001, ANN003
             raise subprocess.CalledProcessError(1, argv, "", "database is locked")
-        with patch.object(rendering, "LOCK_PAUSE_SECONDS", 0), self.assertRaisesRegex(OSError, "busy"):
+        with patch.object(cli, "LOCK_PAUSE_SECONDS", 0), self.assertRaisesRegex(OSError, "busy"):
             rendering.run_cli(["openclaw", "infer"], always_locked, time.monotonic() + 300, "vision check")
 
         def other_error(argv, **kwargs):  # noqa: ANN001, ANN003
@@ -9324,3 +9324,22 @@ class SharedCliRunnerTests(unittest.TestCase):
 
     def test_the_tick_no_longer_lists_cron_jobs(self) -> None:
         self.assertNotIn("sweep_worker_jobs(openclaw", Path(inbox_watcher.__file__).read_text(encoding="utf-8").split("def tick(")[1])
+
+
+class DeskSettingsTests(unittest.TestCase):
+    def test_desk_and_model_blocks_are_read_and_validated(self) -> None:
+        self.assertEqual(inbox_watcher.desk_settings(None), {"claims_per_tick": 16, "parallel_claims": 1, "model_provider": "auto"})
+        self.assertEqual(inbox_watcher.desk_settings({"desk": {"claims_per_tick": 8, "parallel_claims": 4}, "model": {"provider": "cli"}}),
+                         {"claims_per_tick": 8, "parallel_claims": 4, "model_provider": "cli"})
+        self.assertEqual(inbox_watcher.desk_settings({"desk": {"claims_per_tick": 999, "parallel_claims": True}, "model": {"provider": "x"}}),
+                         {"claims_per_tick": 16, "parallel_claims": 1, "model_provider": "auto"})
+        base = json.loads((Path(__file__).resolve().parent.parent / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
+        base["desk"] = {"claims_per_tick": 0}
+        self.assertTrue(any("desk.claims_per_tick" in e for e in validate_profile.validate_profile(base)["errors"]))
+        base["desk"] = {"parallel_claims": 17}
+        self.assertTrue(any("desk.parallel_claims" in e for e in validate_profile.validate_profile(base)["errors"]))
+        base["desk"] = {"claims_per_tick": 16, "parallel_claims": 8}
+        base["model"] = {"provider": "direct"}
+        self.assertFalse(any("desk." in e or "model." in e for e in validate_profile.validate_profile(base)["errors"]))
+        base["model"] = {"provider": "sideways"}
+        self.assertTrue(any("model.provider" in e for e in validate_profile.validate_profile(base)["errors"]))

@@ -83,5 +83,12 @@
     "tax_handling": null,
     "quote_valid_days": 7,
     "rendering_policy": "offer"
+  },
+  "desk": {
+    "claims_per_tick": 16,
+    "parallel_claims": 1
+  },
+  "model": {
+    "provider": "auto"
   }
 }

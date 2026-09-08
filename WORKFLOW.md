@@ -437,6 +437,15 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.13.11; RELEASE-PLAN-4.14.md):
+  every judgement the desk makes goes to the model provider directly when
+  its address and key are in the desk's environment (about a second a
+  call against thirteen through the platform CLI, thinking off, the same
+  prompts and checks), the CLI remaining the fallback; the tick may take
+  up to sixteen claims and, when the profile says so, run different
+  customers' claims side by side while one customer's claims stay in
+  order; the platform commands that file cards and notices retry a busy
+  CLI and are cut off if they hang (10).
 - Built 8 September 2026 (4.13.11): renderings call the
   image provider directly when its address and key are in the desk's
   environment (the platform CLI took 40 to 351 seconds per image and ran

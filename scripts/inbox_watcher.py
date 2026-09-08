@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import re
 import shutil
 import subprocess
@@ -29,6 +31,7 @@ import gmail_fetch
 import inbox_claim
 import estimate_record
 import inbox_monitor
+import image_provider
 import judge
 import kolo_safe
 import rehearsal
@@ -123,23 +126,54 @@ TICK_LOG_KEEP = 40
 
 
 TICK_MARK_FILE = "tick-started.json"
+_MARK_LOCK = threading.Lock()
+DEFAULT_CLAIMS_PER_TICK = 16
+DEFAULT_PARALLEL_CLAIMS = 1  # RELEASE-PLAN-4.14.md 2.5: shipped sequential; raised in the profile after the burst test
+MAX_CLAIMS_PER_TICK = 64
+MAX_PARALLEL_CLAIMS = 16
+
+
+def desk_settings(profile: dict[str, Any] | None) -> dict[str, Any]:
+    """The profile's desk block: claims_per_tick, parallel_claims; and model.provider."""
+    block = (profile or {}).get("desk") if isinstance(profile, dict) else None
+    block = block if isinstance(block, dict) else {}
+    model_block = (profile or {}).get("model") if isinstance(profile, dict) else None
+    model_block = model_block if isinstance(model_block, dict) else {}
+
+    def whole(value: Any, default: int, ceiling: int) -> int:
+        return value if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= ceiling else default
+
+    provider = str(model_block.get("provider") or "auto").strip().lower()
+    return {
+        "claims_per_tick": whole(block.get("claims_per_tick"), DEFAULT_CLAIMS_PER_TICK, MAX_CLAIMS_PER_TICK),
+        "parallel_claims": whole(block.get("parallel_claims"), DEFAULT_PARALLEL_CLAIMS, MAX_PARALLEL_CLAIMS),
+        "model_provider": provider if provider in ("auto", "direct", "cli") else "auto",
+    }
 
 
 def mark_tick(workspace: Path, **fields: Any) -> None:
-    """A tick writes its start (and each claim it takes) here; a tick that dies leaves this behind, unmatched by a log entry."""
-    try:
-        root = workspace / "estimate-desk" / "run-work"
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path = root / TICK_MARK_FILE
-        current: dict[str, Any] = {}
-        if fields.get("started") is None:
-            try:
-                current = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                current = {}
-        workflow_safe.write_private(path, {**(current if isinstance(current, dict) else {}), **fields})
-    except (OSError, ValueError):
-        pass
+    """A tick writes its start (and each claim it takes) here; a tick that dies leaves this behind, unmatched by a log entry.
+
+    Claims in flight are a list (several at once under RELEASE-PLAN-4.14.md 2.2); the newest is also `message_id`.
+    """
+    with _MARK_LOCK:
+        try:
+            root = workspace / "estimate-desk" / "run-work"
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path = root / TICK_MARK_FILE
+            current: dict[str, Any] = {}
+            if fields.get("started") is None:
+                try:
+                    current = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    current = {}
+            current = current if isinstance(current, dict) else {}
+            claims = list(current.get("claims") or []) if fields.get("started") is None else []
+            if fields.get("message_id") and fields["message_id"] not in claims:
+                claims.append(fields["message_id"])
+            workflow_safe.write_private(path, {**current, **fields, "claims": claims})
+        except (OSError, ValueError):
+            pass
 
 
 def keep_summary(workspace: Path, summary: dict[str, Any]) -> None:
@@ -176,6 +210,57 @@ def _inline_retry_candidates(p: dict[str, Path]) -> list[str]:
             continue
         found.append(item["gmail_message_id"])
     return sorted(found)
+
+
+def _run_claims_in_parallel(
+    workspace: Path, base_dir: Path, p: dict[str, Path], owner_target: str, openclaw: str, runner: Runner,
+    judge_runner: Runner, token: str | None, summary: dict[str, Any], candidates: list[str], rendering_later: list[str],
+    retry_or_ask: Callable[[str], None], max_workers: int, parallel: int, started: float,
+) -> None:
+    """Claims in threads (RELEASE-PLAN-4.14.md 2.2, 2.4): one customer's claims in order, customers side by side.
+
+    Retries of ordinary claims are listed first, then new mail is claimed
+    (up to the tick's cap), then renderings under way. The list is grouped
+    by thread; each group runs in order on one worker; groups run
+    `parallel` at a time. Each task writes its own summary, merged under a
+    lock, so the tick's log is whole whatever the interleaving.
+    """
+    order: list[tuple[str, str, str]] = []  # (thread, message_id, kind)
+    for message_id in [m for m in candidates if m not in rendering_later]:
+        order.append((_thread_of(p, message_id), message_id, "retry"))
+    while len(order) < max_workers:
+        if order and time.monotonic() - started > INLINE_BUDGET_SECONDS:
+            break
+        claimed = inbox_monitor.claim_next(p["monitor_root"], p["claim_root"], STALE_AFTER_SECONDS)
+        if claimed is None:
+            break
+        if not claimed["claim"].get("acquired"):
+            continue
+        summary["claimed"] += 1
+        order.append((str(claimed["queue_item"].get("thread_id") or claimed["queue_item"]["gmail_message_id"]),
+                      claimed["queue_item"]["gmail_message_id"], "new"))
+    for message_id in rendering_later[: max(0, max_workers - len(order))]:
+        order.append((_thread_of(p, message_id), message_id, "retry"))
+
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for thread, message_id, kind in order:
+        groups.setdefault(thread, []).append((message_id, kind))
+    lock = threading.Lock()
+
+    def run_group(items: list[tuple[str, str]]) -> None:
+        for message_id, kind in items:
+            part = _empty_summary()
+            if kind == "retry":
+                # retry_or_ask writes into the shared summary; it is small and locked here.
+                with lock:
+                    retry_or_ask(message_id)
+                continue
+            _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, part)
+            with lock:
+                _merge_summary(summary, part)
+
+    with ThreadPoolExecutor(max_workers=max(1, min(parallel, len(groups) or 1))) as pool:
+        list(pool.map(run_group, groups.values()))
 
 
 def _rendering_under_way(p: dict[str, Path], message_id: str) -> bool:
@@ -346,12 +431,32 @@ def _attempt_inline(
                                   "kind": kind, "attempts": attempts})
 
 
+def _empty_summary() -> dict[str, Any]:
+    return {"workers": [], "render_jobs": [], "spawn_failures": 0, "inline": [], "closed": 0, "manual_review": 0,
+            "held": 0, "stuck": [], "inline_failures": 0, "retried": 0}
+
+
+def _merge_summary(into: dict[str, Any], part: dict[str, Any]) -> None:
+    for key, value in part.items():
+        if isinstance(value, list):
+            into.setdefault(key, []).extend(value)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            into[key] = into.get(key, 0) + value
+
+
+def _thread_of(p: dict[str, Path], message_id: str) -> str:
+    try:
+        return str(inbox_monitor.load_queue_item(p["monitor_root"], message_id).get("thread_id") or message_id)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return message_id
+
+
 def tick(
     workspace: Path,
     base_dir: Path,
     owner_target: str,
     openclaw: str = "openclaw",
-    max_workers: int = DEFAULT_MAX_WORKERS,
+    max_workers: int | None = None,
     runner: Runner = subprocess.run,
     token: str | None = None,
     judge_runner: Runner = subprocess.run,
@@ -379,11 +484,16 @@ def tick(
     summary["tick_started"] = started
     mark_tick(workspace, started=datetime.now(timezone.utc).isoformat(), message_id=None, step=None)
     judge.reset_stats()
-    profile_result = validate_profile.validate_profile(
-        validate_profile.load_profile(p["shop_profile"])
-    )
+    profile_loaded = validate_profile.load_profile(p["shop_profile"])
+    profile_result = validate_profile.validate_profile(profile_loaded)
     if not profile_result.get("ready"):
         raise ValueError("shop profile is not ready: " + "; ".join(profile_result.get("errors", [])))
+    desk = desk_settings(profile_loaded if isinstance(profile_loaded, dict) else None)
+    judge.MODEL_PROVIDER_MODE = desk["model_provider"]
+    if max_workers is None:
+        max_workers = desk["claims_per_tick"]
+    parallel = desk["parallel_claims"]
+    summary["transport"] = "direct" if image_provider.available(desk["model_provider"]) else "cli"
     state = inbox_monitor.load_monitor_state(p["monitor_root"])
     if state["activation_state"] != "active":
         summary["skipped"] = state["activation_state"]
@@ -430,33 +540,38 @@ def tick(
         summary["retried"] += 1
         _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
 
-    for message_id in [m for m in candidates if m not in rendering_later]:
-        if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
-            break
-        if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
-            break
-        retry_or_ask(message_id)
+    if parallel <= 1:
+        # Sequential, exactly as before 4.14: claim, run, claim, run.
+        for message_id in [m for m in candidates if m not in rendering_later]:
+            if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
+                break
+            if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
+                break
+            retry_or_ask(message_id)
 
-    while len(summary["workers"]) + len(summary["inline"]) < max_workers:
-        if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
-            # Enough of the clock is gone; the rest of the queue waits a tick.
-            break
-        claimed = inbox_monitor.claim_next(
-            p["monitor_root"], p["claim_root"], STALE_AFTER_SECONDS
-        )
-        if claimed is None:
-            break
-        if not claimed["claim"].get("acquired"):
-            continue
-        message_id = claimed["queue_item"]["gmail_message_id"]
-        summary["claimed"] += 1
-        _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
+        while len(summary["workers"]) + len(summary["inline"]) < max_workers:
+            if summary["inline"] and time.monotonic() - started > INLINE_BUDGET_SECONDS:
+                # Enough of the clock is gone; the rest of the queue waits a tick.
+                break
+            claimed = inbox_monitor.claim_next(
+                p["monitor_root"], p["claim_root"], STALE_AFTER_SECONDS
+            )
+            if claimed is None:
+                break
+            if not claimed["claim"].get("acquired"):
+                continue
+            message_id = claimed["queue_item"]["gmail_message_id"]
+            summary["claimed"] += 1
+            _attempt_inline(workspace, base_dir, p, message_id, owner_target, openclaw, runner, judge_runner, token, summary)
 
-    # Now the renderings, with whatever clock is left.
-    for message_id in rendering_later:
-        if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
-            break
-        retry_or_ask(message_id)
+        # Now the renderings, with whatever clock is left.
+        for message_id in rendering_later:
+            if len(summary["workers"]) + len(summary["inline"]) >= max_workers:
+                break
+            retry_or_ask(message_id)
+    else:
+        _run_claims_in_parallel(workspace, base_dir, p, owner_target, openclaw, runner, judge_runner, token, summary,
+                                candidates, rendering_later, retry_or_ask, max_workers, parallel, started)
 
     # The owner's channel may be a phone. Reviews reach the owner as approval
     # briefs, so the tick itself speaks only when something is wrong: an
