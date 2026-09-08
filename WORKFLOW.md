@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.13.6): the reading of a
+- Built 8 September 2026 (4.13.7): the reading of a
   customer's new message is handed the specification the record already
   holds and merges the new words into it; a change to a quoted piece from
   a new thread keeps every quoted fact, the named piece takes the change,

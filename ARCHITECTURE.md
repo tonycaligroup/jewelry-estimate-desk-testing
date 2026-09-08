@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.6 (8 September 2026): the reading knows what the record knows.**
+**4.13.7 (built 8 September 2026): the reading knows what the record knows.**
 Live case 6: two bands quoted, "add my initials inside the yellow band"
 from a new thread, owner "same" then "change"; the desk read the new
 thread on its own (the digest is the new thread only) and the gate asked

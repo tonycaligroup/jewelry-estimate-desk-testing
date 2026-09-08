@@ -1,7 +1,7 @@
 {
   "defect": "two bands quoted; from a new thread the customer asked for initials inside the yellow band; owner answered same, then change; the desk read the new thread alone and asked both bands' finger sizes and karats again (the quoted bands are simplified to plain bands here; the follow-up wording is verbatim)",
   "seen_on": "4.13.6",
-  "fixed_in": "unpublished",
+  "fixed_in": "4.13.7",
   "text_is": "paraphrase",
   "kind": "golden_path",
   "steps": [
