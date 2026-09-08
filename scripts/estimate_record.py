@@ -1645,6 +1645,30 @@ def carry_prior_facts(record: dict[str, Any], specification: dict[str, Any]) -> 
 CHANGE_MATCH_KEYS = ("metal_color", "finger_size", "metal", "metal_karat")
 
 
+def known_specification(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Everything the desk knows about this customer's piece: the current specification, the quoted one beneath it.
+
+    After a reopen the current specification may be a thin re-read that a
+    review already recorded (live, 8 September 2026: the change read on
+    4.13.6 became the record's specification, the quoted facts lived only
+    in the archived estimate, and 4.13.7's merge read against the thin
+    one). The quoted specification is what the customer confirmed, so it
+    wins where the two differ (a thin re-read that called the rose band
+    yellow does not stand); the current one fills what the estimate never
+    had (the engraving the change asked for). The newest reading, merged
+    on top of this by `merge_known_facts`, wins over both.
+    """
+    current = record.get("specification") if isinstance(record.get("specification"), dict) else None
+    history = record.get("estimate_history") or []
+    quoted = history[-1].get("specification") if history and isinstance(history[-1], dict) else None
+    if not isinstance(quoted, dict) or not quoted or record.get("reopened_for") == "second_piece":
+        return current or None
+    if not current:
+        return quoted
+    merged = merge_known_facts({"specification": current}, quoted)
+    return merged or current
+
+
 def merge_known_facts(record: dict[str, Any], specification: dict[str, Any]) -> dict[str, Any]:
     """The reading of a new message keeps every fact the record already holds; the new words win.
 
@@ -1658,7 +1682,7 @@ def merge_known_facts(record: dict[str, Any], specification: dict[str, Any]) -> 
     """
     if not isinstance(specification, dict) or record.get("reopened_for") == "second_piece":
         return specification
-    known = record.get("specification")
+    known = known_specification(record) if "estimate_history" in record else record.get("specification")
     if not isinstance(known, dict) or not known:
         return specification
 

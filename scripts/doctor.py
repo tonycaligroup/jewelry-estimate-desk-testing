@@ -256,6 +256,13 @@ def requeue(workspace: Path, message_id: str, token: str | None = None, opener: 
         if claim.get("status") == "awaiting_owner":
             reopened = inbox_monitor.reopen_item(monitor_root, message_id, claim_root, 1)
             token_claim = reopened["claim"]["claim_token"]
+            # A requeue is a fresh start for the owner too: the question that
+            # parked this claim is answered by the requeue, not left open to be
+            # answered later against a claim that has moved on.
+            qroot = owner_questions.questions_root(monitor_root)
+            for question in owner_questions.list_questions(qroot):
+                if question.get("status") == "open" and str(question.get("gmail_message_id") or "").split("#")[0] == message_id:
+                    owner_questions.supersede(qroot, question, "requeued by the doctor: the desk starts this message again")
             # A requeue is a fresh start: the failure counter and the last
             # error go, or the next tick would count the old failures and ask
             # the stuck question again instead of trying (6 September 2026).

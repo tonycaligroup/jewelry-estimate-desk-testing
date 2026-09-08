@@ -3111,6 +3111,69 @@ class SameSenderTests(SideBranchTests):
             self.assertTrue(readings, "the model was handed the quoted specification")
         self.run_branch(branch)
 
+    def test_a_reply_after_a_thin_change_review_is_read_against_the_quoted_facts(self) -> None:
+        """8 September 2026, live (question 9CD6F2): the change was reviewed thin on 4.13.6 and a follow-up went out;
+        the customer's 'everything as quoted' reply was then read against the thin record and the desk stalled."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            two = {"metal": "gold", "metal_karat": "18k", "pieces": [
+                {"piece_type": "wedding band", "metal_color": "yellow", "finger_size": "10", "notes": "plain, polished, no stones"},
+                {"piece_type": "wedding band", "metal_color": "rose", "finger_size": "10", "notes": "plain, polished, no stones"}]}
+            thread, estimate_id = self._estimate_sent(ws, world, spec=two, text="Two plain polished 18k bands, one yellow one rose, size 10.\n\nPat")
+            world.spec = {"pieces": [{"piece_type": "wedding band", "metal_color": "yellow", "engraving": "TL inside"},
+                                     {"piece_type": "wedding band", "metal_color": "yellow"}]}
+            world.customer_message("n1", "thread-followup", "Could you add my initials, TL, engraved inside the yellow gold band?\n\nPat",
+                                   subject="Following up on my bands")
+            self.tick(ws, world)
+            self.assertEqual(self.answer(ws, "same")["decision"], "same")
+            world.design_change = ["engraving"]
+            self.tick(ws, world)
+            world.design_change = []
+            self.assertEqual(self.answer(ws, "change")["decision"], "design_change")
+            # The 4.13.6 behaviour: the thin reading is reviewed as is and a follow-up asks for known facts.
+            with patch.object(estimate_record, "merge_known_facts", lambda record, spec: spec), patch.object(judge, "known_clause", lambda known: ""):
+                summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            record = self.record(ws, estimate_id)
+            self.assertIn("pieces.0.finger_size", record["missing_required_fields"])
+            # The customer answers "everything as quoted"; the reading is thin again (and names no colour for the
+            # second band this time). Now the quoted facts are the base.
+            world.spec = {"pieces": [{"piece_type": "wedding band", "metal_color": "yellow", "engraving": "TL inside"},
+                                     {"piece_type": "wedding band"}]}
+            world.customer_message("n2", "thread-followup", "Everything as quoted before. Just the initials.\n\nPat\n\nOn Mon wrote:\n> could you tell me:\n> - What finger size for the first band?\n",
+                                   subject="Re: Following up on my bands")
+            sent_before = len(world.sent)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(len(world.sent), sent_before, "nothing asked again")
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["missing_required_fields"], [])
+            self.assertEqual([p["finger_size"] for p in record["specification"]["pieces"]], ["10", "10"])
+            self.assertEqual(record["specification"]["pieces"][0]["engraving"], "TL inside")
+            self.assertEqual(record["specification"]["pieces"][1]["metal_color"], "rose", "the quoted rose band is not turned yellow by a thin read")
+        self.run_branch(branch)
+
+    def test_a_requeue_closes_the_question_that_parked_the_message(self) -> None:
+        """A requeue is a fresh start: the stalled question is superseded, not left open against a claim that moved on."""
+        def branch(ws: Path, world: World) -> None:
+            thread, _estimate_id = self._estimate_sent(ws, world)
+            world.intents = ["rendering_request"]
+            world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
+            world.fail_next["image"] = 500
+            with patch.object(inbox_watcher, "TRANSIENT_ATTEMPTS", 2), patch.object(rendering, "DESCRIBE_PAUSE_SECONDS", 0):
+                for _ in range(4):
+                    summary = self.one_tick(ws, world)
+                    if summary["stuck"]:
+                        break
+            self.assertTrue(summary["stuck"], "the desk asks after the bounded tries")
+            open_before = [q for q in self.questions(ws, "open")]
+            self.assertEqual(len(open_before), 1)
+            world.fail_next.clear()
+            self.assertEqual(doctor.requeue(ws, "s2")["outcome"], "requeued")
+            self.assertEqual(self.questions(ws, "open"), [], "the requeue answered the question")
+            self.assertEqual([f["code"] for f in doctor.scan(ws) if f["level"] != "info"], [])
+        self.run_branch(branch)
+
     def test_same_on_a_new_thread_after_the_estimate_books_the_meeting_in_the_new_thread(self) -> None:
         """The live script: estimate sent, the customer asks to meet from a brand-new thread, owner says same."""
         def branch(ws: Path, world: World) -> None:

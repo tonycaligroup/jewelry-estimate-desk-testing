@@ -616,7 +616,7 @@ def process_claim(
     # A reply on a thread that already has a record is the same conversation
     # continuing; only the message that opened the record is triaged. A
     # customer asking "what does this have to do with it?" is not junk mail.
-    known = record.get("specification") if isinstance(record.get("specification"), dict) and record.get("specification") else None
+    known = estimate_record.known_specification(record)
     judged = judge.triage_and_extract(digest, model, judge_runner, openclaw, known=known) if initiating else None
     triage = {"kind": judged["kind"], "note": judged["note"]} if judged else {"kind": "estimate_request", "note": "reply on an open estimate"}
     if triage["kind"] in NOT_AN_INQUIRY:

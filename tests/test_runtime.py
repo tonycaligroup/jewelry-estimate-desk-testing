@@ -9011,3 +9011,31 @@ class KnownFactsMergeTests(unittest.TestCase):
         self.assertIn("KNOWN SPECIFICATION", judge.known_clause({"piece_type": "band"}))
         self.assertEqual(judge.known_clause(None), "")
         self.assertEqual(judge.known_clause({}), "")
+
+
+class KnownSpecificationTests(unittest.TestCase):
+    """8 September 2026, live: the change read on 4.13.6 became the record's specification; the quoted facts
+    lived only in the archived estimate; the merge read against the thin one and the desk stalled."""
+
+    QUOTED = {"metal": "gold", "metal_karat": 18, "pieces": [
+        {"piece_type": "men's wedding band", "metal_color": "yellow", "finger_size": 10, "notes": "plain"},
+        {"piece_type": "men's wedding band", "metal_color": "rose", "finger_size": 10, "notes": "plain"}]}
+
+    def test_the_quoted_specification_fills_a_thin_current_one(self) -> None:
+        thin = {"pieces": [{"piece_type": "men's wedding band", "metal_color": "yellow", "engraving": "TL"},
+                           {"piece_type": "men's wedding band", "metal_color": "yellow"}]}
+        record = {"specification": thin, "reopened_for": "design_change", "estimate_history": [{"specification": self.QUOTED}]}
+        known = estimate_record.known_specification(record)
+        self.assertEqual(known["pieces"][0]["finger_size"], 10)
+        self.assertEqual(known["pieces"][0]["engraving"], "TL", "what the estimate never had comes from the review")
+        self.assertEqual(known["pieces"][1]["finger_size"], 10)
+        self.assertEqual(known["pieces"][1]["metal_color"], "rose", "the quoted fact wins over a thin review")
+        self.assertEqual(known["metal_karat"], 18)
+        # The reply's reading merges against that, so nothing is missing any more.
+        reading = {"pieces": [{"piece_type": "men's wedding band", "metal_color": "yellow", "engraving": "TL"}, {"piece_type": "men's wedding band"}]}
+        merged = estimate_record.merge_known_facts(record, reading)
+        self.assertEqual([p["finger_size"] for p in merged["pieces"]], [10, 10])
+        # No history: the current specification is what is known; a second-piece reopen keeps its own rule.
+        self.assertEqual(estimate_record.known_specification({"specification": thin}), thin)
+        self.assertEqual(estimate_record.known_specification({"specification": thin, "reopened_for": "second_piece",
+                                                              "estimate_history": [{"specification": self.QUOTED}]}), thin)

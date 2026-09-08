@@ -381,6 +381,18 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.7 (8 September 2026): the quoted estimate is the base, not the last review.**
+Live (question 9CD6F2): the change had been reviewed thin on 4.13.6, so
+`record.specification` was the thin read and the quoted facts lived only
+in `estimate_history[-1]`; 4.13.7's merge read the reply against the thin
+one and the stalled-follow-up path asked the owner. Now
+`estimate_record.known_specification(record)`: the quoted specification
+wins where it and the current one differ, the current one fills what the
+estimate never had, and `merge_known_facts` (and the reading prompts) use
+that; a second-piece reopen is untouched. `doctor.requeue` supersedes the
+message's open questions ("requeued by the doctor"), so a requeued claim
+is not answered later against a state that moved on.
+
 **4.13.7 (built 8 September 2026): the reading knows what the record knows.**
 Live case 6: two bands quoted, "add my initials inside the yellow band"
 from a new thread, owner "same" then "change"; the desk read the new
