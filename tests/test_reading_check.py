@@ -107,3 +107,17 @@ class ReadingCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeadingDotCaratTests(unittest.TestCase):
+    """8 September 2026, live: '.2 ct' was read as '2 ct' and the customer was asked to confirm a carat they had stated."""
+
+    def test_a_leading_dot_carat_is_a_fraction(self) -> None:
+        text = "I need a mens wedding band, 18k gold, size ten, with .2 ct diamond eternity band in the middle, channel set."
+        found = reading_check.compare(digest(text), {"piece_type": "men's wedding band", "stone_type": "diamond", "stone_carat": "0.2 ct each"})
+        self.assertEqual(found, [], found)
+        disagree = reading_check.compare(digest(text), {"piece_type": "men's wedding band", "stone_type": "diamond", "stone_carat": 2})
+        self.assertEqual([d["topic"] for d in disagree], ["stone_carat"])
+        self.assertEqual(disagree[0]["said"], "0.2 ct")
+        self.assertNotIn("center", disagree[0]["question"])
+        self.assertEqual(reading_check.compare(digest("a 1.5 ct stone"), {"stone_type": "diamond", "stone_carat": 1.5}), [])

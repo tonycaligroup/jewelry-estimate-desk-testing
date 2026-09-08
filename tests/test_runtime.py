@@ -9343,3 +9343,35 @@ class DeskSettingsTests(unittest.TestCase):
         self.assertFalse(any("desk." in e or "model." in e for e in validate_profile.validate_profile(base)["errors"]))
         base["model"] = {"provider": "sideways"}
         self.assertTrue(any("model.provider" in e for e in validate_profile.validate_profile(base)["errors"]))
+
+
+class EternityBandTests(unittest.TestCase):
+    """8 September 2026, live: 'a .2 ct diamond eternity band in the middle, channel set' was asked for the carat and cut of a center stone."""
+
+    def test_design_words_beat_a_stated_carat(self) -> None:
+        band = {"piece_type": "men's wedding band", "stone_type": "diamond", "stone_carat": 0.2, "setting_style": "channel-set eternity"}
+        self.assertFalse(cost_components_module.has_center_stone(band))
+        self.assertTrue(cost_components_module.has_center_stone({**band, "center_stone": "yes"}), "an explicit yes still wins in the spec")
+        self.assertTrue(cost_components_module.has_center_stone({"piece_type": "ring", "stone_type": "diamond", "stone_carat": 1.0, "setting_style": "solitaire"}))
+        self.assertTrue(cost_components_module.has_center_stone({"piece_type": "ring", "stone_type": "diamond", "stone_carat": 1.0, "setting_style": "halo with pave shoulders"}),
+                        "a halo names a center stone even with pave around it")
+        profile = json.loads((Path(__file__).resolve().parent.parent / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
+        full = {**band, "metal": "gold", "metal_karat": 18, "metal_color": "yellow", "finger_size": 10, "stone_origin": "lab-grown",
+                "stone_color": "d", "stone_clarity": "vvs1 or better"}
+        self.assertEqual(spec_gate.missing_required_fields(full, profile), [], "nothing to ask: no center carat, no cut")
+
+    def test_the_customers_words_settle_a_reading_that_says_center_stone(self) -> None:
+        words = "I need a mens wedding band, 18k gold, size ten, with .2 ct diamond eternity band in the middle, channel set. Lab grown d color diamonds, vvs1 or better. Yellow gold"
+        reading = {"piece_type": "men's wedding band", "stone_type": "diamond", "stone_carat": 0.2, "center_stone": "yes", "setting_style": "channel set"}
+        settled = estimate_record.settle_center_stone(reading, words)
+        self.assertEqual(settled["center_stone"], "no")
+        self.assertEqual(settled["stone_carat"], 0.2, "the carat stays as the total")
+        self.assertFalse(cost_components_module.has_center_stone(settled))
+        # A solitaire with pave shoulders keeps its center stone; words without design terms change nothing.
+        solitaire = {"piece_type": "ring", "stone_type": "diamond", "stone_carat": 1, "center_stone": "yes"}
+        self.assertEqual(estimate_record.settle_center_stone(solitaire, "a 1 ct solitaire with pave shoulders")["center_stone"], "yes")
+        self.assertEqual(estimate_record.settle_center_stone(solitaire, "a 1 ct diamond ring, size 6"), solitaire)
+        two = {"pieces": [reading, {"piece_type": "band", "notes": "plain"}]}
+        settled_two = estimate_record.settle_center_stone(two, words)
+        self.assertEqual(settled_two["pieces"][0]["center_stone"], "no")
+        self.assertNotIn("center_stone", settled_two["pieces"][1])

@@ -381,6 +381,21 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.0 (8 September 2026): eternity and channel-set bands have no center stone.**
+Live: "a .2 ct diamond eternity band in the middle, channel set" drew a
+follow-up asking for "the carat weight of the center stone" and the cut.
+`cost_components.has_center_stone` consulted a stated carat before the
+design words, and "channel" was not among them. Now the design words
+(`PAVE_WORDS`, with channel-set, all the way around, in the middle of the
+band, bead-set) come before the carat and are overruled only by
+`CENTER_WORDS` (center stone, main stone, solitaire, halo, feature
+stone); `estimate_record.settle_center_stone` runs in
+`pipeline.process_claim` after the merges and sets `center_stone` "no"
+on every stoned piece when the customer's own words name such a design
+and no center stone, whatever the reading said; both reading prompts
+carry the rule. Fixture: `2026-09-08-eternity-band-center-stone.json`
+(verbatim).
+
 **4.14.0 (built 8 September 2026, RELEASE-PLAN-4.14.md): the model off the CLI; claims in parallel.**
 Measured on the desk's pod: a judgement 13 s through the CLI, 1.2 s
 direct with `reasoning_effort: "none"` (with thinking on, Qwen spends the

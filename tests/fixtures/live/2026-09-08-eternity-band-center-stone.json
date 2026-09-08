@@ -1,0 +1,41 @@
+{
+  "defect": "a men's channel-set eternity band with 0.2 ct total lab-grown diamonds was read as having a center stone; the desk asked for 'the carat weight of the center stone' and the stone cut",
+  "seen_on": "4.13.11",
+  "fixed_in": "unpublished",
+  "text_is": "verbatim",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "customer": {
+        "id": "e1",
+        "thread": "new",
+        "subject": "Wedding band",
+        "text": "I need a mens wedding band, 18k gold, size ten, with .2 ct diamond eternity band in the middle, channel set. Lab grown d color diamonds, vvs1 or better. \nYellow gold"
+      },
+      "spec": {
+        "piece_type": "men's wedding band",
+        "metal": "gold",
+        "metal_karat": 18,
+        "metal_color": "yellow",
+        "finger_size": 10,
+        "stone_type": "diamond",
+        "stone_origin": "lab-grown",
+        "stone_carat": 0.2,
+        "stone_color": "d",
+        "stone_clarity": "vvs1 or better",
+        "setting_style": "channel set",
+        "center_stone": "yes"
+      },
+      "expect": {
+        "outcomes": [
+          "approval_requested"
+        ],
+        "sent": 0,
+        "missing_required_fields": [],
+        "card_title_contains": [
+          "men's wedding band"
+        ]
+      }
+    }
+  ]
+}

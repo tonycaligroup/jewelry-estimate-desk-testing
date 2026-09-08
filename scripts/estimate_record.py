@@ -1645,6 +1645,37 @@ def carry_prior_facts(record: dict[str, Any], specification: dict[str, Any]) -> 
 CHANGE_MATCH_KEYS = ("metal_color", "finger_size", "metal", "metal_karat")
 
 
+BAND_STONE_WORDS = ("eternity", "channel set", "channel-set", "channel", "pave", "pavé", "melee", "all the way around",
+                    "all around", "around the band", "in the middle of the band", "bead set", "bead-set", "micro pave")
+CENTER_STONE_WORDS = ("center stone", "centre stone", "main stone", "solitaire", "halo", "feature stone")
+
+
+def settle_center_stone(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """The customer's own words decide whether there is a center stone; the reading does not get to guess.
+
+    "0.2 ct diamond eternity band in the middle, channel set" is a band of
+    small stones totalling 0.2 ct. A reading that calls that a center stone
+    makes the desk ask for its carat and cut (live, 8 September 2026). When
+    the words name an eternity, channel-set, pave, or all-around design and
+    never a center, main, or feature stone, every piece's `center_stone` is
+    "no" and the stated carat stays as the total.
+    """
+    text = " " + " ".join(str(own_words or "").lower().split()) + " "
+    if not any(w in text for w in BAND_STONE_WORDS) or any(w in text for w in CENTER_STONE_WORDS):
+        return specification
+    if not isinstance(specification, dict):
+        return specification
+
+    def settle(piece: dict[str, Any]) -> dict[str, Any]:
+        if not piece.get("stone_type") and not piece.get("stone_carat") and not piece.get("accent_stones"):
+            return piece
+        return {**piece, "center_stone": "no"}
+
+    if is_multi_piece(specification):
+        return {**specification, "pieces": [settle(p) if isinstance(p, dict) else p for p in specification["pieces"]]}
+    return settle(specification)
+
+
 def known_specification(record: dict[str, Any]) -> dict[str, Any] | None:
     """Everything the desk knows about this customer's piece: the current specification, the quoted one beneath it.
 

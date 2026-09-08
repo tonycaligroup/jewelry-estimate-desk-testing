@@ -25,14 +25,16 @@ PREFIX = "confirm."
 QUESTIONS = {
     "piece_count": "you mentioned more than one size or piece; could you confirm how many pieces you would like quoted, and which size goes with which?",
     "finger_size": "could you confirm the ring size, since we read one size and your message mentions another?",
-    "stone_carat": "could you confirm the carat weight of the center stone?",
+    "stone_carat": "could you confirm the carat weight of the stones?",
     "stone_origin": "could you confirm whether you would like a lab-grown or a natural stone?",
     "customer_stone": "you mentioned a stone of your own; could you confirm you would like us to set that stone rather than supply one?",
 }
 
 _SIZE_RE = re.compile(r"\bsize\s*(?:of\s*)?(\d{1,2}(?:\.\d)?|\d{1,2}\s*[½¼¾]|\d{1,2}\s*1/2)\b", re.I)
 _SIZE_RE2 = re.compile(r"\b(\d{1,2}(?:\.\d)?)\s*(?:ring\s*)?size\b", re.I)
-_CARAT_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(?:-\s*)?(?:ct|cts|carat|carats)\b", re.I)
+# ".2 ct" is two tenths, not two (live, 8 September 2026: ".2 ct diamond eternity band" was read as "2 ct" and
+# disagreed with the model's 0.2, so the customer was asked to confirm a carat they had stated).
+_CARAT_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?|\.\d+)\s*(?:-\s*)?(?:ct|cts|carat|carats)\b", re.I)
 _LAB_WORDS = ("lab-grown", "lab grown", "labgrown", "lab created", "lab-created", "lab diamond", "moissanite", "created diamond")
 _NATURAL_WORDS = ("natural diamond", "natural stone", "mined diamond", "earth-mined", "earth mined", "natural, not lab", "real diamond, not lab")
 _OWN_STONE_WORDS = estimate_record.SUPPLIED_STONE_WORDS

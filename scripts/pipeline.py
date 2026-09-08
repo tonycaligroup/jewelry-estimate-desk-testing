@@ -689,6 +689,9 @@ def process_claim(
     specification = judged["specification"] if judged else judge.extract_specification(digest, model, judge_runner, openclaw, known=known)["specification"]
     specification = estimate_record.carry_prior_facts(record, specification)
     specification = estimate_record.merge_known_facts(record, specification)
+    specification = estimate_record.settle_center_stone(
+        specification, " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
+                                if m.get("sent_by") == "customer"))
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
     # customer's own words in code. A disagreement is never priced; it is

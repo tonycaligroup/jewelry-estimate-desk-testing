@@ -148,7 +148,10 @@ def extract_metal(specification: Any) -> dict[str, Any]:
 
 
 PAVE_WORDS = ("pave", "pavé", "melee", "micro pave", "micropave", "accent", "cluster", "eternity", "encrusted",
-              "shoulder", "side stone", "side-stone", "small diamond", "small stone", "tiny")
+              "shoulder", "side stone", "side-stone", "small diamond", "small stone", "tiny",
+              "channel set", "channel-set", "channel", "all the way around", "all around", "around the band",
+              "in the middle of the band", "bead set", "bead-set")
+CENTER_WORDS = ("center stone", "centre stone", "main stone", "solitaire", "halo", "feature stone", "focal")
 
 
 def has_center_stone(specification: Any) -> bool:
@@ -166,12 +169,18 @@ def has_center_stone(specification: Any) -> bool:
         return False
     if explicit in {"yes", "true"}:
         return True
-    if specification.get("stone_carat") not in (None, "", []):
-        return True
     words = " ".join(
         str(specification.get(key) or "").lower()
-        for key in ("setting_style", "notes", "accent_stones", "stone_count", "stone_type", "dimensions")
+        for key in ("setting_style", "notes", "accent_stones", "stone_count", "stone_type", "dimensions", "piece_type")
     )
+    # The design words come before a stated carat: "0.2 ct, channel-set
+    # eternity" is the total of small stones, not one stone (live, 8
+    # September 2026: the desk asked for "the carat weight of the center
+    # stone" on a men's channel-set band).
+    if any(word in words for word in PAVE_WORDS) and not any(word in words for word in CENTER_WORDS):
+        return False
+    if specification.get("stone_carat") not in (None, "", []):
+        return True
     if any(word in words for word in PAVE_WORDS):
         return False
     # Stones described only as accents, with no carat and nothing called a
