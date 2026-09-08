@@ -396,13 +396,14 @@ carries the key. `rendering.render`/`check_image` use it when
 `available(PROVIDER_MODE)`; the CLI path (`run_cli`, lock retries, the
 `_CHECK_LOCK`) stays for the lab and as fallback. `pipeline.render_step`
 renders every pending view in the tick on the direct path,
-`rendering.parallel` (default 2) at a time via a thread pool, progress
+`rendering.parallel` (default 8, a rendering's most views; 72 at once ran clean) at a time via a thread pool, progress
 written under a lock after each view; one view per tick through the CLI
 as before. `render_view(check=False)` (profile `rendering.vision_check`)
 cards the view as not machine-checked. `inbox_watcher.tick` runs
 non-rendering retries, then new claims, then rendering retries
 (`_rendering_under_way`), with the stuck-claim check shared by both
-loops. `validate_profile` knows `provider`, `vision_check`, `parallel`.
+loops. `validate_profile` knows `provider`, `vision_check`, `parallel`, `size`,
+`quality` (quality is the whole cost: auto 15-25 s, high 80-130 s; size is free).
 
 **4.13.10 (built 8 September 2026): discovery overlaps the watermark.**
 Live: a customer reply sat in the inbox through a dozen idle ticks
