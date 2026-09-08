@@ -437,7 +437,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.13.7): what the desk knows
+- Built 8 September 2026 (4.13.9): what the desk knows
   about a reopened piece is the quoted estimate first (the customer
   confirmed it), the later review only for what the estimate never had,
   and the newest reading on top of both; a requeue closes the question

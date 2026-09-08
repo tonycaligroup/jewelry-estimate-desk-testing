@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.13.7 (8 September 2026): the quoted estimate is the base, not the last review.**
+**4.13.9 (built 8 September 2026): the quoted estimate is the base, not the last review.**
 Live (question 9CD6F2): the change had been reviewed thin on 4.13.6, so
 `record.specification` was the thin read and the quoted facts lived only
 in `estimate_history[-1]`; 4.13.7's merge read the reply against the thin
