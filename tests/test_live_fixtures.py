@@ -74,9 +74,14 @@ class LiveFixtureTests(unittest.TestCase):
                     thread, estimate_id = helper._estimate_sent(ws, world, spec=step["estimate_sent"]["spec"],
                                                                 text=step["estimate_sent"].get("text"))
                 elif "customer" in step:
+                    if "spec" in step:
+                        world.spec = step["spec"]
                     world.design_change = list(step["customer"].get("design_change") or [])
                     cards_before = len(world.cards)
-                    world.customer_message(step["customer"]["id"], thread or "thread-fixture", step["customer"]["text"])
+                    if step["customer"].get("thread") == "new":
+                        thread = f"thread-{step['customer']['id']}"
+                    world.customer_message(step["customer"]["id"], thread or "thread-fixture", step["customer"]["text"],
+                                           subject=step["customer"].get("subject") or "Custom signet ring")
                     summary = helper.tick(ws, world)
                     world.design_change = []
                     if step.get("expect", {}).get("no_new_card"):
@@ -88,7 +93,9 @@ class LiveFixtureTests(unittest.TestCase):
                 elif step.get("tick"):
                     if "spec" in step:
                         world.spec = step["spec"]
+                    world.design_change = list(step.get("design_change") or [])
                     summary = helper.tick(ws, world)
+                    world.design_change = []
                 expect = step.get("expect") or {}
                 if estimate_id is None and (ws / "estimate-desk" / "records").exists():
                     records = sorted((ws / "estimate-desk" / "records").glob("*.json"))
@@ -97,9 +104,12 @@ class LiveFixtureTests(unittest.TestCase):
                     outer.assertEqual([i["outcome"] for i in summary["inline"]], expect["outcomes"], f"step {number}: {summary}")
                 if "sent" in expect:
                     outer.assertEqual(len(world.sent), expect["sent"], f"step {number}: emails sent")
-                if "claim_status" in expect:
-                    outer.assertEqual(helper.claim(ws, step["customer"]["id"])["status"], expect["claim_status"])
                 record = helper.record(ws, estimate_id) if estimate_id else {}
+                if "claim_status" in expect:
+                    latest = step.get("customer", {}).get("id") or next(k for k in reversed(list(world.messages)) if not k.startswith("sent-"))
+                    outer.assertEqual(helper.claim(ws, latest)["status"], expect["claim_status"], f"step {number}")
+                if "record_thread" in expect:
+                    outer.assertEqual(record["route"]["thread_id"], expect["record_thread"], f"step {number}")
                 if "missing_required_fields" in expect:
                     outer.assertEqual(record.get("missing_required_fields"), expect["missing_required_fields"], f"step {number}")
                 if "pieces" in expect:

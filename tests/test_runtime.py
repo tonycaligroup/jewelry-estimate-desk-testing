@@ -8970,3 +8970,44 @@ class KilledTickTests(unittest.TestCase):
             # A tick that finished (its log entry is newer than the mark) is not reported.
             (run_work / "tick-log.json").write_text(json.dumps([{"at": datetime.now(timezone.utc).isoformat(), "inline": []}]), encoding="utf-8")
             self.assertEqual([f for f in doctor.scan(ws) if f["code"] == "tick_killed"], [])
+
+
+class KnownFactsMergeTests(unittest.TestCase):
+    """8 September 2026, live case 6: 'add my initials inside the yellow band' on a new thread was read alone;
+    the gate asked both bands' sizes and karats again."""
+
+    KNOWN = {"metal": "gold", "metal_karat": 18, "pieces": [
+        {"piece_type": "men's wedding band", "metal_color": "yellow", "finger_size": 10, "stone_type": "diamond", "setting_style": "channel-set"},
+        {"piece_type": "men's wedding band", "metal_color": "rose", "finger_size": 10, "stone_type": "diamond", "setting_style": "channel-set"}]}
+
+    def test_a_flat_change_lands_on_the_piece_it_names_and_the_rest_stand(self) -> None:
+        reading = {"piece_type": "men's wedding band", "metal_color": "yellow", "engraving": "TL inside"}
+        merged = estimate_record.merge_known_facts({"specification": self.KNOWN, "reopened_for": "design_change"}, reading)
+        self.assertEqual(merged["pieces"][0]["engraving"], "TL inside")
+        self.assertEqual(merged["pieces"][0]["finger_size"], 10)
+        self.assertNotIn("engraving", merged["pieces"][1])
+        self.assertEqual(merged["metal_karat"], 18)
+
+    def test_an_unnamed_change_applies_to_every_piece_and_an_ambiguous_one_is_left_to_the_gate(self) -> None:
+        both = estimate_record.merge_known_facts({"specification": self.KNOWN}, {"metal_karat": 14})
+        self.assertEqual([p["metal_karat"] for p in both["pieces"]], [14, 14])
+        vague = {"piece_type": "men's wedding band", "engraving": "TL"}
+        self.assertEqual(estimate_record.merge_known_facts({"specification": self.KNOWN}, vague), vague, "two bands, none named: not guessed")
+
+    def test_flat_against_flat_and_pieces_by_position(self) -> None:
+        known = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10", "setting_style": "bead set"}
+        merged = estimate_record.merge_known_facts({"specification": known}, {"metal_color": "rose", "piece_type": "signet ring"})
+        self.assertEqual(merged["finger_size"], "10")
+        self.assertEqual(merged["metal_color"], "rose")
+        pieces = estimate_record.merge_known_facts({"specification": self.KNOWN}, {"pieces": [{"piece_type": "men's wedding band", "engraving": "TL"}, {"piece_type": "men's wedding band"}]})
+        self.assertEqual(pieces["pieces"][0]["engraving"], "TL")
+        self.assertEqual(pieces["pieces"][1]["metal_color"], "rose")
+        # A second-piece reopen is the other helper's business; a record without a specification changes nothing.
+        thin = {"pieces": [{"piece_type": "ring"}]}
+        self.assertEqual(estimate_record.merge_known_facts({"specification": self.KNOWN, "reopened_for": "second_piece"}, thin), thin)
+        self.assertEqual(estimate_record.merge_known_facts({}, thin), thin)
+
+    def test_the_reading_prompts_carry_the_known_specification(self) -> None:
+        self.assertIn("KNOWN SPECIFICATION", judge.known_clause({"piece_type": "band"}))
+        self.assertEqual(judge.known_clause(None), "")
+        self.assertEqual(judge.known_clause({}), "")

@@ -285,11 +285,32 @@ def check_specification(value: dict[str, Any]) -> dict[str, Any]:
     return {"specification": clean}
 
 
+def known_clause(known: dict[str, Any] | None) -> str:
+    """The specification the desk already holds for this customer, handed to the reading.
+
+    A customer who writes from a new thread (WORKFLOW.md 6.1, "same") or
+    changes a quoted piece (6.8) gives only the new words; the record holds
+    the rest. Live, 8 September 2026: "add my initials inside the yellow
+    band" on a new thread was read on its own and the gate asked for both
+    bands' sizes and karats again.
+    """
+    if not isinstance(known, dict) or not known:
+        return ""
+    return (
+        "\nKNOWN SPECIFICATION, read from this customer's earlier messages and possibly already quoted: "
+        f"{json.dumps(known, sort_keys=True)}\n"
+        "The thread below may be a new conversation from the same customer. Merge their newest words into the "
+        "known specification: keep every known fact (every piece) unless they change it, apply what they now "
+        "say, and return the complete specification, all pieces included.\n"
+    )
+
+
 def extract_specification(
     digest: dict[str, Any],
     model: str | None = None,
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
+    known: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Every fact the customer gave, merged across the thread, nothing invented."""
     prompt = (
@@ -320,7 +341,7 @@ def extract_specification(
         "diamond\", \"reset my stone\", \"my own gold\"); when the stone is theirs, still fill stone_type and any "
         "shape or size they gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "
         "A photo mention can go in reference_images but never fills another key.\n\n"
-        f"THREAD:\n{thread_text(digest)}"
+        f"{known_clause(known)}THREAD:\n{thread_text(digest)}"
     )
     return ask_json(prompt, check_specification, model, runner, openclaw)
 
@@ -334,6 +355,7 @@ def check_triage_and_specification(value: dict[str, Any]) -> dict[str, Any]:
 
 def triage_and_extract(
     digest: dict[str, Any], model: str | None = None, runner: Runner = subprocess.run, openclaw: str | None = None,
+    known: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One call for a new inquiry: what the thread is, and every fact the customer gave.
 
@@ -377,7 +399,7 @@ def triage_and_extract(
         "second piece. Leave pieces out for a single object. "
         "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
         "Never include prices, costs, or anything the SHOP messages said.\n\n"
-        f"THREAD:\n{thread_text(digest)}"
+        f"{known_clause(known)}THREAD:\n{thread_text(digest)}"
     )
     return ask_json(prompt, check_triage_and_specification, model, runner, openclaw)
 

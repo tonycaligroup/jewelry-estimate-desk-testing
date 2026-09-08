@@ -40,4 +40,6 @@ outcome (the table below); after it, keep the receipts.
 |---|---|---|---|
 | 4.13.2 | 1, 3, 4, 8 | passed; 5 failed (re-asked known facts, re-priced the first piece) → 4.13.3, 4.13.4 | 7 Sep 2026 |
 | 4.13.4 | 5 | passed (briefs #45/#46: first band frozen to the cent, shipping once, title whole); defect: twin labels "(men's wedding band)" twice → fixed in 4.13.5; defect: the same band in rose gold was weighed again → twin rule, fixed locally | 7 Sep 2026 |
-| 4.13.4 | 6, 7 | pending | |
+| 4.13.6 | 3 (retry) | passed: card filed from the finished views, nothing re-rendered | 8 Sep 2026 |
+| 4.13.6 | 6 | failed at step 4: the change from a new thread re-asked both bands' sizes and karats → known-specification merge, fixed locally | 8 Sep 2026 |
+| 4.13.6 | 7 | pending | |

@@ -3077,6 +3077,40 @@ class SameSenderTests(SideBranchTests):
             self.assertEqual(self.claim(ws, "n1")["status"], "processed")
         self.run_branch(branch)
 
+    def test_a_change_from_a_new_thread_keeps_every_quoted_fact(self) -> None:
+        """8 September 2026, live case 6: two bands quoted; from a new thread the customer asks for initials inside the
+        yellow band; owner says same, then change. The desk asked both bands' sizes and karats again."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            two = {"metal": "gold", "metal_karat": "18k", "pieces": [
+                {"piece_type": "wedding band", "metal_color": "yellow", "finger_size": "10", "notes": "plain, polished, no stones"},
+                {"piece_type": "wedding band", "metal_color": "rose", "finger_size": "10", "notes": "plain, polished, no stones"}]}
+            thread, estimate_id = self._estimate_sent(ws, world, spec=two, text="Two plain polished 18k bands, one yellow one rose, size 10.\n\nPat")
+            # The customer writes from a brand-new thread; the model reads only those words.
+            world.spec = {"piece_type": "wedding band", "metal_color": "yellow", "engraving": "TL inside"}
+            world.customer_message("n1", "thread-followup", "Following up on my two-band quote. Could you add my initials, TL, "
+                                   "engraved inside the yellow gold band? Everything else stays as quoted.\n\nPat", subject="Following up on my bands")
+            self.tick(ws, world)
+            self.assertEqual(self.answer(ws, "same")["decision"], "same")
+            world.design_change = ["engraving"]
+            summary = self.tick(ws, world)
+            world.design_change = []
+            self.assertEqual(self.claim(ws, "n1")["status"], "awaiting_owner", summary)
+            self.assertEqual(self.answer(ws, "change")["decision"], "design_change")
+            sent_before = len(world.sent)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(len(world.sent), sent_before, "no follow-up: nothing on the record is asked again")
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["missing_required_fields"], [])
+            self.assertEqual(record["specification"]["pieces"][0]["engraving"], "TL inside")
+            self.assertEqual(record["specification"]["pieces"][0]["finger_size"], "10")
+            self.assertNotIn("engraving", record["specification"]["pieces"][1])
+            self.assertEqual(record["route"]["thread_id"], "thread-followup")
+            readings = [pr for pr in world.prompts if "KNOWN SPECIFICATION" in pr]
+            self.assertTrue(readings, "the model was handed the quoted specification")
+        self.run_branch(branch)
+
     def test_same_on_a_new_thread_after_the_estimate_books_the_meeting_in_the_new_thread(self) -> None:
         """The live script: estimate sent, the customer asks to meet from a brand-new thread, owner says same."""
         def branch(ws: Path, world: World) -> None:

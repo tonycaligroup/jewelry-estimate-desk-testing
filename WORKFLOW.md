@@ -437,6 +437,12 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.13.6): the reading of a
+  customer's new message is handed the specification the record already
+  holds and merges the new words into it; a change to a quoted piece from
+  a new thread keeps every quoted fact, the named piece takes the change,
+  an unnamed change applies to every piece, and nothing on the record is
+  asked again (6.1, 6.2, 6.8).
 - Built 8 September 2026 (4.13.6): a rendering run that
   dies while filing its card resumes to the card; it never renders again.
   The finished report is the rendering; the progress file outlives the card

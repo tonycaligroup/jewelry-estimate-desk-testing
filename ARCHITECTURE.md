@@ -381,6 +381,21 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.13.6 (8 September 2026): the reading knows what the record knows.**
+Live case 6: two bands quoted, "add my initials inside the yellow band"
+from a new thread, owner "same" then "change"; the desk read the new
+thread on its own (the digest is the new thread only) and the gate asked
+both bands' sizes and karats. Now `judge.known_clause` hands both reading
+prompts (`triage_and_extract`, `extract_specification`) the record's
+specification with the instruction to merge the newest words into it and
+return every piece, and `estimate_record.merge_known_facts` fills
+whatever the model still drops: flat against flat, pieces by position, a
+flat reading matched to one of several pieces by piece type then colour,
+size, metal, karat (`CHANGE_MATCH_KEYS`), an unnamed change applied to
+every piece, an ambiguous one left to the gate. A second-piece reopen
+keeps `carry_prior_facts`. Fixture
+`tests/fixtures/live/2026-09-08-change-from-a-new-thread.json` (verbatim).
+
 **4.13.6 (built 8 September 2026): a run killed while filing the card resumes to the card.**
 Live (question A12E11): the last view landed, `render_step` unlinked the
 progress file and was killed inside `request_rendering_approval` (the

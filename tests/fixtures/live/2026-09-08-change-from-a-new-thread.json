@@ -1,0 +1,94 @@
+{
+  "defect": "two bands quoted; from a new thread the customer asked for initials inside the yellow band; owner answered same, then change; the desk read the new thread alone and asked both bands' finger sizes and karats again (the quoted bands are simplified to plain bands here; the follow-up wording is verbatim)",
+  "seen_on": "4.13.6",
+  "fixed_in": "unpublished",
+  "text_is": "paraphrase",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "estimate_sent": {
+        "text": "I'd like a quote on two plain polished 18k bands, one yellow and one rose gold, size 10.\n\nTony",
+        "spec": {
+          "metal": "gold",
+          "metal_karat": "18k",
+          "pieces": [
+            {
+              "piece_type": "men's wedding band",
+              "metal_color": "yellow",
+              "finger_size": "10",
+              "notes": "plain, polished, no stones"
+            },
+            {
+              "piece_type": "men's wedding band",
+              "metal_color": "rose",
+              "finger_size": "10",
+              "notes": "plain, polished, no stones"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "customer": {
+        "id": "n1",
+        "thread": "new",
+        "subject": "Following up on my bands",
+        "text": "Hi, following up on my two-band quote. Could you add my initials, TL,\nengraved inside the yellow gold band? Everything else stays as quoted.\n\nTony"
+      },
+      "spec": {
+        "piece_type": "men's wedding band",
+        "metal_color": "yellow",
+        "engraving": "TL"
+      },
+      "expect": {
+        "claim_status": "awaiting_owner",
+        "no_new_card": true
+      }
+    },
+    {
+      "answer": "same",
+      "expect": {
+        "decision": "same"
+      }
+    },
+    {
+      "tick": true,
+      "design_change": [
+        "engraving"
+      ],
+      "expect": {
+        "claim_status": "awaiting_owner",
+        "record_thread": "thread-n1"
+      }
+    },
+    {
+      "answer": "change",
+      "expect": {
+        "decision": "design_change"
+      }
+    },
+    {
+      "tick": true,
+      "expect": {
+        "outcomes": [
+          "approval_requested"
+        ],
+        "sent": 1,
+        "missing_required_fields": [],
+        "pieces": 2,
+        "piece": {
+          "index": 0,
+          "has": {
+            "engraving": "TL",
+            "finger_size": "10",
+            "metal_color": "yellow"
+          }
+        },
+        "card_title_contains": [
+          "yellow gold",
+          "rose gold"
+        ]
+      }
+    }
+  ]
+}

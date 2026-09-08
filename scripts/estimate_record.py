@@ -1642,6 +1642,64 @@ def carry_prior_facts(record: dict[str, Any], specification: dict[str, Any]) -> 
     return {**specification, "pieces": pieces}
 
 
+CHANGE_MATCH_KEYS = ("metal_color", "finger_size", "metal", "metal_karat")
+
+
+def merge_known_facts(record: dict[str, Any], specification: dict[str, Any]) -> dict[str, Any]:
+    """The reading of a new message keeps every fact the record already holds; the new words win.
+
+    Used for a continuing record that is not a second-piece reopen: a
+    follow-up answered from a new thread ("same"), or a change to a quoted
+    piece ("change"). Flat against flat fills the gaps; pieces against
+    pieces fill by position; one flat piece against several known pieces is
+    matched by piece type and then colour, size, metal, karat, and merged
+    into that piece with the others unchanged; a flat reading with no piece
+    type against several pieces is a change to all of them.
+    """
+    if not isinstance(specification, dict) or record.get("reopened_for") == "second_piece":
+        return specification
+    known = record.get("specification")
+    if not isinstance(known, dict) or not known:
+        return specification
+
+    def fill(new: dict[str, Any], old: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(new)
+        for key, value in old.items():
+            if key != "pieces" and merged.get(key) in (None, "", []) and value not in (None, "", []):
+                merged[key] = value
+        return merged
+
+    known_pieces = [{k: v for k, v in piece.items() if k != "pieces"} for piece in pieces_of(known)]
+    raw = specification.get("pieces")
+    new_pieces = [dict(p) for p in raw if isinstance(p, dict)] if isinstance(raw, list) else []
+    if len(known_pieces) <= 1 and not new_pieces:
+        return fill(specification, known_pieces[0] if known_pieces else known)
+    if new_pieces and len(new_pieces) >= len(known_pieces):
+        merged = [fill(piece, old) for piece, old in zip(new_pieces, known_pieces)] + new_pieces[len(known_pieces):]
+        return {**fill({k: v for k, v in specification.items() if k != "pieces"}, {k: v for k, v in known.items() if k != "pieces"}),
+                "pieces": merged}
+    if new_pieces:
+        return specification  # fewer pieces than known and more than one: the gate decides
+    flat = {k: v for k, v in specification.items() if k != "pieces"}
+    kind = str(flat.get("piece_type") or "").strip().lower()
+    if not kind:
+        # No piece named: the change applies to every piece ("make both 14k").
+        return {**known, "pieces": [{**piece, **{k: v for k, v in flat.items() if v not in (None, "", [])}} for piece in known_pieces]}
+    candidates = [i for i, piece in enumerate(known_pieces) if str(piece.get("piece_type") or "").strip().lower() == kind]
+    for key in CHANGE_MATCH_KEYS:
+        if len(candidates) <= 1:
+            break
+        wanted = str(flat.get(key) or "").strip().lower()
+        if wanted:
+            narrowed = [i for i in candidates if str(known_pieces[i].get(key) or "").strip().lower() == wanted]
+            candidates = narrowed or candidates
+    if len(candidates) != 1:
+        return specification  # ambiguous: the gate asks
+    index = candidates[0]
+    pieces = [fill(flat, piece) if i == index else piece for i, piece in enumerate(known_pieces)]
+    return {**{k: v for k, v in known.items() if k != "pieces"}, "pieces": pieces}
+
+
 def rejected_bindings(record: dict[str, Any]) -> set[str]:
     """Binding hashes of price cards the owner rejected before naming a price."""
     value = record.get("rejected_approval_bindings")

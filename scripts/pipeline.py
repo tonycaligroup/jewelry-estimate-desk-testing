@@ -616,7 +616,8 @@ def process_claim(
     # A reply on a thread that already has a record is the same conversation
     # continuing; only the message that opened the record is triaged. A
     # customer asking "what does this have to do with it?" is not junk mail.
-    judged = judge.triage_and_extract(digest, model, judge_runner, openclaw) if initiating else None
+    known = record.get("specification") if isinstance(record.get("specification"), dict) and record.get("specification") else None
+    judged = judge.triage_and_extract(digest, model, judge_runner, openclaw, known=known) if initiating else None
     triage = {"kind": judged["kind"], "note": judged["note"]} if judged else {"kind": "estimate_request", "note": "reply on an open estimate"}
     if triage["kind"] in NOT_AN_INQUIRY:
         workflow_safe.not_an_inquiry(_namespace(
@@ -628,8 +629,9 @@ def process_claim(
     if triage["kind"] == "escalation":
         return _manual_review(p, message_id, "customer_escalation", command_runner)
 
-    specification = judged["specification"] if judged else judge.extract_specification(digest, model, judge_runner, openclaw)["specification"]
+    specification = judged["specification"] if judged else judge.extract_specification(digest, model, judge_runner, openclaw, known=known)["specification"]
     specification = estimate_record.carry_prior_facts(record, specification)
+    specification = estimate_record.merge_known_facts(record, specification)
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
     # customer's own words in code. A disagreement is never priced; it is
