@@ -173,6 +173,34 @@ class PassingSheetMirrorBehaviourTests(unittest.TestCase):
             self.assertEqual(row[0], "Pat Doe")
             self.assertEqual(row[2], "their piece")
 
+    def test_a_record_closed_as_not_an_inquiry_is_never_listed(self) -> None:
+        """Live 9 Sep: vendor and personal mail opened records that triage closed, and the sheet listed them as customers."""
+        import sheet_mirror
+        vendor = {"estimate_id": "jed-00000000000000aa", "status": "dormant", "route": {"recipient": "Sales Bot <sales@vendor.example>", "thread_id": "t1"},
+                  "retirement": {"reason": "not_an_inquiry", "note": "triage: vendor_or_marketing"}}
+        withdrew = {"estimate_id": "jed-00000000000000bb", "status": "dormant", "route": {"recipient": "Pat Doe <pat@example.net>", "thread_id": "t2"},
+                    "retirement": {"reason": "customer_withdrew"}, "specification": {"piece_type": "ring"}}
+        self.assertFalse(sheet_mirror.listed(vendor))
+        self.assertTrue(sheet_mirror.listed(withdrew))
+        self.assertTrue(sheet_mirror.listed({"estimate_id": "jed-00000000000000cc", "status": "awaiting_specs", "route": {"recipient": "x@y.z"}}))
+        for reason in ("test_artifact", "created_in_error", "duplicate_of_another_thread"):
+            self.assertFalse(sheet_mirror.listed({**vendor, "retirement": {"reason": reason}}), reason)
+
+    def test_rows_for_skips_a_vendor_record_end_to_end(self) -> None:
+        import sheet_mirror
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            root = ws / "estimate-desk" / "records"
+            root.mkdir(parents=True)
+            (root / "jed-00000000000000aa.json").write_text(json.dumps({
+                "estimate_id": "jed-00000000000000aa", "status": "dormant", "route": {"recipient": "Sales Bot <sales@vendor.example>", "thread_id": "t1"},
+                "retirement": {"reason": "not_an_inquiry", "note": "triage: vendor_or_marketing"}}), encoding="utf-8")
+            (root / "jed-00000000000000bb.json").write_text(json.dumps({
+                "estimate_id": "jed-00000000000000bb", "status": "awaiting_specs", "route": {"recipient": "Pat Doe <pat@example.net>", "thread_id": "t2"},
+                "specification": {"piece_type": "ring"}}), encoding="utf-8")
+            rows = sheet_mirror.rows_for(ws)
+            self.assertEqual([r[1] for r in rows["Customers"][1:]], ["pat@example.net"], rows["Customers"])
+
     def test_a_dormant_record_shows_closed(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             record = {"estimate_id": "jed-dormant00000000000", "status": "dormant",

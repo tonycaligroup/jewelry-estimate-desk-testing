@@ -456,7 +456,11 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 9 September 2026 (unpublished): concierge mode, the default, as
+- Built 9 September 2026 (unpublished): the spreadsheet mirror never lists
+  a record that triage closed as not an inquiry (vendor, personal, or
+  unrelated mail opens a record before it is read), nor a test, a mistake,
+  or a duplicate; a customer who withdrew stays (7).
+- Built 9 September 2026 (4.15.4): concierge mode, the default, as
   described at the head of section 6 (the jeweler, 9 September 2026). One
   profile setting (`desk.mode`), the standing details question per
   estimate, the acknowledgement email, one price card that carries the

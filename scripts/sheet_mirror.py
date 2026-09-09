@@ -255,10 +255,26 @@ def _records(workspace: Path) -> list[dict[str, Any]]:
     return found
 
 
+# Records the counter never needs: mail that turned out not to be a jewelry inquiry, tests, mistakes, duplicates.
+NEVER_LISTED = {"not_an_inquiry", "test_artifact", "created_in_error", "duplicate_of_another_thread", "superseded_by_another_estimate"}
+
+
+def listed(record: dict[str, Any]) -> bool:
+    """Whether a record belongs on the sheet: a customer conversation, not a vendor email that opened and closed a record.
+
+    Live (9 September 2026): every message opens a record before it is read,
+    and the ones triage closed as not an inquiry were listed as "closed"
+    customers. A record retired for one of those reasons is skipped; a
+    customer who withdrew stays, since they were a customer.
+    """
+    retirement = record.get("retirement") if isinstance(record.get("retirement"), dict) else {}
+    return str(retirement.get("reason") or "") not in NEVER_LISTED
+
+
 def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
-    """Every tab's rows, header first, from the records and the ledger."""
+    """Every tab's rows, header first, from the records and the ledger; non-inquiries never appear."""
     desk = Path(workspace) / "estimate-desk"
-    records = _records(workspace)
+    records = [r for r in _records(workspace) if listed(r)]
     records.sort(key=_last_contact, reverse=True)
     customers: list[list[Any]] = [HEADERS["Customers"]]
     week: list[list[Any]] = [HEADERS["This week"]]
