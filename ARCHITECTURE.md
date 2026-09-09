@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.14.3 (8 September 2026): example photos are read at intake.**
+**4.14.4 (built 8 September 2026): example photos are read at intake.**
 The owner's rule: look at the images customers send when they are example
 pieces. `pipeline.example_photos` collects the customer's newest photos on
 a first inquiry (only the reply's own photos on a reply), at most two,
@@ -397,7 +397,7 @@ photo. Golden `ExamplePhotoTests`. The appointment offer and confirmation
 emails no longer say there is no estimate yet: the visit is to design
 their perfect piece together (`customer_mail`, the `the visit` fact).
 
-**Unpublished after 4.14.3 (8 September 2026): a carried meeting request does not re-offer times.**
+**4.14.4 (built 8 September 2026): a carried meeting request does not re-offer times.**
 Live, after the desk offered times, "Before I come in, is there any way I
 can get a ballpark estimate?" produced a second offer card. The reading
 merges the thread, so the first email's `scheduling_intent` came back on

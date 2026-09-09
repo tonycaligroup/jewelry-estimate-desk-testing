@@ -1,7 +1,7 @@
 {
   "defect": "the desk offered times for a pair of emerald earrings; the customer replied 'Before I come in, is there any way I can get a ballpark estimate?' and the desk offered times again (card #69) instead of asking for the details an estimate needs; the first email's meeting request rode along on the reading of the thread",
   "seen_on": "4.14.2",
-  "fixed_in": "unpublished after 4.14.3",
+  "fixed_in": "4.14.4",
   "text_is": "verbatim",
   "kind": "golden_path",
   "steps": [
