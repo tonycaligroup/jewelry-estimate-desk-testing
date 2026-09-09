@@ -1877,12 +1877,26 @@ PRIOR_PIECE_RE = re.compile(
 PRIOR_PIECE_STATUSES = ("estimate_sent", "appointment_booked", "approved")
 
 
+# "the emerald earrings we talked about earlier", "the ring you quoted", "from my earlier inquiry": an estimate on file.
+EARLIER_CONVERSATION_RE = re.compile(
+    r"(?i)\b(?:(?:we|you)\s+(?:talked|spoke|discussed|chatted|went over)\s+(?:about\s+)?(?:[^.?!\n]{0,40}?\b)?(?:earlier|before|previously|last (?:week|month|time|year)|the other day|a while (?:ago|back))\b|"
+    r"you\s+(?:quoted|estimated|priced)\s+(?:me|us|for me|for us)?\b|(?:the|your)\s+(?:estimate|quote|price|number)\s+you\s+(?:sent|gave|emailed)\b|"
+    r"(?:from|in)\s+(?:my|our|the|your)\s+(?:earlier|previous|last|other)\s+(?:email|emails|inquiry|estimate|quote|conversation|thread|message)\b|"
+    r"(?:we|you)\s+(?:talked|spoke|discussed|went over)\s+(?:about\s+)?(?:the|this|that|these|those|my|our)\b)"
+)
+
+
+def refers_to_an_earlier_conversation(own_words: str) -> bool:
+    """The customer points at an estimate or a conversation the desk already has ("the earrings we talked about earlier")."""
+    return bool(EARLIER_CONVERSATION_RE.search(str(own_words or "")))
+
+
 def refers_to_a_prior_piece(own_words: str) -> bool:
     """The customer says the shop made (or sold them) the piece they are describing."""
     return bool(PRIOR_PIECE_RE.search(str(own_words or "")))
 
 
-def find_prior_piece(root: Path, recipient: str, piece_type: str | None) -> dict[str, Any] | None:
+def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude: str | None = None) -> dict[str, Any] | None:
     """The desk's most recent quoted estimate for this customer that names the same kind of piece, else None.
 
     "On file" means the desk's own records (the jeweler, 9 September 2026:
@@ -1894,29 +1908,40 @@ def find_prior_piece(root: Path, recipient: str, piece_type: str | None) -> dict
     if not email or not root.exists():
         return None
     wanted = {w for w in re.findall(r"[a-z]+", str(piece_type or "").lower()) if w not in ("a", "an", "the", "of", "pair", "custom", "piece")}
-    found: list[tuple[str, dict[str, Any]]] = []
+    found: list[tuple[int, str, dict[str, Any]]] = []
     for path in sorted(root.glob("jed-*.json")):
         try:
             record = read_object(path)
         except (OSError, ValueError):
+            continue
+        if record.get("estimate_id") == exclude:
             continue
         route = record.get("route") if isinstance(record.get("route"), dict) else {}
         if str(route.get("recipient") or "").strip().lower() != email:
             continue
         history = record.get("estimate_history") or []
         quoted = history[-1].get("specification") if history and isinstance(history[-1], dict) else None
+        rank = 2
         if not isinstance(quoted, dict) or not quoted:
             quoted = record.get("specification") if record.get("status") in PRIOR_PIECE_STATUSES else None
         if not isinstance(quoted, dict) or not quoted:
+            # An estimate that never reached a price still holds what the customer said ("the earrings we talked
+            # about earlier", 9 September 2026); a quoted one is preferred when both exist.
+            quoted = record.get("specification") if isinstance(record.get("specification"), dict) else None
+            rank = 1
+            if (record.get("retirement") or {}).get("reason") in ("not_an_inquiry", "test_artifact", "created_in_error"):
+                continue
+        if not isinstance(quoted, dict) or not quoted or not _present(quoted.get("piece_type")):
             continue
         had = set(re.findall(r"[a-z]+", str(quoted.get("piece_type") or "").lower()))
         if wanted and not (wanted & had):
             continue
-        found.append((str(record.get("created_at") or record.get("estimate_id") or ""), {"estimate_id": record.get("estimate_id"), "specification": quoted}))
+        found.append((rank, str(record.get("created_at") or record.get("estimate_id") or ""),
+                      {"estimate_id": record.get("estimate_id"), "specification": quoted}))
     if not found:
         return None
-    found.sort(key=lambda item: item[0])
-    return found[-1][1]
+    found.sort(key=lambda item: (item[0], item[1]))
+    return found[-1][2]
 
 
 PRIOR_LOOSE_KEYS = ("notes", "reference_images", "scheduling_intent", "pieces", "quantity", "event_date", "budget", "engraving")

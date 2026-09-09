@@ -274,7 +274,8 @@ def _send_followup(
     understanding = estimate_record.vision_in_words(specification, on_file=bool((record_now.get("prior_piece") or {}).get("on_file")))
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
-                                       shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding)
+                                       shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding,
+                                       questions=question_lines(missing, specification))
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
@@ -852,11 +853,15 @@ def process_claim(
     specification = estimate_record.settle_earring_style(specification, handled_words)
     # "15mm x 12mm oval": a stone sized in millimetres is sized; the carat is the jeweler's to derive, never asked.
     specification = estimate_record.settle_stone_dimensions(specification, handled_words)
-    if initiating and estimate_record.refers_to_a_prior_piece(handled_words) and not record.get("prior_piece"):
-        # "An exact replica of the pendant you made for me": the piece on file is the base and nothing on it is asked
-        # (the jeweler, 9 September 2026). Found in the desk's own records, its facts ride along beneath the new words;
-        # not found, the owner's books decide before anything is sent.
-        prior = estimate_record.find_prior_piece(p["record_root"], (record.get("route") or {}).get("recipient"), specification.get("piece_type"))
+    made_before = estimate_record.refers_to_a_prior_piece(handled_words)
+    talked_before = estimate_record.refers_to_an_earlier_conversation(handled_words)
+    if initiating and (made_before or talked_before) and not record.get("prior_piece"):
+        # "An exact replica of the pendant you made for me", "the emerald earrings we talked about earlier, but with
+        # sapphires": the piece on file is the base and nothing on it is asked (the jeweler, 9 September 2026). Found in
+        # the desk's own records, its facts ride along beneath the new words; a piece the shop made that is not on
+        # file goes to the owner's books before anything is sent; an earlier conversation not on file is read afresh.
+        prior = estimate_record.find_prior_piece(p["record_root"], (record.get("route") or {}).get("recipient"),
+                                                 specification.get("piece_type"), exclude=estimate_id)
         if prior:
             carried = estimate_record.prior_piece_facts(prior["specification"], specification)
             specification = {**carried, **specification}
@@ -864,7 +869,7 @@ def process_claim(
             ledger.absorb(desk, estimate_id, carried, message_id, "", "", default_source="prior")
             record = estimate_record.mark_prior_piece(p["record_root"], estimate_id,
                                                       {"on_file": True, "estimate_id": prior["estimate_id"], "carried": sorted(carried)})
-        else:
+        elif made_before:
             asked = workflow_safe.ask_prior_piece(_namespace(p, message_id, estimate_id, runner=command_runner), record, specification)
             return {"outcome": "awaiting_owner", "question_id": asked.get("question_id"), "next": "done"}
     # The message being handled decides a meeting request in code: a

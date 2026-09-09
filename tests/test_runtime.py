@@ -10452,3 +10452,16 @@ class IDontKnowTests(unittest.TestCase):
         record = {"missing_required_fields": ["stone_carat"]}
         settled = estimate_record.settle_left_to_jeweler({"piece_type": "pendant", "stone_type": "topaz"}, record, "No, I don't.")
         self.assertEqual(settled["stone_carat"], "jeweler's choice")
+
+
+class EarlierConversationTests(unittest.TestCase):
+    """Live 9 Sep: 'the emerald earrings we talked about earlier' pointed at an estimate on file and was asked everything again."""
+
+    def test_words_that_point_at_an_earlier_estimate(self) -> None:
+        for words in ("Do you remember this emerald earrings we talked about earlier?", "same as the ring you quoted me last month",
+                      "from my earlier email", "the estimate you sent for the pendant", "We discussed the bracelet last week", "you priced a band for us"):
+            with self.subTest(words=words):
+                self.assertTrue(estimate_record.refers_to_an_earlier_conversation(words), words)
+        for words in ("Can you make me earrings?", "I'd like something like the pendant on your site", "we talked about a budget of 5000 with my wife"):
+            with self.subTest(words=words):
+                self.assertFalse(estimate_record.refers_to_an_earlier_conversation(words), words)

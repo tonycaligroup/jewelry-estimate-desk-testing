@@ -648,7 +648,7 @@ def words_covered(body: str, text: str) -> bool:
     return hits * 2 >= len(words)
 
 
-def check_body_covers(missing_fields: list[str], understanding: str | None = None, sender: str = ""):
+def check_body_covers(missing_fields: list[str], understanding: str | None = None, sender: str = "", questions: list[str] | None = None):
     def check(value: dict[str, Any]) -> dict[str, Any]:
         result = check_body(value)
         import gmail_text  # local import: gmail_text does not depend on this module
@@ -663,6 +663,11 @@ def check_body_covers(missing_fields: list[str], understanding: str | None = Non
         if understanding and not words_covered(result["body"], understanding):
             raise ValueError("before the questions, confirm their vision in one sentence the way a jeweler would, naming it: "
                              + understanding[:200])
+        if questions is not None:
+            bullets = [line for line in result["body"].splitlines() if line.strip().startswith("- ")]
+            if len(bullets) > len(questions):
+                raise ValueError(f"ask {len(questions)} question{'s' if len(questions) != 1 else ''}, one bullet each, in the desk's words; "
+                                 "the metal (which metal, karat, color) is one question")
         bench = bench_measurement_questions(result["body"])
         if bench:
             raise ValueError("never ask the customer a technical question the jeweler works out (millimetres, diameters, drop "
@@ -682,6 +687,7 @@ def draft_followup(
     openclaw: str | None = None,
     photos: list[str] | None = None,
     understanding: str | None = None,
+    questions: list[str] | None = None,
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing; a photo's vision is confirmed first."""
     import gmail_text  # local import: gmail_text does not depend on this module
@@ -711,6 +717,8 @@ def draft_followup(
            "such as the person the piece is for. " if sender else "")
         + f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
         f"MISSING DETAILS TO ASK FOR: {', '.join(missing_fields)}\n\n"
+        + ((("THE QUESTIONS, in the desk's words, one bullet each and no more (the metal is one question, not three):\n"
+             + "\n".join(f"- {q}" for q in questions) + "\n\n")) if questions else "")
         + ((f"THEIR VISION, from their photo and their words: {understanding}\nBefore the questions, confirm it in one "
             "sentence the way a jeweler speaks to a client (for example \"Just so I have your vision right: you are after "
             f"{understanding}.\"), and ask them to say if anything is off. Never call it a summary.\n\n") if understanding else "")
@@ -720,7 +728,7 @@ def draft_followup(
         + f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
-    return ask_json(prompt, check_body_covers(list(missing_fields), understanding, sender), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
+    return ask_json(prompt, check_body_covers(list(missing_fields), understanding, sender, questions), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
 
 
 LOCAL_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")

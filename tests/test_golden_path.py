@@ -2910,6 +2910,41 @@ class PriorPieceTests(SideBranchTests):
             self.assertIn("on file: this follows the piece the shop made for them before", estimate_prompt)
         self.run_branch(branch)
 
+    def test_the_earrings_we_talked_about_earlier_are_carried_from_the_earlier_estimate(self) -> None:
+        """Live 9 Sep: 'the emerald earrings we talked about earlier, the same but with lab grown sapphires' was asked every question again."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
+            profile["pricing"]["stones_per_carat"]["lab_grown_sapphire"] = 300.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            earlier = {"piece_type": "pair of earrings", "earring_style": "stud", "metal": "white gold", "metal_karat": "18k", "metal_color": "white",
+                       "stone_type": "emerald", "stone_origin": "lab-grown", "stone_carat": 2.5, "stone_carat_basis": "each", "stone_shape": "round",
+                       "setting_style": "halo", "center_stone": "yes"}
+            _thread, first_id = self._estimate_sent(ws, world, spec=earlier, text="A pair of halo stud earrings, 18k white gold, lab-grown "
+                                                    "emeralds 2.5 ct each, round.\n\nAnthony")
+            # A new thread: the reading knows only what the new email says.
+            world.spec = {"piece_type": "earrings", "stone_type": "sapphire", "stone_origin": "lab-grown"}
+            world.customer_message("tb1", "thread-more-earrings", "Hi Tony,\n\nDo you remember this emerald earrings we talked about earlier?\n\n"
+                                   "I'd like the exact same thing, but with lab grown sapphires. Same size, all other details the same.\n\n"
+                                   "Can I get an idea what that would cost?\n\nAnthony", subject="More earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" in n["text"]], [], "no question to the owner, same or new")
+            self.assertEqual(len(world.sent), 1, "no questions to the customer")
+            new_id = next(i for i in (path.stem for path in (ws / "estimate-desk" / "records").glob("jed-*.json")) if i != first_id)
+            spec = self.record(ws, new_id)["specification"]
+            self.assertEqual((spec["stone_type"], spec["stone_origin"]), ("sapphire", "lab-grown"), "the new words win")
+            self.assertEqual((spec["metal_karat"], spec["setting_style"], spec["earring_style"], spec["stone_carat"]), ("18k", "halo", "stud", 2.5),
+                             "everything else from the earlier estimate")
+            self.assertEqual(self.record(ws, new_id)["prior_piece"]["estimate_id"], first_id)
+            title = world.cards[-1]["title"]
+            self.assertTrue(title.startswith("Price approval"), title)
+            self.assertIn("sapphires", title)
+            self.assertNotIn("emerald", title)
+        self.run_branch(branch)
+
     def test_nothing_on_file_asks_the_owner_whose_details_price_it(self) -> None:
         def branch(ws: Path, world: World) -> None:
             self._topaz_profile(ws)

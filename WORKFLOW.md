@@ -456,6 +456,13 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): "the emerald earrings we talked
+  about earlier, the same but with sapphires" carries the earlier estimate
+  (quoted or not) for the same customer beneath the new words, asks nobody,
+  and prices; a known customer pointing at an earlier conversation or a
+  piece the shop made is a new inquiry, never the "same piece or new?"
+  question (6.1, 6.2). The follow-up email asks the desk's own questions,
+  one bullet each, the metal as one question, never three.
 - Built 9 September 2026 (unpublished): the spreadsheet's "Cost sheet" tab
   carries the full breakdown of every price card, one row per cost line
   (metal by the gram, stones by the carat, labor by the hour, fees), then
