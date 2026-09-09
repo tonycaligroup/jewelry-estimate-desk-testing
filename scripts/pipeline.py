@@ -834,7 +834,7 @@ def process_claim(
     specification = estimate_record.settle_setting_style(specification, handled_words)
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
-    specification = estimate_record.settle_scheduling_intent(specification, handled_words)
+    specification = estimate_record.settle_scheduling_intent(specification, handled_words, record)
     if not initiating:
         # "Before I come in, can I get a ballpark?": the first email's meeting request does not ride along.
         specification = estimate_record.drop_carried_scheduling_intent(specification, record, handled_words)

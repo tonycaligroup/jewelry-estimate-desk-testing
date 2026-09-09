@@ -443,7 +443,10 @@ closed by follow-up changes:
   afternoon", "tomorrow morning", "the 15th") is where the offered times
   come from; only when nothing is free there do the nearest days stand in,
   and the card says so. Live: "times next week" was offered today and
-  tomorrow (6.7).
+  tomorrow (6.7). After the shop has offered times, a reply that names a
+  day without a clock time ("Monday the 21st would be best") answers that
+  offer: it keeps the meeting and the card is filed for that day (live: such
+  a reply, with the details, was priced with no meeting card at all).
 - Built 9 September 2026 (4.15.3), from the ruby earrings thread: when
   a reply completes the details and picks a time, the meeting card is filed
   before the review, so a missing rate (the owner's question) never skips

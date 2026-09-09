@@ -414,16 +414,12 @@ def requested_period(phrases: list[str], now: datetime) -> dict[str, Any] | None
         elif re.search(r"\btoday\b", text):
             start = end = today
         else:
+            # A date outranks a weekday ("Monday the 21st" is the 21st, whichever Monday is next).
             day_match = _PERIOD_DAY_RE.search(text)
             month_match = re.search(_MONTH_DAY, text, re.IGNORECASE)
-            ordinal_match = re.search(_ORDINAL_DAY, text, re.IGNORECASE)
-            if day_match:
-                weekday = _WEEKDAYS[day_match.group("day")]
-                ahead = (weekday - today.weekday()) % 7
-                if ahead == 0 and (day_match.group("next") or "").startswith("next"):
-                    ahead = 7
-                start = end = today + timedelta(days=ahead)
-            elif month_match:
+            ordinal_match = re.search(_ORDINAL_DAY, text, re.IGNORECASE) or (
+                re.search(r"(?i)\bthe\s+(?P<mday2>\d{1,2})\b", text) if day_match else None)
+            if month_match:
                 try:
                     start = today.replace(month=_MONTHS[month_match.group("month").lower()], day=int(month_match.group("mday")))
                 except ValueError:
@@ -439,6 +435,12 @@ def requested_period(phrases: list[str], now: datetime) -> dict[str, Any] | None
                 if start < today:
                     start = (start.replace(day=1) + timedelta(days=32)).replace(day=start.day)
                 end = start
+            elif day_match:
+                weekday = _WEEKDAYS[day_match.group("day")]
+                ahead = (weekday - today.weekday()) % 7
+                if ahead == 0 and (day_match.group("next") or "").startswith("next"):
+                    ahead = 7
+                start = end = today + timedelta(days=ahead)
             elif half:
                 start, end = today, today + timedelta(days=int(7))
         if start is None:

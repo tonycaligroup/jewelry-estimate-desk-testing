@@ -2119,17 +2119,47 @@ def asks_to_reschedule(own_words: str) -> bool:
     return bool(RESCHEDULE_RE.search(text)) and bool(scheduling_sentences(text))
 
 
-def settle_scheduling_intent(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+# A day named without a clock time: "Monday", "next Tuesday", "the 14th", "next week", "tomorrow morning".
+_DAY_NAMED_RE = re.compile(
+    r"(?i)\b(?:(?:next|this) (?:week|month)|" + _DAY + r"|(?:the )?\d{1,2}(?:st|nd|rd|th)\b|"
+    r"(?:january|february|march|april|may|june|july|august|september|october|november|december) \d{1,2})\b"
+)
+
+
+def day_sentences(own_words: str) -> list[str]:
+    """The customer's sentences that name a day or a stretch of days; deadlines and deliveries are not visits."""
+    found: list[str] = []
+    for sentence in _SENTENCE_RE.split(str(own_words or "")):
+        sentence = sentence.strip()
+        if not sentence or NOT_A_VISIT_RE.search(sentence):
+            continue
+        if _DAY_NAMED_RE.search(sentence):
+            found.append(sentence)
+    return found
+
+
+def times_were_offered(record: dict[str, Any] | None) -> bool:
+    """The shop has offered this customer times: a day named in their reply answers that offer."""
+    offers = (record or {}).get("times_offered")
+    return isinstance(offers, list) and bool(offers)
+
+
+def settle_scheduling_intent(specification: dict[str, Any], own_words: str, record: dict[str, Any] | None = None) -> dict[str, Any]:
     """The customer's own words decide a meeting request when the reading missed it.
 
     Live (8 September 2026): "Something came up for Saturday... Any chance
     we can do Friday at 4pm?" was read as an estimate request and answered
     with the questionnaire. The reading is the model's; whether the message
-    asks to meet is a rule, so the sentences that ask are the intent.
+    asks to meet is a rule, so the sentences that ask are the intent. After
+    the shop has offered times, a reply that names a day without a clock
+    time ("Monday the 14th would be best") answers that offer (live, 9
+    September 2026: such a reply was priced with no meeting card at all).
     """
     if not isinstance(specification, dict) or present_value(specification.get("scheduling_intent")):
         return specification
     sentences = scheduling_sentences(own_words)
+    if not sentences and times_were_offered(record):
+        sentences = day_sentences(own_words)
     if not sentences:
         return specification
     return {**specification, "scheduling_intent": " ".join(sentences)[:300]}
@@ -2143,11 +2173,14 @@ def drop_carried_scheduling_intent(specification: dict[str, Any], record: dict[s
     estimate?" and the desk offered times again. The reading merges the
     thread, so the first email's request rode along, re-worded. A reply keeps
     a scheduling intent only when its own words ask for a meeting, propose a
-    day and time, or pick or accept an offered time.
+    day and time, pick or accept an offered time, or, once times were
+    offered, name a day.
     """
     if not isinstance(specification, dict) or not present_value(specification.get("scheduling_intent")):
         return specification
     if scheduling_sentences(own_words) or accepts_a_time(own_words):
+        return specification
+    if times_were_offered(record) and day_sentences(own_words):
         return specification
     # The reading of the thread can re-word the earlier request, so its text is
     # never compared: on a reply, only the reply's own words carry a meeting.

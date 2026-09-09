@@ -7517,6 +7517,24 @@ class SchedulingWordsTests(unittest.TestCase):
             with self.subTest(words=words):
                 self.assertNotIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, record, words), words)
 
+    def test_a_day_named_after_an_offer_answers_the_offer(self) -> None:
+        """Live 9 Sep: after the offer, 'Monday the 14th would be best' plus the details was priced with no meeting card."""
+        offered = {"times_offered": [{"options": [{"start": "2026-09-09T11:00:00-07:00", "label": "Wednesday, September 9 at 11:00 AM PDT"}]}]}
+        carried = {"piece_type": "earrings", "scheduling_intent": "they would like to come in"}
+        for words in ("Monday the 14th would be best. I'd like 18k white gold, lab grown please.", "How about next Tuesday?",
+                      "Can we do something next week instead?", "Tomorrow morning please.", "September 21 if you have it.", "Friday please"):
+            with self.subTest(words=words):
+                self.assertIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, offered, words), words)
+                settled = estimate_record.settle_scheduling_intent({"piece_type": "earrings"}, words, offered)
+                self.assertIn("scheduling_intent", settled, words)
+        # Without an offer on the record a bare day is not a meeting; a deadline never is.
+        self.assertNotIn("scheduling_intent", estimate_record.settle_scheduling_intent({"piece_type": "earrings"}, "Monday the 14th would be best.", {}))
+        self.assertNotIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, {}, "Monday the 14th would be best."))
+        for words in ("Can you have it ready by Monday?", "I'd like 18k white gold, lab grown please.", "Ship it by the 14th please."):
+            with self.subTest(words=words):
+                self.assertNotIn("scheduling_intent", estimate_record.settle_scheduling_intent({"piece_type": "earrings"}, words, offered), words)
+                self.assertNotIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, offered, words), words)
+
     def test_an_estimate_mentioned_is_pursued(self) -> None:
         for words in ("Before I come in, is there any way I can get a ballpark estimate for this?", "How much would that run?",
                       "Could you quote me?", "What would it cost?", "Any idea on pricing?"):
@@ -9029,6 +9047,8 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(slots.requested_period(["next Tuesday"], now)["start"], "2026-09-15")
         self.assertEqual(slots.requested_period(["Friday"], now)["start"], "2026-09-11")
         self.assertEqual(slots.requested_period(["the 15th"], now)["start"], "2026-09-15")
+        self.assertEqual(slots.requested_period(["Monday the 21st"], now)["start"], "2026-09-21")
+        self.assertEqual(slots.requested_period(["Monday the 21"], now)["start"], "2026-09-21")
         self.assertEqual(slots.requested_period(["September 21 afternoon"], now)["start"], "2026-09-21")
         self.assertEqual(slots.requested_period(["afternoons"], now)["half"], "afternoon")
         self.assertTrue(slots.in_period({"start": "2026-09-14T10:00:00-07:00"}, period))
