@@ -14,7 +14,7 @@
     "customer_mail.py": "bba5b1705287c088e48470b98d2953fc",
     "customer_state_reset.py": "e58516280744282cb70ca278a5e4b341",
     "doctor.py": "ee93e435e15850b0980547e535398cb1",
-    "estimate_record.py": "587b54fb0f442b862e8abc53d4cdedc8",
+    "estimate_record.py": "c24a5a2533a85686f98739c9daabc093",
     "gateway_token.py": "d1742620e7d3af2005928733f400ab24",
     "gmail_classify.py": "e1dd64f4f7f765d99f10b365ded9780b",
     "gmail_fetch.py": "3eed73faa64e87dfa50a9c7f1a2d220f",

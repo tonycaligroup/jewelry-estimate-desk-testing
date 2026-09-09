@@ -10422,3 +10422,19 @@ class StoneSizedInMillimetresTests(unittest.TestCase):
         self.assertEqual(spec_gate.missing_required_fields({**full, "stone_dimensions": "15mm x 12mm"}, {"defaults": {}}), [])
         self.assertIn("stone sized 15mm x 12mm, carat estimated from it", kolo_safe._choices({**full, "stone_dimensions": "15mm x 12mm"}))
         self.assertIn("stone_dimensions", judge.SPEC_KEYS)
+
+
+class IDontKnowTests(unittest.TestCase):
+    """The jeweler, 9 Sep: 'do you know the carat?' 'No, I don't.' must never loop; the detail is the jeweler's and the thread moves on."""
+
+    def test_every_way_of_not_knowing_leaves_it_to_the_jeweler(self) -> None:
+        for words in ("I'm not sure what carat weight", "No, I don't.", "No I don't", "Not really", "I have no clue", "Haven't decided",
+                      "I don't know the size", "no idea, whatever you think"):
+            with self.subTest(words=words):
+                self.assertTrue(estimate_record.leaves_to_jeweler(words), words)
+        for words in ("No, I don't want a halo", "I don't like rose gold", "2.5 ct please", "No, I do not need it engraved"):
+            with self.subTest(words=words):
+                self.assertFalse(estimate_record.leaves_to_jeweler(words), words)
+        record = {"missing_required_fields": ["stone_carat"]}
+        settled = estimate_record.settle_left_to_jeweler({"piece_type": "pendant", "stone_type": "topaz"}, record, "No, I don't.")
+        self.assertEqual(settled["stone_carat"], "jeweler's choice")

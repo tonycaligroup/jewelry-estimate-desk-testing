@@ -1821,9 +1821,10 @@ def asks_for_estimate(own_words: str) -> bool:
 
 
 LEAVES_TO_JEWELER_RE = re.compile(
-    r"(?i)\b(?:i (?:don'?t|do not) know|not sure|no idea|no preference|up to you|you (?:decide|choose|pick)|your call|"
-    r"whatever you (?:think|suggest|recommend)|what(?:ever)? (?:looks|works) best|i'?ll leave (?:it|that) to you|"
-    r"leave (?:it|that) to you|just a reference|use your judgment|surprise me)\b"
+    r"(?i)\b(?:i (?:don'?t|do not) know|not sure|no idea|no clue|not really|haven'?t (?:decided|thought about it)|no preference|up to you|"
+    r"you (?:decide|choose|pick)|your call|whatever you (?:think|suggest|recommend)|what(?:ever)? (?:looks|works) best|"
+    r"i'?ll leave (?:it|that) to you|leave (?:it|that) to you|just a reference|use your judgment|surprise me|"
+    r"no,? i (?:don'?t|do not)(?![^.?!\n]{0,20}\b(?:want|like|need)\b))\b"  # "No, I don't." answers the ask; "No, I don't want a halo" does not
 )
 
 
