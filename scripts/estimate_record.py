@@ -1974,6 +1974,31 @@ def mark_prior_piece(root: Path, estimate_id: str, info: dict[str, Any]) -> dict
         return record
 
 
+def save_sheet_draft(root: Path, estimate_id: str, draft: dict[str, Any]) -> dict[str, Any]:
+    """What the owner typed on the cost sheet, kept on the record so nothing typed is lost (9 September 2026)."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        previous = record.get("sheet_draft") if isinstance(record.get("sheet_draft"), dict) else {}
+        record["sheet_draft"] = {**{k: v for k, v in draft.items() if k in ("status", "details", "lines", "hash")},
+                                 "at": datetime.now(timezone.utc).isoformat(), **({"acted_hash": previous["acted_hash"]} if previous.get("acted_hash") else {})}
+        write_object(path, record)
+        return record
+
+
+def mark_sheet_draft_acted(root: Path, estimate_id: str, draft_hash: str, quantities: dict[str, Any]) -> dict[str, Any]:
+    """The draft was used: its quantities and unit costs become the owner's numbers for the price."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        draft = dict(record.get("sheet_draft") or {})
+        draft["acted_hash"] = draft_hash
+        record["sheet_draft"] = draft
+        record["owner_quantities"] = quantities
+        write_object(path, record)
+        return record
+
+
 def owner_supplies_facts(root: Path, estimate_id: str, facts: dict[str, Any]) -> dict[str, Any]:
     """The owner's details of a piece on file (in their books, not the desk's) join the specification, as owner facts."""
     path = record_path(root, estimate_id)

@@ -2872,6 +2872,132 @@ class ConciergeModeTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class FakeSheet:
+    """A spreadsheet the desk writes and the owner edits: a grid per tab, served through sheet_mirror._call_once."""
+
+    def __init__(self) -> None:
+        import sheet_mirror
+        self.grid: dict[str, list[list[str]]] = {t: [] for t in sheet_mirror.TABS}
+        self.calls: list[tuple[str, str]] = []
+
+    @staticmethod
+    def _split(rng: str) -> tuple[str, int, int | None]:
+        tab, _bang, cells = rng.partition("!")
+        tab = tab.strip("'")
+        start = re.match(r"[A-Z]+(\d+)", cells)
+        end = re.search(r":[A-Z]+(\d+)?$", cells)
+        return tab, int(start.group(1)) if start else 1, (int(end.group(1)) if end and end.group(1) else None)
+
+    def __call__(self, method: str, url: str, token: str, body=None, opener=None):
+        self.calls.append((method, url))
+        if method == "GET" and "/values/" in url:
+            tab = url.split("/values/", 1)[1].split("!")[0].strip("'")
+            return {"values": [list(r) for r in self.grid.get(tab, [])]}
+        if method == "GET":
+            return {"spreadsheetId": "SHEET1", "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/SHEET1/edit", "properties": {"title": "test"},
+                    "sheets": [{"properties": {"title": t, "sheetId": i}} for i, t in enumerate(self.grid, start=1)]}
+        if url.endswith("values:batchUpdate"):
+            for item in body["data"]:
+                tab, start, _end = self._split(item["range"])
+                rows = self.grid.setdefault(tab, [])
+                for offset, row in enumerate(item["values"]):
+                    index = start - 1 + offset
+                    while len(rows) <= index:
+                        rows.append([""] * 12)
+                    rows[index] = [str(c) for c in row] + [""] * (12 - len(row))
+            return {"ok": True}
+        if url.endswith("values:batchClear"):
+            for rng in body["ranges"]:
+                tab, start, end = self._split(rng)
+                rows = self.grid.setdefault(tab, [])
+                last = end if end is not None else len(rows)
+                for index in range(start - 1, min(last, len(rows))):
+                    rows[index] = [""] * 12
+            return {"ok": True}
+        return {"ok": True}
+
+    def block(self, estimate_id: str) -> list[list[str]]:
+        return [r for r in self.grid["Cost sheet"] if len(r) > 11 and r[11] == estimate_id]
+
+
+class CostSheetReadBackTests(ConciergeModeTests):
+    """The owner, 9 Sep: the details go on the cost sheet; a block marked ready prices; nothing typed is lost."""
+
+    def _with_sheet(self, ws: Path) -> FakeSheet:
+        self._concierge(ws)
+        profile_path = ws / "estimate-desk" / "shop-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile["mirror"] = {"kind": "google_sheets", "id": "SHEET1", "url": "https://docs.google.com/spreadsheets/d/SHEET1/edit", "title": "test"}
+        profile["pricing"]["metal_per_gram"]["14k_white_gold"] = 70.0
+        profile_path.write_text(json.dumps(profile), encoding="utf-8")
+        state = ws / "estimate-desk" / "run-work" / "sheet-mirror.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        import sheet_mirror
+        state.write_text(json.dumps({"tabs": list(sheet_mirror.TABS)}), encoding="utf-8")
+        return FakeSheet()
+
+    def test_a_block_marked_ready_prices_with_the_owners_numbers_and_a_draft_is_kept(self) -> None:
+        import sheet_mirror
+
+        def branch(ws: Path, world: World) -> None:
+            sheet = self._with_sheet(ws)
+            with patch.object(sheet_mirror, "_call_once", sheet), patch.object(sheet_mirror.gateway_token, "load_token", return_value="tok"):
+                thread = "thread-sheet"
+                world.spec = {"piece_type": "pair of earrings", "earring_style": "stud", "stone_type": "sapphire", "stone_origin": "lab-grown",
+                              "stone_carat": 2.5, "stone_carat_basis": "each", "stone_shape": "round", "center_stone": "yes", "setting_style": "halo",
+                              "metal": "white gold", "metal_karat": "14k", "metal_color": "white"}
+                world.requested = ([], [])
+                world.customer_message("cs1", thread, "Sapphire halo studs, 2.5 ct each, 14k white gold. Could you give me an estimate?\n\nAnthony",
+                                       subject="Sapphire studs")
+                summary = self.tick(ws, world)
+                self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+                self.assertTrue(summary["mirror"].get("pushed"), summary["mirror"])
+                estimate_id = self.only_estimate(ws)
+                block = sheet.block(estimate_id)
+                self.assertTrue(block, sheet.grid["Cost sheet"][:3])
+                self.assertEqual(block[0][9], "pending", "the block waits for the owner")
+                lines = {r[3]: r for r in block[1:] if r[3]}
+                self.assertIn("metal", lines)
+                self.assertEqual((lines["metal"][6], lines["metal"][7]), ("g", "$70.00/g"), "the rate is filled, the grams are not")
+                self.assertEqual(lines["metal"][5], "", "quantity left blank for the owner")
+                self.assertIn("stones", lines)
+                self.assertEqual(lines["stones"][7], "$300.00/ct")
+                self.assertEqual(sum(1 for r in block[1:] if not r[3]), sheet_mirror.SPARE_LINES, "two spare lines")
+                # The owner types a draft and leaves it: the next tick keeps it, prices nothing.
+                header = block[0]
+                header[10] = "halo studs, bezel backs"
+                lines["metal"][5] = "5.5"
+                summary = self.tick(ws, world)
+                self.assertEqual(summary["sheet"]["drafts"], [estimate_id], summary["sheet"])
+                self.assertEqual(summary["sheet"]["ready"], [])
+                record = self.record(ws, estimate_id)
+                self.assertEqual(record["sheet_draft"]["details"], "halo studs, bezel backs")
+                self.assertEqual([l for l in record["sheet_draft"]["lines"] if l["line"] == "metal"][0]["quantity"], "5.5")
+                self.assertEqual(sheet.block(estimate_id)[0][10], "halo studs, bezel backs", "the desk did not overwrite the owner's block")
+                self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards))
+                # Then marks it ready with the numbers: the desk prices from them.
+                block = sheet.block(estimate_id)
+                block[0][9] = "ready"
+                for row in block[1:]:
+                    if row[3] == "labor":
+                        row[5] = "3"
+                summary = self.tick(ws, world)
+                self.assertEqual([r["estimate_id"] for r in summary["sheet"]["ready"]], [estimate_id], summary["sheet"])
+                self.assertEqual(summary["sheet"]["ready"][0]["step"], "price_and_render")
+                self.assertEqual(self.record(ws, estimate_id)["owner_quantities"]["finished_grams"], 5.5)
+                summary = self.tick(ws, world)
+                self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "approval_requested")], summary)
+                price_card = world.cards[-1]
+                self.assertTrue(str(price_card["title"]).startswith("Price approval"), price_card["title"])
+                self.assertIn("5.5g", price_card["title"].replace(" ", ""), "the owner's grams, not the model's")
+                self.assertIn("3h", price_card["title"].replace(" ", ""), "the owner's hours")
+                block = sheet.block(estimate_id)
+                self.assertEqual(block[0][9], "pending approval", "the desk owns the block again and says where it stands")
+                self.assertTrue(any(r[3] == "quote" for r in block), "the breakdown replaced the draft")
+                self.assertEqual(sheet.block(estimate_id)[0][10], "halo studs, bezel backs", "the details stay on the block")
+        self.run_branch(branch)
+
+
 class PriorPieceTests(SideBranchTests):
     """The jeweler, 9 Sep (Blue Topaz): 'an exact replica of the pendant you made for me' means the shop knows the piece."""
 

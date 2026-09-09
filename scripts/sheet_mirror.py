@@ -10,8 +10,9 @@ desk rewrites four tabs from the records and the ledger: "Customers" (one row
 per customer, newest activity first), "This week" (the next seven days of
 meetings), "Price cards" (quote, cost, profit, assumptions; owner-only
 figures live here, never on the first tab), and "Facts" (the ledger in
-readable words). The sheet is a mirror: nothing is ever read back from it,
-and a Google failure never holds up an inquiry.
+readable words), and "Cost sheet" (one block per estimate, where the owner
+types quantities, unit costs, details, and a status; read back every tick,
+9 September 2026). A Google failure never holds up an inquiry.
 """
 
 from __future__ import annotations
@@ -40,11 +41,18 @@ HEADERS = {
     "Customers": ["Customer", "Email", "Piece", "Status", "Next meeting", "Last contact", "Still open", "Gmail thread", "Estimate"],
     "This week": ["When", "Customer", "Piece", "Status", "Estimate"],
     "Price cards": ["Date", "Customer", "Piece", "Quote", "Hard cost", "Profit", "Margin", "Assumptions", "Outcome", "Estimate"],
-    # The owner, 9 September 2026: the full cost breakdown, one line per cost line of every price card.
-    "Cost sheet": ["Date", "Customer", "Piece", "Line", "Item", "Quantity", "Unit cost", "Line total", "Outcome", "Estimate"],
+    # The owner, 9 September 2026: the full cost breakdown, one block per estimate, one row per cost line. The
+    # owner edits Status, Quantity, Unit cost, and Details; the desk reads them back every tick.
+    "Cost sheet": ["Date", "Customer", "Piece", "Line", "Item", "Quantity", "Unit", "Unit cost", "Line total", "Status", "Details", "Estimate"],
     "Facts": ["Customer", "Detail", "Value", "Source", "When", "Estimate"],
 }
 STATE_FILE = "sheet-mirror.json"
+COST_TAB = "Cost sheet"
+COST_STATUSES = ("pending", "ready", "hold", "pending approval", "quoted", "closed")
+OWNER_STATUSES = ("ready", "hold")  # what the owner sets; the rest is the desk's
+COST_EDITABLE = ("Quantity", "Unit cost", "Status", "Details")
+SPARE_LINES = 2  # blank lines per open block for a cost the desk did not think of
+BLOCK_GAP = 1  # blank rows between blocks
 TIMEOUT = 30
 Opener = Callable[..., Any]
 SHEET_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
@@ -146,6 +154,12 @@ def format_requests(tabs: dict[str, int], with_rules: bool = True) -> list[dict[
                                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.93, "green": 0.93, "blue": 0.93}}},
                                         "fields": "userEnteredFormat(textFormat,backgroundColor)"}})
         requests.append({"autoResizeDimensions": {"dimensions": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": columns}}})
+        if name == COST_TAB:
+            status_column = HEADERS[name].index("Status")
+            requests.append({"setDataValidation": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 5000, "startColumnIndex": status_column, "endColumnIndex": status_column + 1},
+                "rule": {"condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": v} for v in COST_STATUSES]},
+                         "showCustomUi": True, "strict": False}}})
         if with_rules and name in ("Customers", "This week"):
             status_column = HEADERS[name].index("Status")
             for words, colour in (("booked", {"red": 0.85, "green": 0.95, "blue": 0.85}), ("estimate sent", {"red": 0.85, "green": 0.95, "blue": 0.85}),
@@ -330,8 +344,7 @@ def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
             cards.append([stamp[:16].replace("T", " "), name, card_piece,
                           f"${price:,.2f}", f"${hard:,.2f}" if hard else "", f"${profit:,.2f}" if profit != "" else "", margin, assumptions[:400], outcome,
                           record.get("estimate_id", "")])
-            for line in cost_lines(sheet, price):
-                costs.append([stamp[:16].replace("T", " "), name, card_piece, *line, outcome, record.get("estimate_id", "")])
+
         for row in ledger.rows(desk, str(record.get("estimate_id") or "")):
             if row.get("value") is None:
                 continue
@@ -341,8 +354,153 @@ def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
             facts.append([name, field, str(row["value"]), ledger.describe_source(row), str(row.get("at") or "")[:16].replace("T", " "),
                           record.get("estimate_id", "")])
     cards[1:] = sorted(cards[1:], key=lambda r: r[0], reverse=True)
-    costs[1:] = sorted(costs[1:], key=lambda r: (r[0], r[9]), reverse=True)
+    for block in cost_blocks(workspace):
+        costs.extend(block["rows"])
+        costs.append([""] * len(HEADERS[COST_TAB]))
     return {"Customers": customers, "This week": week, "Price cards": cards, "Cost sheet": costs, "Facts": facts}
+
+
+def _column(name: str) -> int:
+    return HEADERS[COST_TAB].index(name)
+
+
+def _skeleton_lines(record: dict[str, Any], profile: dict[str, Any]) -> list[list[Any]]:
+    """What the desk can already fill for an estimate it has not priced: rates from the card, quantities blank."""
+    import cost_components  # local import: cost_components does not depend on this module
+
+    try:
+        skeleton = cost_components.prepare(record, profile)
+    except Exception:  # noqa: BLE001 - no specification yet, or an invalid record: nothing to show
+        return []
+    parts = skeleton.get("cost_components") or {}
+    missing = {str(u.get("line") or ""): str(u.get("reason") or "rate missing") for u in skeleton.get("unresolved") or [] if isinstance(u, dict)}
+    out: list[list[Any]] = []
+    for index, line in enumerate(parts.get("metal_lines") or []):
+        if isinstance(line, dict):
+            unit = _money(line["unit_cost"]) + "/g" if line.get("unit_cost") is not None else ("rate missing" if f"metal_lines[{index}]" in missing else "")
+            grams = line.get("quantity_grams")
+            out.append(["metal", str(line.get("metal") or ""), f"{float(grams):g}" if grams not in (None, "") else "", "g", unit, ""])
+    for index, line in enumerate(parts.get("stone_lines") or []):
+        if isinstance(line, dict):
+            unit = _money(line["unit_cost"]) + "/ct" if line.get("unit_cost") is not None else ("rate missing" if f"stone_lines[{index}]" in missing else "")
+            carats = line.get("quantity")
+            out.append(["stones", str(line.get("stone") or ""), f"{float(carats):g}" if carats not in (None, "") else "", "ct", unit, ""])
+    for line in parts.get("labor_lines") or []:
+        if isinstance(line, dict):
+            out.append(["labor", str(line.get("task") or ""), "", "h", _money(line["rate"]) + "/h" if line.get("rate") is not None else "", ""])
+    for item in skeleton.get("fee_catalog") or []:
+        if isinstance(item, dict):
+            out.append(["fee", str(item.get("rate_key") or "").replace("_", " "), "", "", _money(item.get("rate")), ""])
+    return out
+
+
+def _priced_lines(sheet: dict[str, Any], price: float) -> list[list[Any]]:
+    """[Line, Item, Quantity, Unit, Unit cost, Line total] from a priced cost sheet."""
+    out: list[list[Any]] = []
+    for line in cost_lines(sheet, price):
+        kind, item, quantity, unit_cost, total = line
+        unit = ""
+        if quantity:
+            number, _space, unit = quantity.partition(" ")
+            quantity = number
+        out.append([kind, item, quantity, unit, unit_cost, total])
+    return out
+
+
+def cost_blocks(workspace: Path) -> list[dict[str, Any]]:
+    """One block per estimate on the Cost sheet: a header row (status, details) and the cost lines beneath it.
+
+    Priced estimates show the real breakdown and belong to the desk; open
+    ones show what the desk can fill so far, two spare lines, and the owner's
+    draft (quantities, unit costs, details, status) read back from the sheet
+    on an earlier tick, so nothing typed is ever lost.
+    """
+    profile_path = Path(workspace) / "estimate-desk" / "shop-profile.json"
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        profile = {}
+    blocks: list[dict[str, Any]] = []
+    for record in [r for r in _records(workspace) if listed(r)]:
+        route = record.get("route") or {}
+        name = _display(str(route.get("recipient") or ""))
+        spec = record.get("specification") or {}
+        piece = owner_questions.summary_of_piece(spec) if spec else "their piece"
+        estimate_id = str(record.get("estimate_id") or "")
+        draft = record.get("sheet_draft") if isinstance(record.get("sheet_draft"), dict) else {}
+        priced = [s for s in [*(record.get("estimate_history") or []), record]
+                  if isinstance(s, dict) and s.get("proposed_price") not in (None, "")]
+        status = str(record.get("status") or "")
+        if priced:
+            sent = priced[-1]
+            sheet = sent.get("internal_cost_sheet") if isinstance(sent.get("internal_cost_sheet"), dict) else {}
+            lines = _priced_lines(sheet, float(sent.get("proposed_price") or 0))
+            word = "quoted" if status in ("estimate_sent", "appointment_booked", "approved") else \
+                "pending approval" if status == "pending_approval" else "closed" if status in ("dormant", "declined", "manual_review") else "pending"
+            editable = False
+            details = str(draft.get("details") or "")
+            stamp = str((sent.get("estimate_delivery") or {}).get("sent_at") or sent.get("approval_requested_at") or record.get("updated_at") or "")
+        else:
+            if status not in ("awaiting_specs",):
+                word, editable = "closed", False
+            else:
+                word, editable = str(draft.get("status") or "pending"), True
+            lines = _skeleton_lines(record, profile)
+            details = str(draft.get("details") or "")
+            drafted = {(str(l.get("line") or ""), str(l.get("item") or "")): l for l in draft.get("lines") or [] if isinstance(l, dict)}
+            for line in lines:
+                typed = drafted.get((line[0], line[1]))
+                if typed:
+                    line[2] = str(typed.get("quantity") or line[2] or "")
+                    if typed.get("unit_cost"):
+                        line[4] = str(typed["unit_cost"])
+            for extra in draft.get("lines") or []:
+                if isinstance(extra, dict) and (str(extra.get("line") or ""), str(extra.get("item") or "")) not in {(l[0], l[1]) for l in lines} \
+                        and (extra.get("item") or extra.get("quantity") or extra.get("unit_cost")):
+                    lines.append([str(extra.get("line") or ""), str(extra.get("item") or ""), str(extra.get("quantity") or ""), "",
+                                  str(extra.get("unit_cost") or ""), ""])
+            lines.extend([["", "", "", "", "", ""] for _ in range(SPARE_LINES)])
+            stamp = str(record.get("updated_at") or record.get("created_at") or "")
+        date = stamp[:16].replace("T", " ")
+        header = [date, name, piece, "", "", "", "", "", "", word, details, estimate_id]
+        rows = [header] + [[date, name, piece, *line, "", "", estimate_id] for line in lines]
+        blocks.append({"estimate_id": estimate_id, "rows": rows, "editable": editable, "status": word})
+    return blocks
+
+
+def _editable_hash(rows: list[list[Any]]) -> str:
+    """The owner's cells of a block (status, details, quantities, unit costs), so an edit is told from the desk's own writing."""
+    cells = []
+    for row in rows:
+        cells.append([str(row[_column(name)] if len(row) > _column(name) else "").strip() for name in COST_EDITABLE])
+    return hashlib.sha256(json.dumps(cells).encode("utf-8")).hexdigest()
+
+
+def parse_blocks(values: list[list[Any]]) -> dict[str, dict[str, Any]]:
+    """Blocks as they stand on the sheet, by estimate id: their first row (1-based) and their rows."""
+    found: dict[str, dict[str, Any]] = {}
+    estimate_column = _column("Estimate")
+    for index, row in enumerate(values[1:], start=2):
+        cells = [str(c) if c is not None else "" for c in row] + [""] * (len(HEADERS[COST_TAB]) - len(row))
+        estimate_id = cells[estimate_column].strip()
+        if not estimate_id.startswith("jed-"):
+            continue
+        block = found.setdefault(estimate_id, {"row": index, "rows": []})
+        block["rows"].append(cells[:len(HEADERS[COST_TAB])])
+    return found
+
+
+def read_draft(rows: list[list[str]]) -> dict[str, Any]:
+    """The owner's draft in a block as it stands on the sheet."""
+    header = rows[0] if rows else [""] * len(HEADERS[COST_TAB])
+    lines = []
+    for row in rows[1:]:
+        line = {"line": row[_column("Line")].strip().lower(), "item": row[_column("Item")].strip(),
+                "quantity": row[_column("Quantity")].strip(), "unit_cost": row[_column("Unit cost")].strip()}
+        if line["line"] or line["item"] or line["quantity"]:
+            lines.append(line)
+    return {"status": header[_column("Status")].strip().lower(), "details": header[_column("Details")].strip(), "lines": lines,
+            "hash": _editable_hash(rows)}
 
 
 def _money(value: Any) -> str:
@@ -415,18 +573,140 @@ def push(workspace: Path, token: str | None = None, opener: Opener | None = None
             # A tab added since setup (the cost sheet, 9 September 2026) is created on the existing spreadsheet.
             ensure_tabs(sheet_id, token, opener)
             state = {**state, "tabs": list(TABS)}
-        # All the tabs in one write, so a Google hiccup never leaves the sheet half new and half old; then one
-        # clear of whatever rows lie below the new content.
+        # All the desk's own tabs in one write, so a Google hiccup never leaves the sheet half new and half old;
+        # then one clear of whatever rows lie below the new content. The cost sheet goes block by block, since
+        # the owner edits it (9 September 2026).
+        whole = {name: rows for name, rows in tabs.items() if name != COST_TAB}
         data = [{"range": f"'{name}'!A1", "majorDimension": "ROWS",
-                 "values": [[str(c) if c is not None else "" for c in row] for row in rows]} for name, rows in tabs.items()]
+                 "values": [[str(c) if c is not None else "" for c in row] for row in rows]} for name, rows in whole.items()]
         _call("POST", f"{BASE_URL}/{sheet_id}/values:batchUpdate", token, {"valueInputOption": "RAW", "data": data}, opener)
-        written = list(tabs)
+        written = list(whole)
         _call("POST", f"{BASE_URL}/{sheet_id}/values:batchClear", token,
-              {"ranges": [f"'{name}'!A{len(rows) + 1}:Z" for name, rows in tabs.items()]}, opener)
+              {"ranges": [f"'{name}'!A{len(rows) + 1}:Z" for name, rows in whole.items()]}, opener)
+        state = {**state, "cost_blocks": _push_cost_sheet(workspace, sheet_id, token, opener, state.get("cost_blocks") or {})}
+        written.append(COST_TAB)
     except OSError as exc:
         return _journal(state_path, {**state, "digest": None}, {"pushed": False, "reason": str(exc)[:200], "tabs_written": written,
                                                                  "partial": bool(written) and len(written) < len(tabs)})
     return _journal(state_path, {**state, "digest": digest}, {"pushed": True, "rows": {k: len(v) - 1 for k, v in tabs.items()}})
+
+
+def _read_cost_tab(sheet_id: str, token: str, opener: Opener | None) -> list[list[Any]]:
+    got = _call("GET", f"{BASE_URL}/{sheet_id}/values/'{COST_TAB}'!A1:L5000", token, None, opener)
+    values = got.get("values") if isinstance(got, dict) else None
+    return values if isinstance(values, list) else []
+
+
+def _push_cost_sheet(workspace: Path, sheet_id: str, token: str, opener: Opener | None, known: dict[str, Any]) -> dict[str, Any]:
+    """Write the cost sheet block by block: the desk's blocks in place, new ones at the end, the owner's untouched.
+
+    A block is the owner's from the moment any of their cells differs from
+    what the desk last wrote, until the desk has acted on it (`ready`) and
+    rewrites it with the numbers. Blocks are found by their estimate id, so
+    rows the owner inserts or deletes do not lose them.
+    """
+    values = _read_cost_tab(sheet_id, token, opener)
+    on_sheet = parse_blocks(values)
+    header_ok = bool(values) and [str(c) for c in values[0][:len(HEADERS[COST_TAB])]] == HEADERS[COST_TAB]
+    blocks = cost_blocks(workspace)
+    wanted = {b["estimate_id"] for b in blocks}
+    width = len(HEADERS[COST_TAB])
+    columns = chr(ord("A") + width - 1)
+    data: list[dict[str, Any]] = []
+    clears: list[str] = []
+    if not header_ok:
+        data.append({"range": f"'{COST_TAB}'!A1", "majorDimension": "ROWS", "values": [HEADERS[COST_TAB]]})
+    used = max([1] + [b["row"] + len(b["rows"]) - 1 for b in on_sheet.values()])
+    state: dict[str, Any] = {}
+    for block in blocks:
+        estimate_id = block["estimate_id"]
+        rows = [[str(c) if c is not None else "" for c in row] for row in block["rows"]]
+        existing = on_sheet.get(estimate_id)
+        remembered = known.get(estimate_id) or {}
+        if existing is not None:
+            theirs = _editable_hash(existing["rows"])
+            owner_touched = block["editable"] and remembered.get("written") not in (None, theirs)
+            acted = remembered.get("acted") == theirs
+            if owner_touched and not acted:
+                state[estimate_id] = {**remembered, "row": existing["row"]}
+                continue  # theirs until the desk has acted on it
+            start = existing["row"]
+            if len(existing["rows"]) > len(rows):
+                clears.append(f"'{COST_TAB}'!A{start + len(rows)}:{columns}{start + len(existing['rows']) - 1}")
+        else:
+            start = used + 1 + BLOCK_GAP
+            used = start + len(rows) - 1
+        content = hashlib.sha256(json.dumps(rows).encode("utf-8")).hexdigest()
+        if existing is None or remembered.get("content") != content or _editable_hash(existing["rows"]) != _editable_hash(rows):
+            data.append({"range": f"'{COST_TAB}'!A{start}", "majorDimension": "ROWS", "values": rows})
+        state[estimate_id] = {"row": start, "content": content, "written": _editable_hash(rows), "acted": remembered.get("acted")}
+    for estimate_id, existing in on_sheet.items():
+        if estimate_id not in wanted:
+            clears.append(f"'{COST_TAB}'!A{existing['row']}:{columns}{existing['row'] + len(existing['rows']) - 1}")
+    if data:
+        _call("POST", f"{BASE_URL}/{sheet_id}/values:batchUpdate", token, {"valueInputOption": "RAW", "data": data}, opener)
+    if clears:
+        _call("POST", f"{BASE_URL}/{sheet_id}/values:batchClear", token, {"ranges": clears}, opener)
+    return state
+
+
+def pull(workspace: Path, token: str | None = None, opener: Opener | None = None) -> dict[str, Any]:
+    """Every tick: read the owner's cost sheet, keep every draft, act on the blocks marked ready. Never raises."""
+    profile_path = Path(workspace) / "estimate-desk" / "shop-profile.json"
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"pulled": False, "reason": "no profile"}
+    mirror = configured(profile)
+    if mirror is None:
+        return {"pulled": False, "reason": "not configured"}
+    state_path = _state_path(workspace)
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except (OSError, ValueError):
+        state = {}
+    known = state.get("cost_blocks") or {}
+    if not known:
+        return {"pulled": False, "reason": "nothing written yet"}
+    result: dict[str, Any] = {"pulled": True, "drafts": [], "ready": [], "errors": []}
+    try:
+        token = token or gateway_token.load_token()
+        on_sheet = parse_blocks(_read_cost_tab(str(mirror["id"]), token, opener))
+    except OSError as exc:
+        return {"pulled": False, "reason": str(exc)[:200]}
+    root = Path(workspace) / "estimate-desk" / "records"
+    for estimate_id, existing in on_sheet.items():
+        remembered = known.get(estimate_id)
+        if not remembered or remembered.get("written") is None:
+            continue
+        draft = read_draft(existing["rows"])
+        if draft["hash"] == remembered.get("written") or draft["hash"] == remembered.get("acted"):
+            continue  # untouched, or already acted on
+        try:
+            record = estimate_record.read_object(estimate_record.record_path(root, estimate_id))
+        except (OSError, ValueError):
+            continue
+        current = record.get("sheet_draft") if isinstance(record.get("sheet_draft"), dict) else {}
+        if current.get("hash") != draft["hash"]:
+            estimate_record.save_sheet_draft(root, estimate_id, draft)
+            result["drafts"].append(estimate_id)
+        if draft["status"] == "ready" and current.get("acted_hash") != draft["hash"]:
+            import workflow_safe  # local import: workflow_safe imports this module
+
+            try:
+                acted = workflow_safe.act_on_sheet_ready(workspace, record, draft)
+                known[estimate_id] = {**remembered, "acted": draft["hash"]}
+                result["ready"].append({"estimate_id": estimate_id, **acted})
+            except Exception as exc:  # noqa: BLE001 - one bad block never stops the rest; the owner hears about it
+                result["errors"].append({"estimate_id": estimate_id, "error": str(exc)[:200]})
+                try:
+                    kolo_safe.tell_owner(Path(workspace) / "estimate-desk" / "inbox-monitor",
+                                         f"The cost sheet block for {_display(str((record.get('route') or {}).get('recipient') or ''))} "
+                                         f"is marked ready but I could not use it: {str(exc)[:160]}. Fix the cells or set it back to pending.")
+                except Exception:  # noqa: BLE001
+                    pass
+    _journal(state_path, {**state, "cost_blocks": known}, {**state.get("last", {}), "pull": result})
+    return result
 
 
 def _journal(state_path: Path, state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:

@@ -610,10 +610,12 @@ def tick(
     summary["notes"] = notes
     # The optional spreadsheet mirror (RELEASE-PLAN-4.15.md 2.8): rewritten when the desk's state changed, after
     # the customers' work, best effort; a Google failure is journaled and never reaches the owner or a customer.
+    # The owner's cost sheet is read first (9 September 2026): drafts are kept, blocks marked ready are priced.
     try:
         import sheet_mirror  # local import: keeps the watcher importable without the mirror's dependencies
 
         if time.monotonic() - started < max(60.0, cron_config.WATCHER_TIMEOUT_SECONDS - 60):
+            summary["sheet"] = sheet_mirror.pull(workspace)
             summary["mirror"] = sheet_mirror.push(workspace)
     except Exception as exc:  # noqa: BLE001
         summary["mirror"] = {"pushed": False, "reason": str(exc)[:120]}

@@ -456,6 +456,17 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): the cost sheet is where the owner
+  works. One block per estimate (a header row with a Status dropdown and a
+  Details cell, one row per cost line, two spare lines) shows what the desk
+  can already fill for an open estimate, rates from the card with the
+  quantities blank; the owner's Quantity, Unit cost, Details, and Status
+  cells are read back every tick and kept on the record as a draft, so
+  nothing typed is lost; `ready` prices the estimate from those numbers
+  (the owner's grams, hours, carat, and unit costs outrank the model's) and,
+  in concierge mode, renders it, the same as the chat answer; the block is
+  the desk's again once acted on and reads `pending approval`, then
+  `quoted`. The other tabs stay the desk's own views (7).
 - Built 9 September 2026 (unpublished): "the emerald earrings we talked
   about earlier, the same but with sapphires" carries the earlier estimate
   (quoted or not) for the same customer beneath the new words, asks nobody,

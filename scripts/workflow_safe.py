@@ -1554,6 +1554,15 @@ def price(args: argparse.Namespace) -> dict[str, Any]:
                 "quantity": carats,
                 "unit_cost": float(stone_catalog[key]["rate"]),
             })
+    overrides = (getattr(args, "unit_costs", None) or {})
+    if overrides:
+        # The owner's unit costs from the cost sheet (9 September 2026), matched by the line's item words.
+        for group, label in (("metal_lines", "metal"), ("stone_lines", "stone"), ("labor_lines", "task"), ("other_hard_cost_lines", "label")):
+            for line in lines.get(group) or []:
+                item = str(line.get(label) or "")
+                for name, cost in overrides.items():
+                    if name and (name.lower() == item.lower() or name.lower() == str(line.get("rate_key") or "").replace("_", " ").lower()):
+                        line["rate" if group == "labor_lines" else "total_cost" if group == "other_hard_cost_lines" else "unit_cost"] = float(cost)
     write_private(skeleton_path, skeleton)
     state = cost_components.finalize(skeleton, profile)
     write_private(Path(paths["current_state"]), state)
@@ -1888,6 +1897,64 @@ def send_acknowledgement(p: dict[str, Path], record: dict[str, Any], message_id:
     mirror_record(updated, work_dir / "current-record.json")
     kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
     return {"outcome": "acknowledged", "provider_message_id": delivery.get("id")}
+
+
+def _number(text: Any) -> float | None:
+    match = re.search(r"-?\d+(?:\.\d+)?", str(text or "").replace(",", ""))
+    return float(match.group(0)) if match else None
+
+
+def draft_quantities(draft: dict[str, Any]) -> dict[str, Any]:
+    """The owner's numbers from a cost sheet block: grams, hours, the center carat, and unit costs by item."""
+    out: dict[str, Any] = {"unit_costs": {}}
+    for line in draft.get("lines") or []:
+        if not isinstance(line, dict):
+            continue
+        kind, item = str(line.get("line") or "").lower(), str(line.get("item") or "")
+        quantity, unit_cost = _number(line.get("quantity")), _number(line.get("unit_cost"))
+        if kind == "metal" and quantity is not None and "finished_grams" not in out:
+            out["finished_grams"] = quantity
+        elif kind == "labor" and quantity is not None and "bench_hours" not in out:
+            out["bench_hours"] = quantity
+        elif kind == "stones" and quantity is not None and "center_carat" not in out:
+            out["center_carat"] = quantity
+        if unit_cost is not None and item:
+            out["unit_costs"][item] = unit_cost
+    return out
+
+
+def act_on_sheet_ready(workspace: Path, record: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+    """A cost sheet block marked ready: the details and numbers on it price the estimate, like a chat answer (9 September 2026)."""
+    import inbox_watcher  # local import: inbox_watcher imports this module
+
+    p = inbox_watcher.paths_for(Path(workspace).resolve())
+    estimate_id = str(record.get("estimate_id") or "")
+    if record.get("status") != "awaiting_specs":
+        raise ValueError(f"estimate {estimate_id} is {record.get('status')}; nothing to price from the sheet")
+    message_id = str((record.get("route") or {}).get("gmail_message_id") or "")
+    if not message_id:
+        raise ValueError("the record names no message to price from")
+    facts = estimate_record.owner_facts_in_words(str(draft.get("details") or ""), record.get("specification") or {})
+    if facts:
+        estimate_record.owner_supplies_facts(p["record_root"], estimate_id, facts)
+        try:
+            import ledger  # local import: the ledger never imports this module
+
+            ledger.add_facts(workspace_of(p["monitor_root"]) / "estimate-desk", estimate_id, [
+                {"field": k, "piece": None, "stone": ledger.stone_of(k), "value": v, "source": "owner", "gmail_message_id": message_id,
+                 "span": str(draft.get("details") or "")[:200]} for k, v in facts.items()])
+        except Exception:  # noqa: BLE001 - the record carries the facts
+            pass
+    quantities = draft_quantities(draft)
+    estimate_record.mark_sheet_draft_acted(p["record_root"], estimate_id, str(draft.get("hash") or ""), quantities)
+    profile = read_object(p["shop_profile"])
+    concierge = estimate_record.desk_mode(profile) == "concierge"
+    if concierge:
+        estimate_record.mark_concierge(p["record_root"], estimate_id, details=True, details_answer="from the cost sheet")
+    inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], 1, allow_processed=True)
+    step = "price_and_render" if concierge else "price_from_record"
+    handed = _hand_to_tick(p, message_id, step, estimate_id)
+    return {"facts": facts, "quantities": quantities, "step": step, **handed}
 
 
 def ask_prior_piece(args: argparse.Namespace, record: dict[str, Any], specification: dict[str, Any] | None = None) -> dict[str, Any]:

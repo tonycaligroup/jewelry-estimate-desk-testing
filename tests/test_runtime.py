@@ -10465,3 +10465,28 @@ class EarlierConversationTests(unittest.TestCase):
         for words in ("Can you make me earrings?", "I'd like something like the pendant on your site", "we talked about a budget of 5000 with my wife"):
             with self.subTest(words=words):
                 self.assertFalse(estimate_record.refers_to_an_earlier_conversation(words), words)
+
+
+class CostSheetDraftTests(unittest.TestCase):
+    """The owner, 9 Sep: the cost sheet is where the details go; the desk reads it back."""
+
+    def test_the_owners_numbers_are_read_from_a_block(self) -> None:
+        import sheet_mirror
+        rows = [["", "Pat Doe", "a ring", "", "", "", "", "", "", "ready", "lab grown sapphire, oval, 14k yellow gold, bezel", "jed-00000000000000aa"],
+                ["", "Pat Doe", "a ring", "metal", "14K yellow gold", "5.2", "g", "$70.00/g", "", "", "", "jed-00000000000000aa"],
+                ["", "Pat Doe", "a ring", "stones", "lab-grown sapphire", "1.5", "ct", "300", "", "", "", "jed-00000000000000aa"],
+                ["", "Pat Doe", "a ring", "labor", "bench labor", "4", "h", "", "", "", "", "jed-00000000000000aa"],
+                ["", "Pat Doe", "a ring", "fee", "rush", "", "", "50", "", "", "", "jed-00000000000000aa"],
+                ["", "Pat Doe", "a ring", "", "", "", "", "", "", "", "", "jed-00000000000000aa"]]
+        draft = sheet_mirror.read_draft(rows)
+        self.assertEqual(draft["status"], "ready")
+        self.assertEqual(draft["details"], "lab grown sapphire, oval, 14k yellow gold, bezel")
+        self.assertEqual([l["line"] for l in draft["lines"]], ["metal", "stones", "labor", "fee"])
+        quantities = workflow_safe.draft_quantities(draft)
+        self.assertEqual((quantities["finished_grams"], quantities["bench_hours"], quantities["center_carat"]), (5.2, 4.0, 1.5))
+        self.assertEqual(quantities["unit_costs"], {"14K yellow gold": 70.0, "lab-grown sapphire": 300.0, "rush": 50.0})
+        # The editable hash tells an edit from the desk's own writing.
+        untouched = [list(r) for r in rows]
+        self.assertEqual(sheet_mirror._editable_hash(rows), sheet_mirror._editable_hash(untouched))
+        untouched[0][9] = "pending"
+        self.assertNotEqual(sheet_mirror._editable_hash(rows), sheet_mirror._editable_hash(untouched))

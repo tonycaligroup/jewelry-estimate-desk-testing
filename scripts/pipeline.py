@@ -1193,6 +1193,17 @@ def _price_after_review(
         reviewed.get("typical_finished_weights") or {}, model, judge_runner, openclaw,
         pieces=reviewed.get("pieces") or None,
     )
+    unit_costs: dict[str, float] = {}
+    try:
+        owner = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id)).get("owner_quantities") or {}
+    except (OSError, ValueError):
+        owner = {}
+    if owner and "pieces" not in chosen:
+        # The owner's numbers from the cost sheet outrank the model's estimate (9 September 2026).
+        for key in ("finished_grams", "bench_hours", "center_carat"):
+            if owner.get(key) is not None:
+                chosen[key] = float(owner[key])
+        unit_costs = {str(k): float(v) for k, v in (owner.get("unit_costs") or {}).items()}
     if "pieces" in chosen:
         priced = workflow_safe.price(_namespace(
             p, message_id, estimate_id, finished_grams=None, bench_hours=None, center_carat=None, fees=[], accents=[],
@@ -1204,7 +1215,7 @@ def _price_after_review(
             finished_grams=chosen["finished_grams"], bench_hours=chosen["bench_hours"],
             center_carat=chosen.get("center_carat"), fees=chosen["fees"],
             accents=[f"{a['key']}:{a['carats']}" for a in chosen["accents"]],
-            runner=command_runner, judge_runner=judge_runner, renderings=renderings,
+            runner=command_runner, judge_runner=judge_runner, renderings=renderings, unit_costs=unit_costs,
         ))
     return {"outcome": "approval_requested", "proposed_price": priced.get("proposed_price"), "next": "done"}
 

@@ -101,8 +101,9 @@ class PartialTabWriteOnGatewayFailureTests(unittest.TestCase):
             result = sheet_mirror.push(ws, token="tok", opener=gateway)
             self.assertTrue(result["pushed"], result)
             batches = [c for c in gateway.calls if c[0] == "POST" and c[1].endswith("values:batchUpdate")]
-            self.assertEqual(len(batches), 2, "one failed attempt, one that landed")
-            self.assertEqual({d["range"] for d in batches[-1][2]["data"]}, {f"'{t}'!A1" for t in sheet_mirror.TABS})
+            whole = [t for t in sheet_mirror.TABS if t != sheet_mirror.COST_TAB]
+            self.assertEqual({d["range"] for d in batches[1][2]["data"]}, {f"'{t}'!A1" for t in whole}, "one failed attempt, one that landed")
+            self.assertTrue(all(d["range"].startswith(f"'{sheet_mirror.COST_TAB}'!") for d in batches[2][2]["data"]), "the cost sheet goes by block")
             # Two failures in a row: nothing is written, the result says so, and the next push starts over.
             gateway = FlakyGateway(fail_on_call_index=1)
             gateway.fail_on = 1
@@ -130,8 +131,8 @@ class PartialTabWriteOnGatewayFailureTests(unittest.TestCase):
             sheet_mirror.setup(ws, url=None, token="tok", opener=gateway)
             result = sheet_mirror.push(ws, token="tok", opener=gateway)
             self.assertTrue(result["pushed"])
-            puts = {d["range"].replace("!A1", "!A:Z") for c in gateway.calls if c[0] == "POST" and c[1].endswith("values:batchUpdate") for d in c[2]["data"]}
-            self.assertEqual(puts, {f"'{t}'!A:Z" for t in sheet_mirror.TABS})
+            puts = {d["range"].split("!")[0] for c in gateway.calls if c[0] == "POST" and c[1].endswith("values:batchUpdate") for d in c[2]["data"]}
+            self.assertEqual(puts, {f"'{t}'" for t in sheet_mirror.TABS}, "every tab written, the cost sheet by block")
 
 
 class DisplayNameWithAnEmbeddedQuoteTests(unittest.TestCase):
@@ -224,10 +225,17 @@ class PassingSheetMirrorBehaviourTests(unittest.TestCase):
                 "specification": {"piece_type": "ring"}, "proposed_price": 5105.0, "internal_cost_sheet": sheet}), encoding="utf-8")
             rows = sheet_mirror.rows_for(ws)
             self.assertEqual(rows["Cost sheet"][0], sheet_mirror.HEADERS["Cost sheet"])
-            self.assertEqual(len(rows["Cost sheet"]), 7, rows["Cost sheet"])
-            self.assertEqual(rows["Cost sheet"][1][1], "Pat Doe")
-            self.assertEqual({r[3] for r in rows["Cost sheet"][1:]}, {"metal", "stones", "labor", "fee", "hard cost total", "quote"})
-            self.assertTrue(all(r[9] == "jed-00000000000000cc" for r in rows["Cost sheet"][1:]))
+            block = rows["Cost sheet"][1:-1]  # the header row of the block, its lines; a blank row closes it
+            self.assertEqual(len(block), 7, rows["Cost sheet"])
+            self.assertEqual((block[0][1], block[0][9]), ("Pat Doe", "quoted"), "the block's header row carries the status")
+            self.assertEqual([r[3] for r in block[1:]], ["metal", "stones", "labor", "fee", "hard cost total", "quote"])
+            self.assertEqual(block[1][5:9], ["9.5", "g", "$65.00/g", "$617.50"])
+            self.assertTrue(all(r[11] == "jed-00000000000000cc" for r in block))
+            parsed = sheet_mirror.parse_blocks(rows["Cost sheet"])
+            self.assertEqual(list(parsed), ["jed-00000000000000cc"])
+            self.assertEqual(parsed["jed-00000000000000cc"]["row"], 2)
+            draft = sheet_mirror.read_draft(parsed["jed-00000000000000cc"]["rows"])
+            self.assertEqual((draft["status"], draft["details"], len(draft["lines"])), ("quoted", "", 6))
 
     def test_a_dormant_record_shows_closed(self) -> None:
         with tempfile.TemporaryDirectory() as d:
