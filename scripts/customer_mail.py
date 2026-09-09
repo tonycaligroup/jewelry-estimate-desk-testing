@@ -85,12 +85,15 @@ CLAIMS_A_MEETING_RE = re.compile(
 )
 
 
-def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+def _check(kind: str, facts: dict[str, Any], previous: str, sender: str = "") -> Callable[[dict[str, Any]], dict[str, Any]]:
     def check(value: dict[str, Any]) -> dict[str, Any]:
         body = value.get("body")
         if not isinstance(body, str) or len(body.strip()) < 120:
             raise ValueError("body must be the full email text, at least a few sentences")
         body = customer_content_guard.plain_text(body.strip())
+        other = gmail_text.greets_someone_else(body, sender)
+        if other:
+            raise ValueError(f"the email is to {sender}, who wrote it; do not greet {other}")
         if len(body) > 3000:
             raise ValueError("body is too long; keep it under 3000 characters")
         if "{{" in body or "}}" in body or "<" in body and ">" in body:
@@ -199,6 +202,10 @@ def draft(
     voice = str(shop.get("voice") or DEFAULT_VOICE)
     shop_name = str(shop.get("name") or "the shop")
     previous = _last_desk_email(digest)
+    sender = gmail_text.sender_first_name(digest)
+    if sender:
+        facts = {**facts, "the customer's name, from their address line": sender + " (address them by it, never by someone "
+                 "else they mention, such as the person the piece is for)"}
     fact_lines = "\n".join(f"- {key}: {value}" for key, value in facts.items() if value not in (None, "", []))
     prompt = (
         f"You write customer emails for {shop_name}, a retail custom-jewelry shop. Voice: {voice}\n\n"
@@ -214,7 +221,7 @@ def draft(
         'Answer with one JSON object only: {"body": "..."}'
     )
     try:
-        out = judge.ask_json(prompt, _check(kind, facts, previous), model, runner, openclaw, temperature=judge.DRAFT_TEMPERATURE)
+        out = judge.ask_json(prompt, _check(kind, facts, previous, sender), model, runner, openclaw, temperature=judge.DRAFT_TEMPERATURE)
         return out["body"], "model"
     except (judge.JudgmentError, ValueError, KeyError):
         return fallback, "fallback"

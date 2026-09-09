@@ -438,6 +438,12 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished), from the Blue Topaz thread: the
+  address line says who is writing, so a gift-giver is greeted by their own
+  name, never by the person the piece is for (a draft that greets someone
+  else is refused); a stone sized in millimetres by the customer ("15mm x
+  12mm oval") is sized, the carat is derived by the jeweler and shown as an
+  assumption on the card, never asked (6.2).
 - Built 9 September 2026 (unpublished): with a reference photo, the desk
   confirms rather than questions. What the photo shows (the kind of earring,
   the setting) fills the reading, and the first email says the customer's

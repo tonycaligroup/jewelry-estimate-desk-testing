@@ -841,6 +841,8 @@ def process_claim(
     specification = estimate_record.settle_setting_style(specification, handled_words)
     # "Earrings" alone: studs, hoops, or drops is settled from their words or asked plainly (the owner, 9 September 2026).
     specification = estimate_record.settle_earring_style(specification, handled_words)
+    # "15mm x 12mm oval": a stone sized in millimetres is sized; the carat is the jeweler's to derive, never asked.
+    specification = estimate_record.settle_stone_dimensions(specification, handled_words)
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
     specification = estimate_record.settle_scheduling_intent(specification, handled_words, record)

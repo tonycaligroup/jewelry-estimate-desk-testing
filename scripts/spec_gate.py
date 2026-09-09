@@ -157,6 +157,8 @@ def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None
                 # Pave, melee, and accent stones: the carat weight follows from
                 # the design and the stones are round; nothing to ask.
                 continue
+            if key == "stone_carat" and present(spec.get("stone_dimensions")):
+                continue  # sized in millimetres by the customer: the jeweler derives the weight (9 September 2026)
             if not present(spec.get(key)):
                 missing.add(key)
     if has_stones(spec) and not present(spec.get("setting_style")):

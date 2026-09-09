@@ -10370,3 +10370,55 @@ class AccentStonesAreNotTheCenterTests(unittest.TestCase):
         summary = owner_questions.summary_of_piece({"accent_stones": "diamond halo", "piece_type": "pair of earrings", "stone_type": "sapphire",
                                                      "stone_carat": 2.5, "stone_carat_basis": "each", "stone_origin": "lab-grown"})
         self.assertEqual(summary, "a pair of earrings with lab-grown sapphires, 2.5 ct each")
+
+
+class SenderNameTests(unittest.TestCase):
+    """Live 9 Sep (Blue Topaz): David wrote about a gift for his sister Verónica and the desk opened 'Hi Verónica'."""
+
+    def _digest(self, sender: str) -> dict:
+        return {"messages": [{"from": sender, "sent_by": "customer", "claimed": True, "body": "for my sister Verónica"}]}
+
+    def test_the_address_line_says_who_is_writing(self) -> None:
+        self.assertEqual(gmail_text.sender_first_name(self._digest("David Trujillo <davidtrujillo369@gmail.com>")), "David")
+        self.assertEqual(gmail_text.sender_first_name(self._digest('"Trujillo, David" <d@x.com>')), "David")
+        self.assertEqual(gmail_text.sender_first_name(self._digest("davidtrujillo369@gmail.com")), "")
+        self.assertEqual(gmail_text.sender_first_name(self._digest('"davidtrujillo369@gmail.com" <davidtrujillo369@gmail.com>')), "")
+        self.assertEqual(gmail_text.sender_first_name({"messages": []}), "")
+        self.assertEqual(gmail_text.greets_someone_else("Hi Verónica,\n\nIt is wonderful", "David"), "Verónica")
+        for fine in ("Hi David,\n\nx", "Hello,\n\nx", "Hi there,\n\nx", "Hello David\n\nx", "Thanks for writing, David.\n\nx"):
+            self.assertIsNone(gmail_text.greets_someone_else(fine, "David"), fine)
+        self.assertIsNone(gmail_text.greets_someone_else("Hi Verónica,\n\nx", ""), "no sender name, nothing to check")
+
+    def test_drafts_to_someone_else_are_refused(self) -> None:
+        import customer_mail
+        check = customer_mail._check("offer", {"time_labels": []}, "", "David")
+        wrong = "Hi Verónica,\n\nIt is wonderful that you are sharing this design with your sister. I would be glad to meet and go over it; reply with a time that suits you and I will hold it.\n\nLomelino Jewelry"
+        with self.assertRaisesRegex(ValueError, "do not greet Verónica"):
+            check({"body": wrong})
+        self.assertIn("body", check({"body": wrong.replace("Hi Verónica", "Hi David")}))
+        covers = judge.check_body_covers(["stone_origin"], None, "David")
+        with self.assertRaisesRegex(ValueError, "do not greet Verónica"):
+            covers({"body": "Hi Verónica,\n\nLovely gift.\n\n- Is the topaz natural or lab-grown?\n\nLomelino Jewelry"})
+        self.assertIn("body", covers({"body": "Hi David,\n\nLovely gift.\n\n- Is the topaz natural or lab-grown?\n\nLomelino Jewelry"}))
+
+
+class StoneSizedInMillimetresTests(unittest.TestCase):
+    """Live 9 Sep (Blue Topaz): '15mm x 12mm oval blue topaz' was asked what carat weight, then 'I'm not sure'."""
+
+    WORDS = ("Verónica would like it a bit smaller the one you made me is 20mm x 17mm and she woulf like 15mm x 12mm oval blue "
+             "topaz. Same style for everything else in 14kyg")
+
+    def test_the_size_they_want_is_taken_and_the_carat_is_not_asked(self) -> None:
+        self.assertEqual(estimate_record.stone_size_in_words(self.WORDS), "15mm x 12mm")
+        self.assertEqual(estimate_record.stone_size_in_words("a 6.5 x 8 mm oval"), "6.5mm x 8mm")
+        self.assertIsNone(estimate_record.stone_size_in_words("a 2 ct oval"))
+        spec = estimate_record.settle_stone_dimensions({"piece_type": "pendant", "stone_type": "blue topaz"}, self.WORDS)
+        self.assertEqual(spec["stone_dimensions"], "15mm x 12mm")
+        kept = {"piece_type": "pendant", "stone_dimensions": "8mm round"}
+        self.assertEqual(estimate_record.settle_stone_dimensions(kept, self.WORDS), kept)
+        full = {"piece_type": "pendant", "stone_type": "blue topaz", "stone_origin": "natural", "stone_shape": "oval", "metal": "14k yellow gold",
+                "setting_style": "bezel", "center_stone": "yes"}
+        self.assertIn("stone_carat", spec_gate.missing_required_fields(full, {"defaults": {}}))
+        self.assertEqual(spec_gate.missing_required_fields({**full, "stone_dimensions": "15mm x 12mm"}, {"defaults": {}}), [])
+        self.assertIn("stone sized 15mm x 12mm, carat estimated from it", kolo_safe._choices({**full, "stone_dimensions": "15mm x 12mm"}))
+        self.assertIn("stone_dimensions", judge.SPEC_KEYS)

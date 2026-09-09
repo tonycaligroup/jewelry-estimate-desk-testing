@@ -129,3 +129,45 @@ def thread_digest(
         "message_ids": [m.get("id") for m in messages],
         "messages": digest,
     }
+
+
+def sender_first_name(digest: dict[str, Any]) -> str:
+    """The first name in the From display name of the customer message being handled ("David Trujillo <..>" -> "David"), else ''.
+
+    A gift-giver names the person the piece is for, and a draft once opened
+    "Hi Verónica" to David (live, 9 September 2026). The address line, not
+    the body, says who is writing.
+    """
+    messages = digest.get("messages") or []
+    claimed = next((m for m in messages if m.get("claimed")), None) or next((m for m in reversed(messages) if m.get("sent_by") == "customer"), None)
+    if not claimed:
+        return ""
+    sender = str(claimed.get("from") or "")
+    match = re.match(r'\s*"?([^"<]+?)"?\s*<', sender)
+    display = (match.group(1) if match else "").strip()
+    if not display or "@" in display:
+        return ""
+    if "," in display:  # "Trujillo, David"
+        display = display.split(",", 1)[1].strip() or display
+    first = display.split()[0].strip(",.")
+    return first if re.fullmatch(r"[^\W\d_][\w'’.-]*", first) else ""
+
+
+GREETING_NAME_RE = re.compile(r"^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\s+([^\W\d_][\w'’.-]*)\s*[,!.:]?\s*$", re.IGNORECASE)
+
+
+def greets_someone_else(body: str, sender_name: str) -> str | None:
+    """The name a greeting line addresses when it is not the sender's, else None."""
+    if not sender_name:
+        return None
+    first = next((line.strip() for line in str(body or "").splitlines() if line.strip()), "")
+    match = GREETING_NAME_RE.match(first)
+    if not match:
+        return None
+    named = match.group(1)
+    if named.lower().rstrip(".,") in _GENERIC_GREETINGS:
+        return None
+    return named if named.lower().rstrip(".,") != sender_name.lower() else None
+
+
+_GENERIC_GREETINGS = {"there", "all", "everyone", "team", "friend", "friends", "folks", "sir", "madam", "again", "both"}

@@ -190,6 +190,9 @@ def _choices(specification: Any) -> str:
     basis = str(specification.get("stone_carat_basis") or "").lower()
     if basis in ("each", "total") and specification.get("stone_carat"):
         parts.append(f"{specification['stone_carat']} ct {'each stone' if basis == 'each' else 'total for the pair'}")
+    size = str(specification.get("stone_dimensions") or "").strip()
+    if size and not specification.get("stone_carat"):
+        parts.append(f"stone sized {size}, carat estimated from it")
     reference = str(specification.get("reference_images") or "").strip()
     if reference.lower().startswith("from the photo"):
         parts.append(reference[:120])

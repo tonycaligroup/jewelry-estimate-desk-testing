@@ -32,7 +32,7 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 SPEC_KEYS = (
     "piece_type", "quantity", "metal", "metal_karat", "metal_color", "stone_type",
     "stone_origin", "stone_shape", "stone_carat", "stone_color", "stone_clarity",
-    "stone_cut", "stone_count", "stone_carat_basis", "earring_style", "center_stone", "accent_stones", "accent_stone_type", "accent_stone_origin",
+    "stone_cut", "stone_count", "stone_carat_basis", "stone_dimensions", "earring_style", "center_stone", "accent_stones", "accent_stone_type", "accent_stone_origin",
     "accent_stone_color", "accent_stone_clarity", "finger_size", "dimensions",
     "setting_style", "finish", "engraving", "event_date", "budget",
     "customer_supplied_materials", "certificate", "reference_images",
@@ -389,6 +389,8 @@ def extract_specification(
         "omit it when the customer did not say. "
         "earring_style is \"stud\", \"hoop\", or \"drop\" when the customer's words say which kind of earrings "
         "(studs, hoops, huggies, drops, dangles); omit it otherwise. "
+        "stone_dimensions is the stone size the customer wants in millimetres (\"15mm x 12mm oval\"), the size they "
+        "want, not one they are comparing against; omit it otherwise. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
@@ -464,6 +466,8 @@ def triage_and_extract(
         "omit it when the customer did not say. "
         "earring_style is \"stud\", \"hoop\", or \"drop\" when the customer's words say which kind of earrings "
         "(studs, hoops, huggies, drops, dangles); omit it otherwise. "
+        "stone_dimensions is the stone size the customer wants in millimetres (\"15mm x 12mm oval\"), the size they "
+        "want, not one they are comparing against; omit it otherwise. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
@@ -644,9 +648,14 @@ def words_covered(body: str, text: str) -> bool:
     return hits * 2 >= len(words)
 
 
-def check_body_covers(missing_fields: list[str], understanding: str | None = None):
+def check_body_covers(missing_fields: list[str], understanding: str | None = None, sender: str = ""):
     def check(value: dict[str, Any]) -> dict[str, Any]:
         result = check_body(value)
+        import gmail_text  # local import: gmail_text does not depend on this module
+
+        other = gmail_text.greets_someone_else(result["body"], sender)
+        if other:
+            raise ValueError(f"the email is to {sender}, who wrote it; do not greet {other}")
         left = uncovered_fields(result["body"], missing_fields)
         if left:
             raise ValueError("the email must ask about every missing detail; it never mentions: " + "; ".join(left)
@@ -675,6 +684,9 @@ def draft_followup(
     understanding: str | None = None,
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing; a photo's vision is confirmed first."""
+    import gmail_text  # local import: gmail_text does not depend on this module
+
+    sender = gmail_text.sender_first_name(digest)
     closing = "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. "
     prompt = (
         "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
@@ -695,7 +707,9 @@ def draft_followup(
         "budgets as requirements. Do not use template placeholders; write real text. No headings or labels, "
         "and the sign-off is a plain line with no question mark. Do not wrap lines: each paragraph is one line, "
         "with a blank line between paragraphs. "
-        f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
+        + (f"The customer writing is {sender} (from their address line): greet {sender}, never someone else they mention, "
+           "such as the person the piece is for. " if sender else "")
+        + f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
         f"MISSING DETAILS TO ASK FOR: {', '.join(missing_fields)}\n\n"
         + ((f"THEIR VISION, from their photo and their words: {understanding}\nBefore the questions, confirm it in one "
             "sentence the way a jeweler speaks to a client (for example \"Just so I have your vision right: you are after "
@@ -706,7 +720,7 @@ def draft_followup(
         + f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
-    return ask_json(prompt, check_body_covers(list(missing_fields), understanding), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
+    return ask_json(prompt, check_body_covers(list(missing_fields), understanding, sender), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
 
 
 LOCAL_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")

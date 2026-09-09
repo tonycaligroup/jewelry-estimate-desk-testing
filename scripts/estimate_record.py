@@ -1931,6 +1931,34 @@ def vision_in_words(specification: dict[str, Any] | None) -> str | None:
     return ", ".join(parts)
 
 
+_MM_SIZE_RE = re.compile(r"(?i)\b(\d{1,2}(?:\.\d)?)\s*(?:mm)?\s*(?:x|×|by)\s*(\d{1,2}(?:\.\d)?)\s*mm\b")
+
+
+def stone_size_in_words(own_words: str) -> str | None:
+    """The stone size in millimetres the customer wants ('15mm x 12mm'); the last one named when they compare sizes."""
+    found = [f"{a}mm x {b}mm" for a, b in _MM_SIZE_RE.findall(str(own_words or ""))]
+    return found[-1] if found else None
+
+
+def settle_stone_dimensions(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """A stone sized in millimetres by the customer is sized; the carat follows from it and is never asked.
+
+    Live (9 September 2026): "she would like 15mm x 12mm oval blue topaz"
+    was asked what carat weight, then "I'm not sure". The jeweler works the
+    weight out from the millimetres; the cost sheet estimates it and the
+    card shows the assumption.
+    """
+    if not isinstance(specification, dict):
+        return specification
+    raw = specification.get("pieces")
+    if isinstance(raw, list) and len(raw) > 1:
+        return specification
+    if _present(specification.get("stone_dimensions")):
+        return specification
+    size = stone_size_in_words(own_words)
+    return {**specification, "stone_dimensions": size} if size else specification
+
+
 def settle_earring_style(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
     """Earrings are studs, hoops, or drops: the piece's own name or the customer's words say which (the owner, 9 September 2026).
 
