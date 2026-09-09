@@ -414,6 +414,16 @@ class World:
         if "merge every fact the customer actually stated" in prompt:
             return {"specification": dict(self.spec)}
         if "MISSING DETAILS TO ASK FOR" in prompt:
+            if "THE QUESTIONS, in the desk's words" in prompt:
+                # The desk hands the model its own questions (9 September 2026): the fake asks exactly those.
+                block = prompt.split("THE QUESTIONS, in the desk's words", 1)[1].split("\n", 1)[1].split("\n\n", 1)[0]
+                bullets = "\n".join(line for line in block.splitlines() if line.startswith("- "))
+                vision = ""
+                if "THEIR VISION, from their photo and their words: " in prompt:
+                    vision = "Just so I have your vision right: you are after " + prompt.split(
+                        "THEIR VISION, from their photo and their words: ", 1)[1].split("\n", 1)[0] + ". Tell me if any of that is off.\n\n"
+                return {"body": (f"Hi Pat,\n\nThanks for writing; happy to price it. {vision}A few quick questions so the number is right:\n\n"
+                                 f"{bullets}\n\nIt is fine not to know any of these.\n\nBest,\nKolo Jewelers")}
             return {"body": (
                 "Hi Pat,\n\nThanks for writing about the signet ring; happy to price it. Two quick questions "
                 "so the number is right:\n\n- What finger size should the ring be?\n- How would you like the "
@@ -2858,7 +2868,7 @@ class ConciergeModeTests(SideBranchTests):
             world.customer_message("am1", "thread-auto", "Could you quote a 14k yellow gold signet ring?\n\nPat")
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
-            self.assertIn("finger size", world.sent[-1]["body"].lower())
+            self.assertIn("ring size", world.sent[-1]["body"].lower())
         self.run_branch(branch)
 
 
