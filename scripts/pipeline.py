@@ -34,6 +34,7 @@ import owner_questions
 import rendering_materialize
 import slots
 import reading_check
+import route_ownership
 import spec_gate
 import workflow_safe
 
@@ -691,11 +692,17 @@ def process_claim(
     if judged and judged["kind"] != "estimate_request":
         if (Path(paths["work_dir"]) / workflow_safe.OWNER_SAYS_ESTIMATE_FILE).exists():
             judged, reread = {**judged, "kind": "estimate_request", "note": "the owner said to quote it"}, True
-        elif judged["kind"] in ("not_an_estimate_request", "not_a_quote_request") and estimate_record.reads_like_an_order(handled_words):
+        elif judged["kind"] in ("not_an_estimate_request", "not_a_quote_request") and not estimate_record.asks_for_inventory(handled_words) \
+                and estimate_record.reads_like_an_order(handled_words):
             # "Do you have a 14k WG lab tennis bracelet, 7-inch, ready to ship?" names a piece and its facts:
             # a shop that makes to order quotes it, whatever the reading called it.
             judged, reread = {**judged, "kind": "estimate_request", "note": "reads like an order: quoted as a custom piece"}, True
     triage = {"kind": judged["kind"], "note": judged["note"]} if judged else {"kind": "estimate_request", "note": "reply on an open estimate"}
+    inventory = bool(record.get("inventory_inquiry")) or triage["kind"] == "inventory_request" or (
+        triage["kind"] in ("not_an_estimate_request", "not_a_quote_request") and estimate_record.asks_for_inventory(handled_words)
+    )
+    if inventory and not record.get("appointment_booked"):
+        return _inventory_inquiry(p, message_id, estimate_id, record, digest, paths, model, judge_runner, openclaw, command_runner, triage)
     if triage["kind"] in NOT_AN_INQUIRY:
         workflow_safe.not_an_inquiry(_namespace(
             p, message_id, estimate_id, reason=triage["kind"], record_output=Path(paths["current_record"]),
@@ -769,6 +776,42 @@ def process_claim(
     if nxt == "price":
         return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")
+
+
+INVENTORY_REPLY_LIMIT = 2
+
+
+def _inventory_inquiry(
+    p: dict[str, Path], message_id: str, estimate_id: str, record: dict[str, Any], digest: dict[str, Any], paths: dict[str, str],
+    model: str | None, judge_runner: Runner, openclaw: str | None, command_runner: Runner, triage: dict[str, Any],
+) -> dict[str, Any]:
+    """A ready-made inquiry (WORKFLOW.md triage table): offer a visit; after two replies without a booking, the owner.
+
+    The shop shows what is in stock at a visit, so the desk never quotes or
+    questions such a customer: it offers times (or books the time they name)
+    through the usual appointment card. When two replies have gone out and
+    nothing is booked, the desk tells the owner to open the email and
+    handle it, and leaves the thread to them.
+    """
+    if not record.get("inventory_inquiry"):
+        record = estimate_record.mark_inventory_inquiry(p["record_root"], estimate_id, message_id, triage.get("note") or "")
+    shop_replies = sum(1 for m in digest.get("messages") or [] if m.get("sent_by") == "shop")
+    if shop_replies >= INVENTORY_REPLY_LIMIT:
+        kolo_safe.manual_review_claimed(p["monitor_root"], p["claim_root"], message_id, None, "inventory_handoff", runner=command_runner)
+        if record.get("status") in route_ownership.ACTIVE_STATUSES and record.get("status") not in workflow_safe.SENT_STATUSES:
+            estimate_record.retire(p["record_root"], estimate_id, "owner_handles_thread",
+                                   "ready-made inquiry: two replies went out without a booking; the owner handles the thread")
+        return {"outcome": "owner_handoff", "reason_code": "inventory_handoff", "next": "done"}
+    intent_path = Path(paths["appointment_intent"])
+    workflow_safe.write_private(intent_path, appointment_intent(p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id))
+    workflow_safe.request_appointment_approval(argparse.Namespace(
+        monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+        shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
+        appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
+        record_output=Path(paths["current_record"]), defer_finalize_for_rendering=False,
+        runner=command_runner, judge_runner=judge_runner,
+    ))
+    return {"outcome": "appointment_approval_requested", "before_estimate": True, "inventory": True, "next": "done"}
 
 
 def resend_followup(

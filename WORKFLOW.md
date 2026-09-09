@@ -118,7 +118,8 @@ halts all outbound work immediately until that owner says to resume.
 | A new custom piece, replica, redesign, or remount | Continue to intake |
 | A repair, resize, or restring | Repair intake, no rendering |
 | An appraisal or insurance value | Stop; tell the owner; never value property |
-| The price of an existing inventory item | Ask the owner: "quote it" reads it as a custom order, "handle myself" leaves it to them. A message naming a piece with its metal, stones, size, or budget is an estimate request outright, ready to ship or not: the shop makes to order |
+| A ready-made piece (in stock, ready to ship, "do you have any") | Offer a visit to see what is ready, through the appointment card; the time they name is booked when free. After two replies without a booking, tell the owner to open the email and handle it, and leave the thread to them. Never a quote, never a questionnaire |
+| An appraisal, insurance value, or job status | Ask the owner: "quote it" reads it as a custom order, "handle myself" leaves it to them. A message naming a piece with two of its facts (karat, metal, stone, size, budget) is an estimate request whatever the reading called it, appraisals excepted |
 | Job status | Look up status; do not estimate |
 | A meeting | Scheduling flow, then continue intake |
 | Anger, legal, chargeback, insurance, media, fraud, lost or damaged claim | Stop and escalate to the owner with no customer reply |
@@ -437,14 +438,15 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.14.2): a customer's
-  message the reading calls out of scope (an appraisal, the price of a
-  piece in stock, a job status) is a question to the owner, never a silent
-  manual review: "quote it" reads it as a custom order, "handle myself"
-  leaves the thread to them; and a message that names a piece with at least
-  two of its facts (karat, metal, stone, size, budget) is an estimate
-  request whatever the reading called it, appraisals and job status
-  excepted (6.10, triage table).
+- Built 8 September 2026 (unpublished, after 4.14.2): a ready-made
+  inquiry (in stock, ready to ship, "do you have any") is offered a visit
+  through the appointment card, never a quote or a questionnaire; the time
+  the customer names is booked when free; after two replies without a
+  booking the desk tells the owner to open the email and handle it and
+  leaves the thread to them. An appraisal or job-status message is a
+  question to the owner ("quote it" or "handle myself"), never a silent
+  manual review; a message naming a piece with two of its facts is an
+  estimate request whatever the reading called it (triage table, 6.10).
 - Built 8 September 2026 (unpublished, after 4.14.2): a day and clock
   time in the customer's own words ("would Friday at 3pm work for you?")
   is resolved to a date in code, whatever the reading resolved; a free

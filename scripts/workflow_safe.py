@@ -675,7 +675,8 @@ def _appointment_approval_details(
         "thread_id": route["thread_id"],
         "requested_times": [value.strip() for value in requested_times],
         "calendar_availability": normalized_slots,
-        "piece": owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their estimate",
+        "piece": "a visit to see ready-made pieces" if record.get("inventory_inquiry")
+                 else owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their estimate",
     }
     if normalized_slots:
         details["proposed_time"] = dict(normalized_slots[0])
@@ -741,6 +742,7 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         before = {"before the estimate": "no estimate yet; the design details (metal, setting, size, stone) "
                                          "get settled at the meeting, so do not ask for them now"} \
             if record.get("status") == "awaiting_specs" else {}
+        before.update(_inventory_fact(record))
         if approval.get("action_type") == "appointment_booking" and options:
             when = options[0]["label"]
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
@@ -1579,6 +1581,15 @@ def _answer_stuck_claim(args: argparse.Namespace, workspace: Path, p: dict[str, 
 OWNER_SAYS_ESTIMATE_FILE = "owner-says-estimate.json"
 
 
+def _inventory_fact(record: dict[str, Any]) -> dict[str, str]:
+    """A ready-made inquiry: the visit is to see what is in the shop, not to settle a design."""
+    if not record.get("inventory_inquiry"):
+        return {}
+    return {"ready-made pieces": "they asked about pieces already made or in stock; say you would be glad to show them what "
+                                 "is ready in the shop and similar pieces that can be made for them, and invite them in; "
+                                 "promise nothing about what is in stock, ask for no design details, no prices"}
+
+
 def ask_out_of_scope(args: argparse.Namespace, note: str) -> dict[str, Any]:
     """The reading says the message is not an estimate request: the owner decides, nothing is filed silently.
 
@@ -2364,6 +2375,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
             "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
             **({"before the estimate": "no estimate yet; the design details get settled at the meeting"}
                if record.get("status") == "awaiting_specs" else {}),
+            **_inventory_fact(record),
         }, fixed, args)
     customer_content_guard.validate_customer_text(body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"

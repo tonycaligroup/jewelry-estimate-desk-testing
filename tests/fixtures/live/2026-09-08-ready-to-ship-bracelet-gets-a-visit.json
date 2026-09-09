@@ -1,5 +1,5 @@
 {
-  "defect": "a customer asked for a lab tennis bracelet in a budget with metal, stones, and wrist size and whether something was ready to ship; the reading called it an inventory question and the desk filed a silent manual review, so nobody answered",
+  "defect": "a customer asked for a lab tennis bracelet in a budget with metal, stones, and wrist size and whether something was ready to ship; the reading called it an inventory question and the desk filed a silent manual review, so nobody answered. Ready-made pieces are shown at a visit: the desk offers times, and after two replies without a booking tells the owner to open the email",
   "seen_on": "4.14.2",
   "fixed_in": "unpublished after 4.14.2",
   "text_is": "verbatim",
@@ -25,9 +25,9 @@
       },
       "expect": {
         "outcomes": [
-          "followup_sent"
+          "appointment_approval_requested"
         ],
-        "sent": 1
+        "sent": 0
       }
     }
   ]

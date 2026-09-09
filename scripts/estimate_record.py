@@ -1667,6 +1667,35 @@ _ORDER_FACT_RES = (
 )
 
 
+# A ready-made piece: the shop shows what is in stock at a visit (WORKFLOW.md triage table).
+INVENTORY_RE = re.compile(
+    r"(?i)\b(?:in stock|ready[- ]to[- ]ship|ready[- ]made|pre[- ]?made|off the shelf|already made|ready to go|"
+    r"(?:do|did) you (?:have|carry|sell|stock) (?:any|some|a|an|the)\b|what do you have\b|something (?:ready|available|in stock)|"
+    r"available (?:now|today|right away|to buy|for purchase)|(?:have|got) anything)\b"
+)
+
+
+def asks_for_inventory(own_words: str) -> bool:
+    """The customer asks for something the shop already has, not something made for them."""
+    return bool(INVENTORY_RE.search(str(own_words or "")))
+
+
+def mark_inventory_inquiry(root: Path, estimate_id: str, source_message_id: str, note: str = "") -> dict[str, Any]:
+    """Remember that this record is a ready-made inquiry: the desk offers a visit, never a questionnaire."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if not record.get("inventory_inquiry"):
+            record["inventory_inquiry"] = {
+                "since_gmail_message_id": source_message_id,
+                "note": str(note or "")[:200],
+                "marked_at": datetime.now(timezone.utc).isoformat(),
+            }
+            write_object(path, record)
+        return record
+
+
 _NOT_AN_ORDER_RE = re.compile(r"(?i)\b(?:apprais\w*|insurance|valuation|valued?|worth|authentic\w*|status of|my order|order status|tracking)\b")
 
 

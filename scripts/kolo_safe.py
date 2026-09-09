@@ -1113,6 +1113,11 @@ def review_notice_text(reason_code: str, headers: dict[str, str]) -> str:
     who = _sender_display(headers.get("From", "")) if headers.get("From") else "a customer"
     subject = " ".join((headers.get("Subject") or "").split())[:90]
     about = f' about "{subject}"' if subject else ""
+    if reason_code == "inventory_handoff":
+        return (
+            f"{who} is asking about ready-made pieces{about}. I offered a visit twice and could not book one, "
+            "so I have stepped back from that thread; please open the email and handle it yourself."
+        )
     return (
         f"I could not finish an email from {who}{about}. {review_reason_text(reason_code)} "
         "I have stepped back from that thread; please handle it yourself."
@@ -1155,7 +1160,8 @@ def review_notice_claimed(
 
 # Reasons that still send a notice. Empty on purpose: the owner asked for
 # approvals and questions only. Add a reason here only with the owner's say.
-NOTIFY_REVIEW_REASONS: frozenset[str] = frozenset()
+# A ready-made inquiry the desk could not book in two replies is the one review that tells the owner (WORKFLOW.md triage table).
+NOTIFY_REVIEW_REASONS: frozenset[str] = frozenset({"inventory_handoff"})
 
 
 def review_notice_claimed_or_alert(monitor_root, claim_root, message_id, claim_token, reason_code, runner):

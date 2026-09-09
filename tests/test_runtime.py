@@ -7004,6 +7004,15 @@ class ReadsLikeAnOrderTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(estimate_record.reads_like_an_order(text), text)
 
+    def test_ready_made_words_are_an_inventory_inquiry(self) -> None:
+        for text in (self.BRACELET, "Do you have any tennis bracelets in stock?", "Anything ready to ship before Friday?",
+                     "What do you have in the $2,000 range?", "Is it available now?"):
+            with self.subTest(text=text):
+                self.assertTrue(estimate_record.asks_for_inventory(text), text)
+        for text in ("Can you make me a 14k band, size 10?", "Do you have experience with emeralds?", "I would like a custom ring."):
+            with self.subTest(text=text):
+                self.assertFalse(estimate_record.asks_for_inventory(text), text)
+
     def test_the_owner_answers_quote_it_or_handle_myself(self) -> None:
         self.assertEqual(owner_questions.match_option({"kind": "out_of_scope"}, "quote it"), "quote")
         self.assertEqual(owner_questions.match_option({"kind": "out_of_scope"}, "go ahead and estimate it"), "quote")

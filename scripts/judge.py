@@ -39,7 +39,7 @@ SPEC_KEYS = (
 )
 TRIAGE_KINDS = {
     "estimate_request", "not_a_quote_request", "vendor_or_marketing",
-    "personal_or_internal", "unrelated", "not_an_estimate_request", "escalation",
+    "personal_or_internal", "unrelated", "not_an_estimate_request", "escalation", "inventory_request",
 }
 ASSESSMENTS = {"unchanged", "changed", "uncertain"}
 INTENTS = {"estimate_acceptance", "rendering_request", "appointment_request"}
@@ -261,10 +261,10 @@ def triage(digest: dict[str, Any], model: str | None = None, runner: Runner = su
         "vendor_or_marketing (a supplier, sales pitch, or marketing); "
         "personal_or_internal (a personal note or internal shop matter); "
         "unrelated (none of the above); "
-        "not_an_estimate_request (an appraisal or insurance valuation, the price of a specific piece already in the shop's "
-        "inventory, or a job-status question); a customer asking whether the shop has or can make a piece and naming its "
-        "metal, stones, size, or a budget is an estimate_request even when they ask for something ready to ship or in "
-        "stock: the shop makes to order and quotes it; "
+        "not_an_estimate_request (an appraisal or insurance valuation, or a job-status question); "
+        "inventory_request (they ask whether the shop has, stocks, or sells a ready-made piece, something in stock, "
+        "available now, or ready to ship, whatever details or budget they give: the shop invites them in to see what "
+        "is ready rather than quoting a custom piece); "
         "escalation (anger, a legal threat, a chargeback or insurance dispute, a lost or damaged claim, press, fraud, or price pushback on a quote already sent).\n"
         "When in doubt between estimate_request and anything else, choose estimate_request.\n\n"
         f"THREAD:\n{thread_text(digest)}"
@@ -404,10 +404,10 @@ def triage_and_extract(
         "vendor_or_marketing (a supplier, sales pitch, or marketing); "
         "personal_or_internal (a personal note or internal shop matter); "
         "unrelated (none of the above); "
-        "not_an_estimate_request (an appraisal or insurance valuation, the price of a specific piece already in the shop's "
-        "inventory, or a job-status question); a customer asking whether the shop has or can make a piece and naming its "
-        "metal, stones, size, or a budget is an estimate_request even when they ask for something ready to ship or in "
-        "stock: the shop makes to order and quotes it; "
+        "not_an_estimate_request (an appraisal or insurance valuation, or a job-status question); "
+        "inventory_request (they ask whether the shop has, stocks, or sells a ready-made piece, something in stock, "
+        "available now, or ready to ship, whatever details or budget they give: the shop invites them in to see what "
+        "is ready rather than quoting a custom piece); "
         "escalation (anger, a legal threat, a chargeback or insurance dispute, a lost or damaged claim, press, fraud, or price pushback on a quote already sent).\n"
         "When in doubt between estimate_request and anything else, choose estimate_request.\n"
         "When the kind is estimate_request, merge every fact the CUSTOMER actually stated about the piece into "

@@ -243,6 +243,11 @@ must keep: never replace the cron or reset its activation timestamp or
 discovery watermark, and the Kolo user who installs and activates the skill is
 automatically the approver.
 
+A customer asking for ready-made pieces (in stock, ready to ship) is offered a
+visit through the appointment card, never a quote or a questionnaire; after two
+replies without a booking the desk tells the owner to open the email and handle
+it, and leaves that thread to them.
+
 ### Watcher and the rendering job
 
 The scheduled Kolo job is a command, not a model turn. Every tick it runs
@@ -750,8 +755,8 @@ should change after a rejected rendering card (the owner's words, naming
 the piece for a set, and only that piece is rendered again; or "handle
 myself"), what to do when a customer asks to meet but the
 calendar offers no free time (or could not be read), what to do with a message that
-reads as out of scope (an appraisal, the price of a piece in stock, a job status:
-"quote it" reads it as a custom order, or "handle myself"), and what to do when a
+reads as out of scope (an appraisal or a job status: "quote it" reads it as a custom
+order, or "handle myself"), and what to do when a
 customer was asked for details once and replied without giving them, and
 what to do when a card's command failed part way (reply "retry", "release"
 to let go of a calendar hold, or "handle myself"), and what to do with an

@@ -381,6 +381,23 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.2 (8 September 2026): a ready-made inquiry gets a visit, then the owner.**
+The owner's rule (8 September): people looking for premade inventory are
+offered an appointment; if nothing is booked within two replies the desk
+tells the jeweler to open the email and handle it. `estimate_record.
+asks_for_inventory` (in stock, ready to ship, ready-made, "do you have
+any", "what do you have") and the triage kind `inventory_request` mark
+the record (`mark_inventory_inquiry`); `pipeline._inventory_inquiry` runs
+the appointment path (`appointment_intent` plus
+`request_appointment_approval`, card piece "a visit to see ready-made
+pieces", emails carrying a ready-made fact and no design questions) and,
+once the thread holds two shop replies with no booking, files
+`inventory_handoff`: the one manual-review reason in
+`kolo_safe.NOTIFY_REVIEW_REASONS`, whose notice says "please open the
+email and handle it yourself", and retires the record so later messages
+on the thread are the owner's. Golden `InventoryTests`; fixture
+`2026-09-08-ready-to-ship-bracelet-gets-a-visit.json` (verbatim).
+
 **Unpublished after 4.14.2 (8 September 2026): out of scope asks the owner; an order reads as an order.**
 Live, "any lab tennis bracelets available in the $2,000 to $3,000 range?
 14k WG lab diamonds, 7-inch wrist... ready to ship?" was read as an

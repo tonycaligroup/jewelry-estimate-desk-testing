@@ -2123,21 +2123,21 @@ class MeetingFirstTests(SideBranchTests):
 class OutOfScopeTests(SideBranchTests):
     """Live 8 Sep: a customer's message the reading called out of scope was filed silently; now the owner decides."""
 
-    STOCK = "Hi Tony, do you have any tennis bracelets in stock? What do they run?\n\nSam"
+    STOCK = "Hi Tony, could you appraise my grandmother's ring for insurance? It is a 14k gold band with a small diamond.\n\nSam"
 
     def test_out_of_scope_asks_the_owner_and_quote_it_reads_it_as_an_order(self) -> None:
         def branch(ws: Path, world: World) -> None:
             world.triage_kind = "not_an_estimate_request"
-            world.customer_message("o1", "thread-stock", self.STOCK, subject="Tennis bracelets")
+            world.customer_message("o1", "thread-appraisal", self.STOCK, subject="Appraisal")
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
             self.assertEqual(world.sent, [], "nothing goes to the customer")
             question = [n for n in world.notices if not n["file"]][-1]["text"]
             self.assertIn("quote it", question)
-            self.assertIn("tennis bracelets in stock", question)
+            self.assertIn("appraise my grandmother", question)
             self.assertEqual(self.claim(ws, "o1")["status"], "awaiting_owner")
             world.triage_kind = "not_an_estimate_request"  # the reading would say the same again
-            world.spec = {"piece_type": "tennis bracelet"}
+            world.spec = {"piece_type": "ring"}
             answered = self.answer(ws, "quote it")
             self.assertEqual(answered["decision"], "quote", answered)
             summary = self.tick(ws, world)
@@ -2149,7 +2149,7 @@ class OutOfScopeTests(SideBranchTests):
     def test_handle_myself_leaves_the_thread_to_the_owner(self) -> None:
         def branch(ws: Path, world: World) -> None:
             world.triage_kind = "not_an_estimate_request"
-            world.customer_message("o2", "thread-stock-2", self.STOCK, subject="Tennis bracelets")
+            world.customer_message("o2", "thread-appraisal-2", self.STOCK, subject="Appraisal")
             self.tick(ws, world)
             answered = self.answer(ws, "handle myself")
             self.assertEqual(answered["decision"], "handle_myself", answered)
@@ -2157,6 +2157,82 @@ class OutOfScopeTests(SideBranchTests):
             self.assertEqual(claim["status"], "manual_review", claim)
             self.assertEqual(claim.get("reason") or claim.get("reason_code") or claim.get("outcome_reason"), "owner_decided_handle_myself", claim)
             self.assertEqual(world.sent, [])
+        self.run_branch(branch)
+
+
+class InventoryTests(SideBranchTests):
+    """Live 8 Sep: ready-made pieces are shown at a visit; after two replies without a booking the owner takes the thread."""
+
+    STOCK = ("Hello Tony,\n\nI am looking to see if you have any lab tennis bracelets available in the $2,00 to $3,000 range?"
+             "\n\n14k WG lab diamonds, 7-inch wrist\n\nCan you let me know if you have something ready to ship?")
+
+    def test_two_offers_without_a_booking_hand_the_thread_to_the_owner(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-stock"
+            world.triage_kind = "not_an_estimate_request"  # the reading's word for it; the customer's words decide
+            world.spec = {}
+            world.customer_message("i1", thread, self.STOCK, subject="Estimate for Braclet")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertEqual(world.sent, [], "no questionnaire, no quote: a visit is offered through a card")
+            offer = world.cards[-1]
+            self.assertEqual(offer["kind"], "appointment_offer", offer["payload"])
+            self.assertIn("ready-made", offer["title"])
+            estimate_id = self.only_estimate(ws)
+            self.assertTrue(self.record(ws, estimate_id).get("inventory_inquiry"))
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            self.assertEqual(len(world.sent), 1)
+            self.assertNotRegex(world.sent[0]["body"], r"(?i)carat|clarity|finger size|what length")
+            # He asks again without picking a time: a second offer, the second reply.
+            world.triage_kind = "estimate_request"
+            world.customer_message("i2", thread, "Thanks. What do you have in that range?\n\nDavid", subject="Re: Estimate for Braclet")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.execute(ws, world, world.cards[-1]["payload"]["execute"], world.cards[-1])
+            self.assertEqual(len(world.sent), 2)
+            # A third message with nothing booked: the owner is told to open the email; the desk steps back.
+            notices_before = len(world.notices)
+            world.customer_message("i3", thread, "Can you just send me pictures of what is ready?\n\nDavid", subject="Re: Estimate for Braclet")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["owner_handoff"], summary)
+            self.assertEqual(len(world.sent), 2, "nothing more goes to the customer")
+            notice = [n for n in world.notices[notices_before:] if not n["file"]]
+            self.assertEqual(len(notice), 1, world.notices[notices_before:])
+            self.assertIn("open the email and handle it", notice[0]["text"])
+            self.assertIn("ready-made", notice[0]["text"])
+            self.assertEqual(self.record(ws, estimate_id)["status"], "dormant")
+            # A fourth message is the owner's: nothing sent, nothing said (a silent review on the dormant record).
+            world.customer_message("i4", thread, "Hello?\n\nDavid", subject="Re: Estimate for Braclet")
+            summary = self.one_tick(ws, world)
+            self.assertEqual(summary["inline_failures"], 0, summary)
+            self.assertEqual(summary["manual_review"], 1, summary)
+            self.assertEqual(len(world.sent), 2)
+            self.assertEqual(len([n for n in world.notices[notices_before:] if not n["file"]]), 1)
+        self.run_branch(branch)
+
+    def test_a_picked_time_books_the_visit(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-stock-book"
+            world.triage_kind = "inventory_request"
+            world.spec = {}
+            world.customer_message("j1", thread, self.STOCK, subject="Estimate for Braclet")
+            self.tick(ws, world)
+            offer = world.cards[-1]
+            self.assertEqual(offer["kind"], "appointment_offer", offer["payload"])
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            pick = offer["payload"]["calendar_availability"][0]
+            world.requested = ([pick["label"]], [pick["start"][:16]])
+            world.customer_message("j2", thread, f"{pick['label']} works for me.\n\nDavid", subject="Re: Estimate for Braclet")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking", book["payload"])
+            self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(len(world.calendar_events), 1)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertTrue(record["appointment_booked"].get("before_estimate"), record.get("appointment_booked"))
+            self.assertEqual(record["status"], "awaiting_specs", "booked; the record waits in case they want something made")
+            self.assertEqual(len(world.sent), 2)
         self.run_branch(branch)
 
 
