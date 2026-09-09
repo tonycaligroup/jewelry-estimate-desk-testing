@@ -76,6 +76,7 @@ class LiveFixtureTests(unittest.TestCase):
                 elif "customer" in step:
                     if "spec" in step:
                         world.spec = step["spec"]
+                    world.triage_kind = step.get("triage_kind") or "estimate_request"
                     world.design_change = list(step["customer"].get("design_change") or [])
                     cards_before = len(world.cards)
                     if step["customer"].get("thread") == "new":
@@ -84,6 +85,7 @@ class LiveFixtureTests(unittest.TestCase):
                                            subject=step["customer"].get("subject") or "Custom signet ring")
                     summary = helper.tick(ws, world)
                     world.design_change = []
+                    world.triage_kind = "estimate_request"
                     if step.get("expect", {}).get("no_new_card"):
                         outer.assertEqual(len(world.cards), cards_before, f"step {number}: a card was filed")
                 elif "answer" in step:

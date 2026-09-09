@@ -684,7 +684,17 @@ def process_claim(
     # continuing; only the message that opened the record is triaged. A
     # customer asking "what does this have to do with it?" is not junk mail.
     known = estimate_record.known_specification(record)
+    handled_words = " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
+                             if m.get("sent_by") == "customer" and m.get("claimed"))
     judged = judge.triage_and_extract(digest, model, judge_runner, openclaw, known=known) if initiating else None
+    reread = False
+    if judged and judged["kind"] != "estimate_request":
+        if (Path(paths["work_dir"]) / workflow_safe.OWNER_SAYS_ESTIMATE_FILE).exists():
+            judged, reread = {**judged, "kind": "estimate_request", "note": "the owner said to quote it"}, True
+        elif judged["kind"] in ("not_an_estimate_request", "not_a_quote_request") and estimate_record.reads_like_an_order(handled_words):
+            # "Do you have a 14k WG lab tennis bracelet, 7-inch, ready to ship?" names a piece and its facts:
+            # a shop that makes to order quotes it, whatever the reading called it.
+            judged, reread = {**judged, "kind": "estimate_request", "note": "reads like an order: quoted as a custom piece"}, True
     triage = {"kind": judged["kind"], "note": judged["note"]} if judged else {"kind": "estimate_request", "note": "reply on an open estimate"}
     if triage["kind"] in NOT_AN_INQUIRY:
         workflow_safe.not_an_inquiry(_namespace(
@@ -692,11 +702,16 @@ def process_claim(
         ))
         return {"outcome": "not_an_inquiry", "reason": triage["kind"], "next": "done"}
     if triage["kind"] == "not_an_estimate_request":
-        return _manual_review(p, message_id, "not_an_estimate_request", command_runner)
+        # Out of scope by the reading (an appraisal, stock, job status): the owner decides; nothing is filed silently.
+        asked = workflow_safe.ask_out_of_scope(_namespace(p, message_id, estimate_id, runner=command_runner), triage.get("note") or "")
+        return {"outcome": "awaiting_owner", "question_id": asked.get("question_id"), "next": "done"}
     if triage["kind"] == "escalation":
         return _manual_review(p, message_id, "customer_escalation", command_runner)
 
-    specification = judged["specification"] if judged else judge.extract_specification(digest, model, judge_runner, openclaw, known=known)["specification"]
+    if judged and not reread:
+        specification = judged["specification"]
+    else:
+        specification = judge.extract_specification(digest, model, judge_runner, openclaw, known=known)["specification"]
     specification = estimate_record.carry_prior_facts(record, specification)
     specification = estimate_record.merge_known_facts(record, specification)
     specification = estimate_record.settle_center_stone(
@@ -704,8 +719,6 @@ def process_claim(
                                 if m.get("sent_by") == "customer"))
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
-    handled_words = " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
-                             if m.get("sent_by") == "customer" and m.get("claimed"))
     specification = estimate_record.settle_scheduling_intent(specification, handled_words)
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the

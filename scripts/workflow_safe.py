@@ -1576,6 +1576,42 @@ def _answer_stuck_claim(args: argparse.Namespace, workspace: Path, p: dict[str, 
     return result
 
 
+OWNER_SAYS_ESTIMATE_FILE = "owner-says-estimate.json"
+
+
+def ask_out_of_scope(args: argparse.Namespace, note: str) -> dict[str, Any]:
+    """The reading says the message is not an estimate request: the owner decides, nothing is filed silently.
+
+    An appraisal, the price of something in stock, or a job status is out of
+    the desk's scope (WORKFLOW.md), but a customer's own message never
+    disappears into a list: the owner hears it as a question. "quote it"
+    reads the message as a custom order from what they wrote; "handle
+    myself" leaves the thread to the owner.
+    """
+    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    who = _customer_name(args.monitor_root, args.claim_root, args.message_id)
+    snippet = _reply_snippet(args)
+    why = f" ({note.strip().rstrip('.')})" if note and note.strip() else ""
+    text = (
+        f"{who} wrote"
+        + (f': "{snippet}"' if snippet else " to the shop")
+        + f". That reads as something the desk does not quote{why}: an appraisal, the price of a piece in stock, or a job status. "
+        "Reply \"quote it\" to estimate it as a custom piece from what they wrote, or \"handle myself\"."
+    )
+    root = owner_questions.questions_root(args.monitor_root)
+    _created, question = owner_questions.create_decision(
+        root, "out_of_scope", args.estimate_id, args.message_id, text, {"note": str(note or "")[:200]},
+    )
+    question = _attach_answer_command(root, args.monitor_root, question)
+    if _created:
+        question = owner_questions.deliver(
+            root, question, runner=getattr(args, "runner", subprocess.run),
+            extra_args=kolo_safe.owner_channel_args(args.monitor_root),
+        )
+    inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "out_of_scope_question")
+    return question
+
+
 def ask_followup_stalled(args: argparse.Namespace, record: dict[str, Any], repeated: list[str]) -> dict[str, Any]:
     """The customer was asked for these details once and did not give them: the owner decides.
 
@@ -1981,6 +2017,15 @@ def answer_decision(
         return result
     if question["kind"] == "same_sender" and outcome == "same":
         return _answer_same_piece(args, workspace, p, root, question)
+    if question["kind"] == "out_of_scope" and outcome == "quote":
+        # The owner says quote it: the message is read again as an estimate request, by the tick.
+        reopened = _resume_parked_claim(p, message_id)
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        work_dir = Path(reopened["work_paths"]["work_dir"])
+        write_private(work_dir / OWNER_SAYS_ESTIMATE_FILE, {"question_id": question["question_id"], "answer": str(args.answer)[:200]})
+        result.update(_hand_to_tick(p, message_id))
+        return result
     if question["kind"] == "unclear_reply" and outcome in {"design_change", "second_piece"}:
         return _answer_design_change(args, workspace, p, root, question, outcome)
     if question["kind"] == "appointment_next":

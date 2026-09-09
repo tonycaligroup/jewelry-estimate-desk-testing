@@ -118,7 +118,7 @@ halts all outbound work immediately until that owner says to resume.
 | A new custom piece, replica, redesign, or remount | Continue to intake |
 | A repair, resize, or restring | Repair intake, no rendering |
 | An appraisal or insurance value | Stop; tell the owner; never value property |
-| The price of an existing inventory item | Hand to the sales workflow |
+| The price of an existing inventory item | Ask the owner: "quote it" reads it as a custom order, "handle myself" leaves it to them. A message naming a piece with its metal, stones, size, or budget is an estimate request outright, ready to ship or not: the shop makes to order |
 | Job status | Look up status; do not estimate |
 | A meeting | Scheduling flow, then continue intake |
 | Anger, legal, chargeback, insurance, media, fraud, lost or damaged claim | Stop and escalate to the owner with no customer reply |
@@ -437,6 +437,14 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.14.2): a customer's
+  message the reading calls out of scope (an appraisal, the price of a
+  piece in stock, a job status) is a question to the owner, never a silent
+  manual review: "quote it" reads it as a custom order, "handle myself"
+  leaves the thread to them; and a message that names a piece with at least
+  two of its facts (karat, metal, stone, size, budget) is an estimate
+  request whatever the reading called it, appraisals and job status
+  excepted (6.10, triage table).
 - Built 8 September 2026 (unpublished, after 4.14.2): a day and clock
   time in the customer's own words ("would Friday at 3pm work for you?")
   is resolved to a date in code, whatever the reading resolved; a free

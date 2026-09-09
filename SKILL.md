@@ -749,7 +749,9 @@ after a rejected price card (a dollar figure, or "handle myself"), what
 should change after a rejected rendering card (the owner's words, naming
 the piece for a set, and only that piece is rendered again; or "handle
 myself"), what to do when a customer asks to meet but the
-calendar offers no free time (or could not be read), and what to do when a
+calendar offers no free time (or could not be read), what to do with a message that
+reads as out of scope (an appraisal, the price of a piece in stock, a job status:
+"quote it" reads it as a custom order, or "handle myself"), and what to do when a
 customer was asked for details once and replied without giving them, and
 what to do when a card's command failed part way (reply "retry", "release"
 to let go of a calendar hold, or "handle myself"), and what to do with an

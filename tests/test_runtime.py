@@ -6989,6 +6989,27 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
 
 
+class ReadsLikeAnOrderTests(unittest.TestCase):
+    """Live 8 Sep: a ready-to-ship question carrying metal, stones, size, and a budget was filed as inventory."""
+
+    BRACELET = ("Hello Tony,\n\nI am looking to see if you have any lab tennis bracelets available in the $2,00 to $3,000 range?"
+                "\n\n14k WG lab diamonds, 7-inch wrist\n\nCan you let me know if you have something ready to ship?")
+
+    def test_a_piece_with_two_facts_is_an_order_and_appraisals_never_are(self) -> None:
+        self.assertTrue(estimate_record.reads_like_an_order(self.BRACELET))
+        self.assertTrue(estimate_record.reads_like_an_order("Do you have a 14k rose gold signet ring, size 10, ready to go?"))
+        for text in ("Do you have any tennis bracelets in stock? What do they run?", "Is my order ready?",
+                     "How much would an appraisal of my 14k gold ring with a 1 ct diamond cost?",
+                     "What is my grandmother's platinum ring worth?", "Thanks for the quick reply!"):
+            with self.subTest(text=text):
+                self.assertFalse(estimate_record.reads_like_an_order(text), text)
+
+    def test_the_owner_answers_quote_it_or_handle_myself(self) -> None:
+        self.assertEqual(owner_questions.match_option({"kind": "out_of_scope"}, "quote it"), "quote")
+        self.assertEqual(owner_questions.match_option({"kind": "out_of_scope"}, "go ahead and estimate it"), "quote")
+        self.assertEqual(owner_questions.match_option({"kind": "out_of_scope"}, "I'll handle it myself"), "handle_myself")
+
+
 class RequestedTimeResolutionTests(unittest.TestCase):
     """Live 8 Sep: 'would Friday at 3pm work for you?' reached the calendar unresolved; other days were offered."""
 

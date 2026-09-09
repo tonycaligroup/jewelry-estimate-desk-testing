@@ -33,7 +33,7 @@ import owner_questions
 import rehearsal
 import run_lease
 
-PARKING_KINDS = {"missing_rate", "same_sender", "unclear_reply", "followup_stalled", "stuck_claim", "rendering_next"}
+PARKING_KINDS = {"missing_rate", "same_sender", "unclear_reply", "followup_stalled", "stuck_claim", "rendering_next", "out_of_scope"}
 
 
 def _read(path: Path) -> Any:

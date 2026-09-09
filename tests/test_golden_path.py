@@ -2120,6 +2120,46 @@ class MeetingFirstTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class OutOfScopeTests(SideBranchTests):
+    """Live 8 Sep: a customer's message the reading called out of scope was filed silently; now the owner decides."""
+
+    STOCK = "Hi Tony, do you have any tennis bracelets in stock? What do they run?\n\nSam"
+
+    def test_out_of_scope_asks_the_owner_and_quote_it_reads_it_as_an_order(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.triage_kind = "not_an_estimate_request"
+            world.customer_message("o1", "thread-stock", self.STOCK, subject="Tennis bracelets")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
+            self.assertEqual(world.sent, [], "nothing goes to the customer")
+            question = [n for n in world.notices if not n["file"]][-1]["text"]
+            self.assertIn("quote it", question)
+            self.assertIn("tennis bracelets in stock", question)
+            self.assertEqual(self.claim(ws, "o1")["status"], "awaiting_owner")
+            world.triage_kind = "not_an_estimate_request"  # the reading would say the same again
+            world.spec = {"piece_type": "tennis bracelet"}
+            answered = self.answer(ws, "quote it")
+            self.assertEqual(answered["decision"], "quote", answered)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual(len(world.sent), 1)
+            self.assertRegex(world.sent[0]["body"], r"(?i)metal")
+        self.run_branch(branch)
+
+    def test_handle_myself_leaves_the_thread_to_the_owner(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.triage_kind = "not_an_estimate_request"
+            world.customer_message("o2", "thread-stock-2", self.STOCK, subject="Tennis bracelets")
+            self.tick(ws, world)
+            answered = self.answer(ws, "handle myself")
+            self.assertEqual(answered["decision"], "handle_myself", answered)
+            claim = self.claim(ws, "o2")
+            self.assertEqual(claim["status"], "manual_review", claim)
+            self.assertEqual(claim.get("reason") or claim.get("reason_code") or claim.get("outcome_reason"), "owner_decided_handle_myself", claim)
+            self.assertEqual(world.sent, [])
+        self.run_branch(branch)
+
+
 class ProposedTimeTests(SideBranchTests):
     """Live 8 Sep: after an offer, 'would Friday at 3pm work for you?' is a booking card when Friday 3pm is free."""
 

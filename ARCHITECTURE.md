@@ -381,6 +381,23 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.2 (8 September 2026): out of scope asks the owner; an order reads as an order.**
+Live, "any lab tennis bracelets available in the $2,000 to $3,000 range?
+14k WG lab diamonds, 7-inch wrist... ready to ship?" was read as an
+inventory question; `not_an_estimate_request` filed a manual review, which
+since 4 September is silent, so nobody answered. Two changes. In
+`pipeline.process_claim`, `estimate_record.reads_like_an_order` (a piece
+noun plus two of karat, metal, stone, size, budget; appraisal, insurance,
+and job-status words excluded) turns such a reading into an estimate
+request and re-reads the specification. What is still out of scope becomes
+an owner question, kind `out_of_scope` (`workflow_safe.ask_out_of_scope`,
+parked as `out_of_scope_question`): "quote it" writes
+`owner-says-estimate.json` in the claim's work and hands the claim to the
+tick, which reads it as an estimate request; "handle myself" closes the
+claim to the owner. The doctor knows the kind parks a claim. Fixture
+`2026-09-08-ready-to-ship-bracelet-is-an-estimate.json` (verbatim, with
+the reading's kind) and `OutOfScopeTests`.
+
 **Unpublished after 4.14.2 (8 September 2026): a proposed day and time is resolved in code.**
 Live, after the desk offered times, "would Friday at 3pm work for you?"
 produced a card offering Wednesday and Thursday although Friday at 3pm

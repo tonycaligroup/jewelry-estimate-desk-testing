@@ -18,7 +18,8 @@ Two kinds:
 - `golden_path`: runs the whole desk on the fake world. `profile` holds
   rate-card overrides; `steps` run in order, each a dict with one of:
   `estimate_sent` (`text`, `spec`: a first inquiry priced, approved, and
-  sent), `customer` (`id`, `text`, `design_change`, then a tick),
+  sent), `customer` (`id`, `text`, `design_change`, then a tick; `triage_kind` on the
+  step is what the model's reading called the message),
   `answer` (the owner's words to the open question), `tick` (with `spec`,
   what the model reads now). Each step may carry `expect`:
   `outcomes` (the tick's inline outcomes), `sent` (emails sent so far),

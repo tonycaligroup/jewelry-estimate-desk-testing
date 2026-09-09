@@ -1,0 +1,34 @@
+{
+  "defect": "a customer asked for a lab tennis bracelet in a budget with metal, stones, and wrist size and whether something was ready to ship; the reading called it an inventory question and the desk filed a silent manual review, so nobody answered",
+  "seen_on": "4.14.2",
+  "fixed_in": "unpublished after 4.14.2",
+  "text_is": "verbatim",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "customer": {
+        "id": "b1",
+        "thread": "new",
+        "subject": "Estimate for Braclet",
+        "text": "Hello Tony,\n\nI am looking to see if you have any lab tennis bracelets available in the $2,00 to $3,000 range?\n\n14k WG lab diamonds, 7-inch wrist\n\nCan you let me know if you have something ready to ship?"
+      },
+      "triage_kind": "not_an_estimate_request",
+      "spec": {
+        "piece_type": "tennis bracelet",
+        "metal": "white gold",
+        "metal_karat": 14,
+        "metal_color": "white",
+        "stone_type": "diamond",
+        "stone_origin": "lab-grown",
+        "dimensions": "7 inch",
+        "budget": "$2,000 to $3,000"
+      },
+      "expect": {
+        "outcomes": [
+          "followup_sent"
+        ],
+        "sent": 1
+      }
+    }
+  ]
+}

@@ -1657,6 +1657,34 @@ BAND_STONE_WORDS = ("eternity", "channel set", "channel-set", "channel", "pave",
 CENTER_STONE_WORDS = ("center stone", "centre stone", "main stone", "solitaire", "halo", "feature stone")
 
 
+_PIECE_NOUN_RE = re.compile(r"(?i)\b(?:rings?|bands?|bracelets?|necklaces?|chains?|pendants?|earrings?|studs|hoops|anklets?|bangles?|cuffs?|brooch(?:es)?|cuff ?links|charms?|lockets?|solitaires?)\b")
+_ORDER_FACT_RES = (
+    re.compile(r"(?i)\b\d{1,2}\s*(?:k|kt|karat)\b"),                                             # a karat
+    re.compile(r"(?i)\b(?:gold|platinum|silver|palladium|(?:white|yellow|rose)\s*gold|wg|yg|rg)\b"),  # a metal
+    re.compile(r"(?i)\b(?:diamonds?|sapphires?|rub(?:y|ies)|emeralds?|moissanite|lab[- ]?(?:grown|created)?|stones?|gems?|cts?|carats?)\b"),  # a stone
+    re.compile(r"(?i)\b(?:size\s*\d|\d+(?:\.\d+)?\s*[-\s]?(?:inch(?:es)?|in|mm|cm)\b|wrist|finger|length)\b"),  # a size
+    re.compile(r"(?i)(?:\$\s*\d|\bbudget\b|\b\d{1,3},\d{3}\b)"),                              # a budget
+)
+
+
+_NOT_AN_ORDER_RE = re.compile(r"(?i)\b(?:apprais\w*|insurance|valuation|valued?|worth|authentic\w*|status of|my order|order status|tracking)\b")
+
+
+def reads_like_an_order(own_words: str) -> bool:
+    """A piece named with at least two facts an estimate needs (karat, metal, stone, size, budget).
+
+    Live (8 September 2026): "any lab tennis bracelets available in the $2,000
+    to $3,000 range? 14k WG lab diamonds, 7-inch wrist... something ready to
+    ship?" was read as an inventory question and filed silently. A shop that
+    makes to order quotes such a message; the reading decides the kind, the
+    words decide whether it is an order.
+    """
+    text = str(own_words or "")
+    if not _PIECE_NOUN_RE.search(text) or _NOT_AN_ORDER_RE.search(text):
+        return False
+    return sum(1 for pattern in _ORDER_FACT_RES if pattern.search(text)) >= 2
+
+
 _DAY = r"(?:mon|tues?|wed(?:nes)?|thurs?|fri|sat(?:ur)?|sun)(?:day)?|tomorrow|tonight|today|this (?:afternoon|evening|week|weekend)|next week|the weekend"
 _TIME = r"\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)|noon|(?:in the )?(?:morning|afternoon|evening)"
 # A meeting named outright: an appointment, coming by the shop, meeting in person.
