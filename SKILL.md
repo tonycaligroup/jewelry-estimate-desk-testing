@@ -734,8 +734,9 @@ delivers an approval to you, do nothing: run no line, and tell the owner
 nothing, since the desk reports the outcome on the card. If you run the
 line anyway it finds the first run's journal and does nothing more (its
 output says `already_sent`, `already_booked`, or `already_offered`). Never
-run `kolo update-brief` yourself: the line reports the brief, and Kolo
-refuses a second report on the same brief. The one card you still run is a
+run `kolo update-brief` yourself: the line reports the brief (its output
+says so in `brief_reported`), and Kolo refuses a second report on the same
+brief; that refusal is not a fault and is never reported to the owner. The one card you still run is a
 manual review (`resolve-review-approval`), which the watcher does not
 execute. Rejections need no command from this session: Kolo does not
 deliver them here, and the watcher reads them from the audit trail every

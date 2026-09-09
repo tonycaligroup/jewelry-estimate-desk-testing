@@ -2957,6 +2957,9 @@ def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any,
     brief_id = getattr(args, "brief_id", None)
     if not brief_id or brief_id == "<Brief ID>":
         return
+    # Said in the output itself, because the main session keeps running update-brief after the line and
+    # reporting the refusal as a fault (9 September 2026).
+    result["brief_reported"] = f"this command reported brief {brief_id} as executed; run nothing else, in particular no kolo update-brief"
     try:
         kolo_safe.run_command(kolo_safe.build_update_brief(brief_id, "executed", result), runner=runner)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:

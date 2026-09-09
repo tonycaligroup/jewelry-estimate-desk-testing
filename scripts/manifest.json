@@ -48,7 +48,7 @@
     "spec_gate.py": "86282fd3311a01e31081340e6193093a",
     "spot_price.py": "10a3327c317c1f2a970b73e03b562db8",
     "validate_profile.py": "b32007dae77780354403ad30b120200c",
-    "workflow_safe.py": "e51ecee04eb233607edf679fb66bd11d"
+    "workflow_safe.py": "eb6d78752894a461695c33d268892f57"
   },
   "version": "4.15.1"
 }
