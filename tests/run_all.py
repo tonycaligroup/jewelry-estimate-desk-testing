@@ -37,6 +37,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-k", dest="pattern", help="run only tests whose names contain this text (skips the harness)")
     args = parser.parse_args(argv)
 
+    # The scripts manifest is written before every run: the suite then checks it, and a commit that passed
+    # the suite carries a manifest that names exactly its files (8 September 2026: a pod ran 4.14.2 scripts
+    # under a 4.14.5 SKILL.md and nobody could tell).
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import manifest  # noqa: E402
+
+    manifest.write(ROOT)
+
     loader = unittest.TestLoader()
     if args.pattern:
         loader.testNamePatterns = [f"*{args.pattern}*"]

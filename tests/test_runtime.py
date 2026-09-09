@@ -6,6 +6,7 @@ import json
 import os
 import base64
 import io
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -6987,6 +6988,41 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3, "fees": ["plating"]}, ["casting"], [], False)
         with self.assertRaises(ValueError):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
+
+
+class ManifestTests(unittest.TestCase):
+    """8 Sep: a pod ran 4.14.2 scripts under a 4.14.5 SKILL.md; the manifest proves the files, readiness checks it."""
+
+    def test_the_manifest_names_exactly_the_scripts_in_the_tree(self) -> None:
+        import manifest
+        result = manifest.verify(ROOT)
+        self.assertTrue(result["ok"], manifest.describe(result))
+        self.assertEqual(result["count"], len(list((ROOT / "scripts").glob("*.py"))))
+
+    def test_a_stale_script_is_named_and_readiness_fails(self) -> None:
+        import manifest
+        import readiness
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "skill"
+            shutil.copytree(ROOT / "scripts", base / "scripts")
+            shutil.copy(ROOT / "SKILL.md", base / "SKILL.md")
+            self.assertTrue(manifest.verify(base)["ok"])
+            (base / "scripts" / "pipeline.py").write_text("# an older release's file\n", encoding="utf-8")
+            (base / "scripts" / "estimate_record.py").write_text("# an older release's file\n", encoding="utf-8")
+            result = manifest.verify(base)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["stale"], ["estimate_record.py", "pipeline.py"])
+            self.assertIn("STALE", manifest.describe(result))
+            self.assertIn("pipeline.py", manifest.describe(result))
+            ws = Path(directory) / "ws"
+            (ws / "estimate-desk" / "inbox-monitor").mkdir(parents=True)
+            (ws / "estimate-desk" / "shop-profile.json").write_text("{}", encoding="utf-8")
+            rows = readiness.checks(ws, base, "openclaw", runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "unexpected"))
+            status = {r["check"]: r for r in rows}
+            self.assertEqual(status["installed scripts"]["status"], "FAIL")
+            self.assertIn("pipeline.py", status["installed scripts"]["detail"])
+            fresh = readiness.checks(ws, ROOT, "openclaw", runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "unexpected"))
+            self.assertEqual({r["check"]: r["status"] for r in fresh}["installed scripts"], "PASS")
 
 
 class PhotoClauseTests(unittest.TestCase):

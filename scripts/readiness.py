@@ -51,6 +51,14 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
     except (OSError, ValueError) as exc:
         profile = {}
         add("shop profile", "FAIL", str(exc))
+    # The installed scripts, file by file: a version number names a folder; the manifest proves the files.
+    try:
+        import manifest  # local import: keeps the readiness checks importable on their own
+
+        verified = manifest.verify(base_dir)
+        add("installed scripts", "PASS" if verified["ok"] else "FAIL", manifest.describe(verified))
+    except (OSError, ValueError) as exc:
+        add("installed scripts", "FAIL", f"manifest could not be checked: {exc}")
     scheduling = profile.get("scheduling") or {}
     if scheduling.get("calendar") and slots.parse_windows(scheduling):
         add("calendar and windows", "PASS", f"calendar {scheduling['calendar']}, {len(slots.parse_windows(scheduling))} window(s)")

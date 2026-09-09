@@ -441,3 +441,12 @@ at https://github.com/tonycaligroup/kolo-product-docs (UI only).
 - After five failed runs the platform backs a cron job off by an hour;
   one forced run clears it. The Chrome-side Kolo workspace here is a
   different pod from the desk's.
+
+
+## Verified 8 September 2026 (evening): a version number proves nothing about the files
+
+A pod ran `pipeline.py` and `estimate_record.py` from 4.14.2 under a SKILL.md
+that said 4.14.5, through three publishes. Readiness printed the version and
+READY; every fix "recurred" live. Only per-file checksums caught it. Every
+skill should ship a manifest of script checksums, verify it in readiness,
+and verify the publishing folder against it before publishing.

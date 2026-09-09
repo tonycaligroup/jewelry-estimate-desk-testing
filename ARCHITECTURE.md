@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.5 (8 September 2026): the scripts manifest.**
+Live, the pod ran the 4.14.2 `pipeline.py` and `estimate_record.py` under
+a SKILL.md that said 4.14.5; three releases of appointment and inventory
+fixes never ran and every retest "recurred". `scripts/manifest.py` records
+the md5 of every script for the version in SKILL.md
+(`scripts/manifest.json`); `tests/run_all.py` writes it before every run,
+`ManifestTests` checks it against the tree, readiness's `installed
+scripts` check verifies the installed folder and names any stale, missing,
+or extra file, and the publish checklist runs `manifest.py` in the
+publishing folder.
+
 **4.14.5 (built 8 September 2026): an estimate mentioned is pursued, meeting or not.**
 The owner's rule: when estimates are mentioned the desk pursues them too.
 `estimate_record.asks_for_estimate` reads the handled message's own words

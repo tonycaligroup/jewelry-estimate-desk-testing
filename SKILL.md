@@ -60,6 +60,8 @@ model with thinking off. If Kolo cannot verify the model, stop.
 ## Bundled resources
 
 - `scripts/validate_profile.py`: validate runtime shop configuration.
+- `scripts/manifest.py`: the checksum of every script for this version; readiness
+  fails, naming the files, when the installed folder does not match.
 - `scripts/activation_binding.py`: privately bind approvals to the Kolo user
   who installs and activates the skill.
 - `scripts/customer_state_reset.py`: clear prior customer/job state for a fresh
