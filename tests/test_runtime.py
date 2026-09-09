@@ -44,6 +44,7 @@ import image_provider
 import judge
 import spec_gate
 import pipeline
+import reading_check
 import slots
 import cli
 import cost_components as cost_components_module
@@ -7135,6 +7136,26 @@ class RenderFromTheLedgerTests(unittest.TestCase):
         mark = rendering.build_prompts({**plan, "reference_kind": "mark"}, self.SPEC, has_artwork=True, has_exemplar=False)
         self.assertIn("customer's mark", mark[0])
         self.assertNotIn("example piece", mark[0])
+
+
+class OwnStoneWholeWordTests(unittest.TestCase):
+    """Live 9 Sep: 'lab grown stones of the best quality' tripped the own-stone confirm through the letters 'own stone'."""
+
+    def test_grown_stones_are_not_a_stone_of_their_own(self) -> None:
+        self.assertFalse(reading_check._says_own_stone("for the earring, white gold, 18k, with lab grown stones of the best quality please."))
+        self.assertTrue(reading_check._says_own_stone("i would like to reset my own stone into a new setting."))
+        self.assertTrue(reading_check._says_own_stone("it is my mother's diamond."))
+        digest = {"messages": [{"body": "White gold, 18k, with lab grown stones of the best quality please.", "sent_by": "customer", "claimed": True}]}
+        self.assertEqual(reading_check.compare(digest, {"piece_type": "earrings", "stone_type": "emerald", "stone_origin": "lab-grown"}), [])
+
+    def test_an_offer_email_that_drops_a_promised_question_falls_back(self) -> None:
+        asks = ["Which metal would you like?", "Would you like natural or lab-grown stones?",
+                "You mentioned a stone of your own; could you confirm you would like us to set that stone rather than supply one?"]
+        full = "Happy to meet. Which metal would you like? Natural or lab-grown stones? You mentioned a stone of your own; shall we set that stone or supply one?"
+        self.assertTrue(workflow_safe._asks_covered(full, asks))
+        dropped = "Happy to meet. Which metal would you like? Natural or lab-grown stones?"
+        self.assertFalse(workflow_safe._asks_covered(dropped, asks))
+        self.assertTrue(workflow_safe._asks_covered("anything", []))
 
 
 class GradesAreTheJewelersChoiceTests(unittest.TestCase):

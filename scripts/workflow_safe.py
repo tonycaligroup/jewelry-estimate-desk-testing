@@ -2432,6 +2432,22 @@ OFFER_NOTE_OUTSIDE_HOURS = (
 )
 
 
+_ASK_STOP = {"which", "would", "you", "like", "what", "your", "the", "a", "an", "or", "do", "have", "could", "confirm", "that", "rather", "than", "one", "with"}
+
+
+def _asks_covered(body: str, asks: list[str]) -> bool:
+    """Every promised question is in the email: at least half of each question's distinctive words appear (live, 9 Sep 2026: a draft dropped one)."""
+    text = re.sub(r"[^a-z0-9 ]+", " ", str(body or "").lower())
+    for ask in asks:
+        words = [w for w in re.findall(r"[a-z0-9]+", str(ask).lower()) if w not in _ASK_STOP and len(w) > 2]
+        if not words:
+            continue
+        hits = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"s?\b", text))
+        if hits * 2 < len(words):
+            return False
+    return True
+
+
 def _offer_facts(approval: dict[str, Any], piece: str, labels: list[str], shop: str) -> tuple[dict[str, Any], str]:
     """The facts and the fixed text for an offer email; a time outside the hours is said plainly, with the hours."""
     lines = "\n".join(f"- {l}" for l in labels)
@@ -2470,6 +2486,8 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
         body, body_source = _draft_customer_email(p, record, message_id, "offer", facts, fixed, args or argparse.Namespace())
     if judge.bench_measurement_questions(body):
         body, body_source = fixed, "fallback"  # never a technical question to a customer
+    if not _asks_covered(body, approval_now.get("ask_for") or []):
+        body, body_source = fixed, "fallback"  # the card promised these questions; the fixed text asks them all
     customer_content_guard.validate_customer_text(body)
     work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

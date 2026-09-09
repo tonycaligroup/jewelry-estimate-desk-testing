@@ -161,15 +161,16 @@ _STONE_NOUNS = ("diamond", "stone", "sapphire", "ruby", "emerald", "gem", "moiss
 def _says_own_stone(text: str) -> bool:
     """An own-stone phrase that is not denied in the same breath, and that is about a stone."""
     for phrase in _OWN_STONE_WORDS:
-        start = text.find(phrase)
-        while start >= 0:
+        # Whole words only: "lab grown stones" contains the letters "own stone" and is not a stone of their own
+        # (live, 9 September 2026).
+        for match in re.finditer(r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])", text):
+            start = match.start()
             before = text[max(0, start - 40):start]
             around = text[max(0, start - 40):start + len(phrase) + 40]
             denied = bool(_NEGATION_RE.search(before))
             about_a_stone = phrase in _STONE_PHRASES or any(noun in around for noun in _STONE_NOUNS)
             if not denied and about_a_stone:
                 return True
-            start = text.find(phrase, start + 1)
     return False
 
 
