@@ -35,11 +35,13 @@ import owner_questions
 
 BASE_URL = "https://gateway.maton.ai/google-sheets/v4/spreadsheets"
 TITLE = "Jewelry Estimate Desk"
-TABS = ("Customers", "This week", "Price cards", "Facts")
+TABS = ("Customers", "This week", "Price cards", "Cost sheet", "Facts")
 HEADERS = {
     "Customers": ["Customer", "Email", "Piece", "Status", "Next meeting", "Last contact", "Still open", "Gmail thread", "Estimate"],
     "This week": ["When", "Customer", "Piece", "Status", "Estimate"],
     "Price cards": ["Date", "Customer", "Piece", "Quote", "Hard cost", "Profit", "Margin", "Assumptions", "Outcome", "Estimate"],
+    # The owner, 9 September 2026: the full cost breakdown, one line per cost line of every price card.
+    "Cost sheet": ["Date", "Customer", "Piece", "Line", "Item", "Quantity", "Unit cost", "Line total", "Outcome", "Estimate"],
     "Facts": ["Customer", "Detail", "Value", "Source", "When", "Estimate"],
 }
 STATE_FILE = "sheet-mirror.json"
@@ -183,6 +185,15 @@ def setup(workspace: Path, url: str | None = None, token: str | None = None, ope
         pass  # formatting is cosmetic; readiness re-applies it
     profile["mirror"] = {"kind": "google_sheets", "id": sheet_id, "url": sheet_url, "title": title}
     profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    # The state remembers which tabs exist, so the first push does not check again; a tab added by a later
+    # version is created by that version's first push.
+    state_path = _state_path(workspace)
+    state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except (OSError, ValueError):
+        state = {}
+    state_path.write_text(json.dumps({**state, "tabs": list(TABS), "digest": None}, indent=2) + "\n", encoding="utf-8")
     return profile["mirror"]
 
 
@@ -279,6 +290,7 @@ def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
     customers: list[list[Any]] = [HEADERS["Customers"]]
     week: list[list[Any]] = [HEADERS["This week"]]
     cards: list[list[Any]] = [HEADERS["Price cards"]]
+    costs: list[list[Any]] = [HEADERS["Cost sheet"]]
     facts: list[list[Any]] = [HEADERS["Facts"]]
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(days=7)
@@ -314,9 +326,12 @@ def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
             outcome = "sent" if sent is not record or record.get("status") in ("estimate_sent", "appointment_booked", "approved") else _status_words(record)
             delivery = sent.get("estimate_delivery") if isinstance(sent.get("estimate_delivery"), dict) else {}
             stamp = str(delivery.get("sent_at") or sent.get("approval_requested_at") or sent.get("updated_at") or "")
-            cards.append([stamp[:16].replace("T", " "), name, owner_questions.summary_of_piece(sent.get("specification") or spec) if (sent.get("specification") or spec) else piece,
+            card_piece = owner_questions.summary_of_piece(sent.get("specification") or spec) if (sent.get("specification") or spec) else piece
+            cards.append([stamp[:16].replace("T", " "), name, card_piece,
                           f"${price:,.2f}", f"${hard:,.2f}" if hard else "", f"${profit:,.2f}" if profit != "" else "", margin, assumptions[:400], outcome,
                           record.get("estimate_id", "")])
+            for line in cost_lines(sheet, price):
+                costs.append([stamp[:16].replace("T", " "), name, card_piece, *line, outcome, record.get("estimate_id", "")])
         for row in ledger.rows(desk, str(record.get("estimate_id") or "")):
             if row.get("value") is None:
                 continue
@@ -326,7 +341,44 @@ def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
             facts.append([name, field, str(row["value"]), ledger.describe_source(row), str(row.get("at") or "")[:16].replace("T", " "),
                           record.get("estimate_id", "")])
     cards[1:] = sorted(cards[1:], key=lambda r: r[0], reverse=True)
-    return {"Customers": customers, "This week": week, "Price cards": cards, "Facts": facts}
+    costs[1:] = sorted(costs[1:], key=lambda r: (r[0], r[9]), reverse=True)
+    return {"Customers": customers, "This week": week, "Price cards": cards, "Cost sheet": costs, "Facts": facts}
+
+
+def _money(value: Any) -> str:
+    try:
+        return f"${float(value):,.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def cost_lines(sheet: dict[str, Any], price: float) -> list[list[Any]]:
+    """[Line, Item, Quantity, Unit cost, Line total] for every cost line, then the hard cost total and the quote."""
+    out: list[list[Any]] = []
+    for line in sheet.get("metal_lines") or []:
+        if isinstance(line, dict):
+            grams, unit = float(line.get("quantity_grams") or 0), float(line.get("unit_cost") or 0)
+            out.append(["metal", str(line.get("metal") or ""), f"{grams:g} g", f"{_money(unit)}/g", _money(grams * unit)])
+    for line in sheet.get("stone_lines") or []:
+        if isinstance(line, dict):
+            carats, unit = float(line.get("quantity") or 0), float(line.get("unit_cost") or 0)
+            out.append(["stones", str(line.get("stone") or ""), f"{carats:g} ct", f"{_money(unit)}/ct", _money(carats * unit)])
+    for line in sheet.get("labor_lines") or []:
+        if isinstance(line, dict):
+            hours, rate = float(line.get("hours") or 0), float(line.get("rate") or 0)
+            out.append(["labor", str(line.get("task") or ""), f"{hours:g} h", f"{_money(rate)}/h", _money(hours * rate)])
+    for line in sheet.get("other_hard_cost_lines") or []:
+        if isinstance(line, dict):
+            out.append(["fee", str(line.get("label") or ""), "", "", _money(line.get("total_cost"))])
+    hard = sheet.get("hard_cost_total")
+    if hard not in (None, ""):
+        out.append(["hard cost total", "", "", "", _money(hard)])
+        try:
+            markup = f"{float(price) / float(hard):.2f}x" if float(hard) else ""
+        except (TypeError, ValueError):
+            markup = ""
+        out.append(["quote", f"markup {markup}" if markup else "", "", "", _money(price)])
+    return out
 
 
 def _state_path(workspace: Path) -> Path:
@@ -359,7 +411,11 @@ def push(workspace: Path, token: str | None = None, opener: Opener | None = None
     try:
         token = token or gateway_token.load_token()
         sheet_id = str(mirror["id"])
-        # All four tabs in one write, so a Google hiccup never leaves the sheet half new and half old; then one
+        if state.get("tabs") != list(TABS):
+            # A tab added since setup (the cost sheet, 9 September 2026) is created on the existing spreadsheet.
+            ensure_tabs(sheet_id, token, opener)
+            state = {**state, "tabs": list(TABS)}
+        # All the tabs in one write, so a Google hiccup never leaves the sheet half new and half old; then one
         # clear of whatever rows lie below the new content.
         data = [{"range": f"'{name}'!A1", "majorDimension": "ROWS",
                  "values": [[str(c) if c is not None else "" for c in row] for row in rows]} for name, rows in tabs.items()]

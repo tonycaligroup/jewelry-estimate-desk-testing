@@ -456,6 +456,11 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): the spreadsheet's "Cost sheet" tab
+  carries the full breakdown of every price card, one row per cost line
+  (metal by the gram, stones by the carat, labor by the hour, fees), then
+  the hard cost total and the quote with its markup; a tab added after
+  setup is created on the existing spreadsheet at the next push (7).
 - Built 9 September 2026 (unpublished): cards born from one customer email
   travel together. When a booking card and a rendering card (or a price
   card) come from the same message, the first approved holds its email (a

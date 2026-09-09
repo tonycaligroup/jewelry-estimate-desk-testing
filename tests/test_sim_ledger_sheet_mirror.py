@@ -201,6 +201,34 @@ class PassingSheetMirrorBehaviourTests(unittest.TestCase):
             rows = sheet_mirror.rows_for(ws)
             self.assertEqual([r[1] for r in rows["Customers"][1:]], ["pat@example.net"], rows["Customers"])
 
+    def test_the_cost_sheet_lists_every_cost_line_of_every_price_card(self) -> None:
+        """The owner, 9 Sep: the full cost breakdown in the spreadsheet."""
+        import sheet_mirror
+        sheet = {"metal_lines": [{"metal": "18K white gold", "quantity_grams": 9.5, "unit_cost": 65.0}],
+                 "stone_lines": [{"stone": "lab-grown sapphire", "quantity": 5.0, "unit_cost": 300.0}],
+                 "labor_lines": [{"task": "bench labor", "hours": 3.5, "rate": 90.0}],
+                 "other_hard_cost_lines": [{"label": "casting", "total_cost": 120.0}], "hard_cost_total": 2552.5}
+        lines = sheet_mirror.cost_lines(sheet, 5105.0)
+        self.assertEqual(lines[0], ["metal", "18K white gold", "9.5 g", "$65.00/g", "$617.50"])
+        self.assertEqual(lines[1], ["stones", "lab-grown sapphire", "5 ct", "$300.00/ct", "$1,500.00"])
+        self.assertEqual(lines[2], ["labor", "bench labor", "3.5 h", "$90.00/h", "$315.00"])
+        self.assertEqual(lines[3], ["fee", "casting", "", "", "$120.00"])
+        self.assertEqual(lines[4], ["hard cost total", "", "", "", "$2,552.50"])
+        self.assertEqual(lines[5], ["quote", "markup 2.00x", "", "", "$5,105.00"])
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            root = ws / "estimate-desk" / "records"
+            root.mkdir(parents=True)
+            (root / "jed-00000000000000cc.json").write_text(json.dumps({
+                "estimate_id": "jed-00000000000000cc", "status": "estimate_sent", "route": {"recipient": "Pat Doe <pat@example.net>", "thread_id": "t3"},
+                "specification": {"piece_type": "ring"}, "proposed_price": 5105.0, "internal_cost_sheet": sheet}), encoding="utf-8")
+            rows = sheet_mirror.rows_for(ws)
+            self.assertEqual(rows["Cost sheet"][0], sheet_mirror.HEADERS["Cost sheet"])
+            self.assertEqual(len(rows["Cost sheet"]), 7, rows["Cost sheet"])
+            self.assertEqual(rows["Cost sheet"][1][1], "Pat Doe")
+            self.assertEqual({r[3] for r in rows["Cost sheet"][1:]}, {"metal", "stones", "labor", "fee", "hard cost total", "quote"})
+            self.assertTrue(all(r[9] == "jed-00000000000000cc" for r in rows["Cost sheet"][1:]))
+
     def test_a_dormant_record_shows_closed(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             record = {"estimate_id": "jed-dormant00000000000", "status": "dormant",
