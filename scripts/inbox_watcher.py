@@ -122,7 +122,7 @@ TRANSIENT_ATTEMPTS = 6
 DETERMINISTIC_ATTEMPTS = 2
 
 
-TICK_LOG_KEEP = 40
+TICK_LOG_KEEP = 720  # a day of two-minute ticks: enough to answer "did we miss ticks?" the next morning
 
 
 TICK_MARK_FILE = "tick-started.json"
