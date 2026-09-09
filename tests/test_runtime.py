@@ -9039,6 +9039,8 @@ class SlotTests(unittest.TestCase):
         early = [o["label"] for o in offer(["early next week"])["options"]]
         self.assertTrue(early and all(("September 14" in l) or ("September 16" in l) for l in early), early)
         self.assertTrue(offer(["sometime next week"])["options"][0]["label"].startswith("Monday, September 14"))
+        after = [o["label"] for o in offer(["next week", "after 1pm any day next week"])["options"]]
+        self.assertTrue(after and all("PM" in l for l in after), after)
         # Nothing free next week: the nearest days, and the card says why.
         busy = [{"start": "2026-09-14T00:00:00Z", "end": "2026-09-21T00:00:00Z"}]
         fallback = offer(["next week"])
@@ -9065,6 +9067,16 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(slots.requested_period(["Monday the 21"], now)["start"], "2026-09-21")
         self.assertEqual(slots.requested_period(["September 21 afternoon"], now)["start"], "2026-09-21")
         self.assertEqual(slots.requested_period(["afternoons"], now)["half"], "afternoon")
+        # Live 9 Sep: "next week; after 1pm any day next week" was offered 9:00 AM slots.
+        bounded = slots.requested_period(["next week", "after 1pm any day next week"], now)
+        self.assertEqual((bounded["start"], bounded["earliest"]), ("2026-09-14", 13 * 60))
+        self.assertFalse(slots.in_period({"start": "2026-09-14T09:00:00-07:00"}, bounded))
+        self.assertTrue(slots.in_period({"start": "2026-09-14T14:00:00-07:00"}, bounded))
+        self.assertEqual(slots.clock_bounds(["before 3", "after 10am"]), (10 * 60, 15 * 60))
+        self.assertEqual(slots.clock_bounds(["2pm or later"]), (14 * 60, None))
+        self.assertEqual(slots.requested_period(["after 1pm"], now)["earliest"], 13 * 60, "a bound alone spans the offer window")
+        self.assertIsNone(slots.resolve_phrase("after 1pm on Monday", now), "a bound is not a pick of 1pm")
+        self.assertEqual(slots.resolve_phrase("Monday at 1pm", now), "2026-09-14T13:00")
         self.assertTrue(slots.in_period({"start": "2026-09-14T10:00:00-07:00"}, period))
         self.assertFalse(slots.in_period({"start": "2026-09-11T10:00:00-07:00"}, period))
         self.assertFalse(slots.in_period({"start": "2026-09-14T10:00:00-07:00"}, {**period, "half": "afternoon"}))

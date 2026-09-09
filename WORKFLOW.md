@@ -456,6 +456,11 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): a clock bound in the customer's
+  words ("after 1pm any day next week", "before 3", "2pm or later") narrows
+  the offered times inside the days they named; "after 1pm on Monday" is a
+  bound, not a pick of 1pm (6.7). Live: "next week; after 1pm any day next
+  week" was offered 9:00 AM.
 - Built 9 September 2026 (unpublished): the spreadsheet mirror never lists
   a record that triage closed as not an inquiry (vendor, personal, or
   unrelated mail opens a record before it is read), nor a test, a mistake,

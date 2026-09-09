@@ -2489,7 +2489,7 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.execute(ws, world, offer["payload"]["execute"], offer)
             self.assertEqual(len(world.sent), 1)
             # The details and a pick in one reply.
-            pick = offer["payload"]["calendar_availability"][2]
+            pick = offer["payload"]["calendar_availability"][-1]
             world.spec = {**world.spec, "metal": "white gold", "metal_karat": "18k", "metal_color": "white", "stone_origin": "lab-grown",
                           "scheduling_intent": f"{pick['label']} works for me"}
             world.requested = ([pick["label"]], [pick["start"][:16]])
@@ -2532,7 +2532,7 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             estimate_id = self.only_estimate(ws)
             self.assertEqual(self.record(ws, estimate_id)["specification"]["setting_style"], "halo", "the customer's own word")
             # The reply: a time and the last details; the reading hands the setting to the jeweler again.
-            pick = offer["payload"]["calendar_availability"][2]
+            pick = offer["payload"]["calendar_availability"][-1]
             world.spec = {**world.spec, "metal": "white gold", "metal_karat": "18k", "metal_color": "white", "stone_origin": "lab-grown",
                           "setting_style": "jeweler's choice", "scheduling_intent": f"I can come in {pick['label']}"}
             world.requested = ([pick["label"]], [pick["start"][:16]])

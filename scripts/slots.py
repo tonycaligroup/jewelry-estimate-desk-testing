@@ -287,6 +287,44 @@ _CLOCK_FIRST_RE = re.compile(
 )
 
 
+_BOUND_BEFORE_CLOCK_RE = re.compile(r"(?i)\b(?:after|before|from|until|till|past|by|later than|earlier than)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b")
+_AFTER_RE = re.compile(r"(?i)\b(?:after|from|past|later than)\s+(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>am|pm)?\b|"
+                       r"\b(?P<h2>\d{1,2})(?::(?P<m2>\d{2}))?\s*(?P<ap2>am|pm)?\s+or later\b")
+_BEFORE_RE = re.compile(r"(?i)\b(?:before|until|till|no later than|earlier than)\s+(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>am|pm)?\b")
+
+
+def _bound_minutes(hour: int, minute: int, ampm: str) -> int | None:
+    if hour > 23 or minute > 59 or (ampm and hour > 12):
+        return None
+    ampm = (ampm or "").lower()
+    if ampm == "pm" and hour < 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    elif not ampm and 1 <= hour <= 7:
+        hour += 12  # shops keep daytime hours: "after 1" is the afternoon
+    return hour * 60 + minute
+
+
+def clock_bounds(phrases: list[str]) -> tuple[int | None, int | None]:
+    """(earliest, latest) minute of the day the customer's words allow: "after 1pm" -> (780, None), "before 3" -> (None, 900)."""
+    earliest: int | None = None
+    latest: int | None = None
+    for raw in phrases or []:
+        text = str(raw or "")
+        for match in _AFTER_RE.finditer(text):
+            hour = match.group("h") or match.group("h2")
+            minute = match.group("m") or match.group("m2") or "0"
+            value = _bound_minutes(int(hour), int(minute), match.group("ap") or match.group("ap2") or "")
+            if value is not None:
+                earliest = value if earliest is None else max(earliest, value)
+        for match in _BEFORE_RE.finditer(text):
+            value = _bound_minutes(int(match.group("h")), int(match.group("m") or "0"), match.group("ap") or "")
+            if value is not None:
+                latest = value if latest is None else min(latest, value)
+    return earliest, latest
+
+
 def resolve_phrase(text: str, now: datetime) -> str | None:
     """A named day and clock time in the customer's words as YYYY-MM-DDTHH:MM, else None.
 
@@ -299,6 +337,8 @@ def resolve_phrase(text: str, now: datetime) -> str | None:
     match = _PHRASE_RE.search(str(text or "")) or _CLOCK_FIRST_RE.search(str(text or ""))
     if not match:
         return None
+    if _BOUND_BEFORE_CLOCK_RE.search(str(text or "")):
+        return None  # "after 1pm on Monday" is a bound on the day, not a pick of 1pm (live, 9 September 2026)
     hour = int(match.group("hour"))
     minute = int(match.group("minute") or 0)
     ampm = (match.group("ampm") or "").replace(".", "").lower()
@@ -393,11 +433,14 @@ def requested_period(phrases: list[str], now: datetime) -> dict[str, Any] | None
     """
     local = now
     today = local.date()
+    earliest, latest = clock_bounds(list(phrases or []))
+    all_text = " ".join(str(r or "") for r in phrases or [])
+    half_any = _HALF_RE.search(all_text)
     for raw in phrases or []:
         text = str(raw or "").strip().lower()
         if not text or resolve_phrase(text, now):
             continue
-        half_match = _HALF_RE.search(text)
+        half_match = _HALF_RE.search(text) or half_any
         half = half_match.group("half") if half_match else None
         start = end = None
         if re.search(r"\bnext week\b", text):
@@ -441,11 +484,12 @@ def requested_period(phrases: list[str], now: datetime) -> dict[str, Any] | None
                 if ahead == 0 and (day_match.group("next") or "").startswith("next"):
                     ahead = 7
                 start = end = today + timedelta(days=ahead)
-            elif half:
+            elif half or earliest is not None or latest is not None:
                 start, end = today, today + timedelta(days=int(7))
         if start is None:
             continue
-        return {"start": start.isoformat(), "end": end.isoformat(), "half": half, "words": str(raw).strip()[:80]}
+        return {"start": start.isoformat(), "end": end.isoformat(), "half": half, "words": str(raw).strip()[:80],
+                **({"earliest": earliest} if earliest is not None else {}), **({"latest": latest} if latest is not None else {})}
     return None
 
 
@@ -454,6 +498,11 @@ def in_period(slot: dict[str, str], period: dict[str, Any]) -> bool:
     start = datetime.fromisoformat(slot["start"])
     day = start.date().isoformat()
     if not (period["start"] <= day <= period["end"]):
+        return False
+    minute = start.hour * 60 + start.minute
+    if period.get("earliest") is not None and minute < int(period["earliest"]):
+        return False  # "after 1pm any day next week" (live, 9 September 2026: 9:00 AM was offered)
+    if period.get("latest") is not None and minute > int(period["latest"]):
         return False
     half = period.get("half")
     if half == "morning":
