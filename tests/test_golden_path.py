@@ -498,6 +498,9 @@ class World:
             lines = "\n".join(f"- {label}" for label in labels)
             body = (f"{opening} Here are the times I can offer to go over the signet ring design:\n{lines}\n"
                     f"Reply with the one that works, or tell me what does. Nothing is booked yet.\n\n{shop}")
+        elif task.startswith("The customer asked for a price rather than a visit"):
+            body = (f"{opening} Thank you for the details; I am going to work up the estimate myself and get back to you shortly. "
+                    f"If it is easier to talk it through by phone or in person in the meantime, just say so.\n\n{shop}")
         elif task.startswith("Send the attached design renderings"):
             body = (f"{opening} Attached are two renderings of the signet ring with your logo on the face. They "
                     "are for guidance only: they show the direction of the design, and a close rendering is still not "
@@ -516,6 +519,7 @@ class GoldenPathTests(unittest.TestCase):
 
     def profile(self) -> dict:
         profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text(encoding="utf-8"))
+        profile["desk"] = {"mode": "auto"}  # the fake world's flows are the auto ones; concierge tests switch it
         profile["shop"].update({"name": "Kolo Jewelers", "outbound_mailbox": SHOP_MAILBOX,
                                 "address": {"street": "1 Main St", "city": "Oakland", "state": "CA", "zip": "94612"},
                                 "voice": "Warm and plain, short sentences, sign as Kolo Jewelers."})
@@ -1660,7 +1664,7 @@ class OwnStoneAndStallTests(SideBranchTests):
     def _parallel_profile(self, ws: Path, parallel: int, claims: int = 16) -> None:
         profile_path = ws / "estimate-desk" / "shop-profile.json"
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
-        profile["desk"] = {"claims_per_tick": claims, "parallel_claims": parallel}
+        profile.setdefault("desk", {}).update({"claims_per_tick": claims, "parallel_claims": parallel})
         profile_path.write_text(json.dumps(profile), encoding="utf-8")
 
     def test_a_burst_of_six_customers_is_handled_in_one_tick_on_the_pooled_path(self) -> None:
@@ -2699,6 +2703,162 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
                                                                 json.loads(profile_path.read_text(encoding="utf-8")))
             self.assertIn("confirmed separately", fixed)
             self.assertNotIn("set up a time", fixed)
+        self.run_branch(branch)
+
+
+class ConciergeModeTests(SideBranchTests):
+    """The jeweler, 9 Sep: acknowledge, confirm the vision, ask budget and timeframe, book the call; the owner gathers the
+    details; one card carries the price and the renderings; one email carries both."""
+
+    def _concierge(self, ws: Path) -> None:
+        self._profile_with_rates(ws)
+        profile_path = ws / "estimate-desk" / "shop-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile["desk"]["mode"] = "concierge"
+        profile["pricing"]["stones_per_carat"]["lab_grown_sapphire"] = 300.0
+        profile["pricing"]["stones_per_carat"]["lab_grown_diamond_melee"] = 600.0
+        profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+    @staticmethod
+    def _code(text: str) -> str:
+        match = re.search(r"desk-answer ([0-9A-F]{6})", text)
+        assert match, text
+        return match.group(1)
+
+    def test_the_call_first_then_the_owners_details_then_one_card_with_the_renderings(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._concierge(ws)
+            thread = "thread-concierge"
+            world.spec = {"piece_type": "pair of earrings", "stone_type": "sapphire", "stone_carat": 2.5, "stone_carat_basis": "each",
+                          "stone_shape": "round", "center_stone": "yes", "accent_stones": "diamond halo",
+                          "reference_images": "from the photo: cushion halo studs with a diamond halo, round center stones"}
+            world.requested = ([], [])
+            world.customer_message("cm1", thread, "I want the attached earrings but with sapphires, 2.5 ct each. Could you give me an "
+                                   "estimate?\n\nAnthony", subject="Sapphire earrings", attachments=("studs.jpg",))
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            offer = world.cards[-1]
+            self.assertEqual(offer["kind"], "appointment_offer")
+            self.assertEqual(offer["payload"]["ask_for"], ["Do you have a budget in mind, even a rough range?", "Is there a date you would like it by?"],
+                             "budget and timeframe, never the specification")
+            self.assertEqual(offer["payload"]["ask_intro"], pipeline.CONCIERGE_ASK_INTRO)
+            standing = [n for n in world.notices if not n["file"] and "After your call or visit" in n["text"]]
+            self.assertEqual(len(standing), 1, world.notices)
+            code = self._code(standing[0]["text"])
+            self.assertEqual(world.sent, [], "nothing to the customer before the card")
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            body = world.sent[-1]["body"]
+            self.assertIn("Just so I have your vision right: you are after sapphire stud earrings with a diamond halo", body)
+            self.assertIn(pipeline.CONCIERGE_ASK_INTRO, body)
+            self.assertIn("budget", body.lower())
+            self.assertNotIn("karat", body.lower(), "no specification question in concierge mode")
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["concierge"]["offered"], "cm1")
+            # The customer picks a time and gives a budget: the booking card, nothing else.
+            pick = offer["payload"]["calendar_availability"][1]
+            world.spec = {**world.spec, "budget": "around 5000", "scheduling_intent": f"{pick['label']} works for me"}
+            world.requested = ([pick["label"]], [pick["start"][:16]])
+            world.customer_message("cm2", thread, f"{pick['label']} works for me. Budget is around 5000.\n\nAnthony", subject="Re: Sapphire earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking")
+            self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertEqual(len(world.sent), 2)
+            self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards), "no price before the owner's details")
+            # A thanks in between changes nothing.
+            world.spec = {k: v for k, v in world.spec.items() if k != "scheduling_intent"}
+            world.customer_message("cm3", thread, "Great, see you then!\n\nAnthony", subject="Re: Sapphire earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["noted"], summary)
+            self.assertEqual(len(world.sent), 2)
+            # After the visit: the owner's details, in chat.
+            answered = self.answer(ws, f"desk-answer {code} lab grown sapphires, round, 2.5 ct each, 14k white gold, halo")
+            self.assertEqual(answered["decision"], "details_given", answered)
+            self.assertEqual(answered["facts"]["metal_karat"], 14)
+            self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)
+            renders_before = len(world.renders)
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "approval_requested")], summary)
+            self.assertGreater(len(world.renders), renders_before, "the design was rendered")
+            previews = [n for n in world.notices if n["file"]]
+            self.assertEqual(len(previews), 2, "the owner saw both views before the card")
+            self.assertIn("The price card follows", previews[-1]["text"])
+            price_card = world.cards[-1]
+            self.assertTrue(str(price_card["title"]).startswith("Price approval"), price_card["title"])
+            self.assertIn("2 renderings attached", price_card["title"])
+            self.assertIn("view 1 passed", price_card["title"])
+            self.assertEqual(len(world.sent), 2, "one card, nothing sent yet")
+            record = self.record(ws, estimate_id)
+            self.assertEqual(record["status"], "pending_approval")
+            self.assertEqual(len(record["concierge"]["renderings"]), 2)
+            self.assertEqual(record["specification"]["metal_karat"], 14)
+            world.approve(price_card)
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["approvals"][0]["result"]["outcome"], "estimate_sent", summary)
+            estimate_mail = world.sent[-1]
+            self.assertEqual(len(estimate_mail["attachments"]), 2, "the renderings went with the estimate")
+            estimate_prompt = [q for q in world.prompts if "Send the customer their estimate" in q][-1]
+            self.assertIn("renderings attached: 2 views of the design, for guidance only", estimate_prompt)
+            self.assertIn("meeting booked", estimate_prompt)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "estimate_sent")
+        self.run_branch(branch)
+
+    def test_a_customer_who_wants_a_number_gets_one_acknowledgement_and_the_owner_a_nudge(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._concierge(ws)
+            thread = "thread-concierge-number"
+            world.spec = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                          "accent_stones": "small lab-grown diamonds along the shoulders", "stone_type": "diamond", "stone_origin": "lab-grown"}
+            world.requested = ([], [])
+            world.customer_message("cn1", thread, "Could you quote a 14k yellow gold signet ring, size 10, with small lab-grown diamonds "
+                                   "along the shoulders?\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            offer = world.cards[-1]
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            code = self._code([n for n in world.notices if not n["file"] and "After your call or visit" in n["text"]][-1]["text"])
+            world.spec = {**world.spec, "engraving": "our logo", "budget": "under 2000"}
+            world.customer_message("cn2", thread, "I'd rather not come in, could you just send me a price? Budget under 2000, with our logo on the face.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["acknowledged"], summary)
+            self.assertIn("work up the estimate", world.sent[-1]["body"])
+            self.assertNotIn("?", world.sent[-1]["body"].split("\n\n", 1)[1].split("\n\n")[0], "no question in the acknowledgement")
+            nudge = [n for n in world.notices if not n["file"] and "would rather have a number" in n["text"]][-1]["text"]
+            self.assertIn(f"desk-answer {code}", nudge)
+            self.assertIn("Still unknown", nudge)
+            self.assertEqual(self.claim(ws, "cn2")["status"], "processed")
+            # A second push does not send a second acknowledgement.
+            world.customer_message("cn3", thread, "Any update on the price?\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["noted"], summary)
+            self.assertEqual(len(world.sent), 2)
+            # "price it" with a gap: the owner is told what is still missing, nothing is priced.
+            answered = self.answer(ws, f"desk-answer {code} price it")
+            self.assertEqual(answered["decision"], "price_it", answered)
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "details_still_missing")], summary)
+            gap = [n for n in world.notices if not n["file"] and "Still missing" in n["text"]][-1]["text"]
+            self.assertIn("setting style", gap)
+            self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards))
+            # The owner fills the gap; the desk renders and prices.
+            answered = self.answer(ws, f"desk-answer {self._code(gap)} bead set")
+            self.assertEqual(answered["decision"], "details_given", answered)
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "approval_requested")], summary)
+            self.assertTrue(str(world.cards[-1]["title"]).startswith("Price approval"))
+        self.run_branch(branch)
+
+    def test_auto_mode_is_unchanged(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            self.assertEqual(json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))["desk"]["mode"], "auto")
+            world.spec = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k"}
+            world.customer_message("am1", "thread-auto", "Could you quote a 14k yellow gold signet ring?\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertIn("finger size", world.sent[-1]["body"].lower())
         self.run_branch(branch)
 
 

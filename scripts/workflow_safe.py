@@ -251,7 +251,8 @@ def _hand_to_tick(p: dict[str, Path], message_id: str, step: str | None = None, 
         write_private(Path(paths["work_dir"]) / NEXT_STEP_FILE, {"action": step, "estimate_id": estimate_id})
     inbox_claim.mark_inline(p["claim_root"], message_id, token, True)
     inbox_claim.release_lease(p["claim_root"], message_id, token)
-    return {"pipeline": "queued_for_tick", "note": "the next tick " + ({"price_from_record": "prices it", "resend_followup": "asks the customer again"}.get(step or "", "reads and prices it"))}
+    return {"pipeline": "queued_for_tick", "note": "the next tick " + ({"price_from_record": "prices it", "resend_followup": "asks the customer again",
+                                                                          "price_and_render": "renders it and prices it; one card follows"}.get(step or "", "reads and prices it"))}
 
 
 def _answer_same_piece(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
@@ -595,6 +596,20 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
             args.monitor_root, "send-approved-estimate-brief",
             estimate_id=args.estimate_id, brief_id="<Brief ID>",
         )
+        renders = getattr(args, "renderings", None) or []
+        if renders:
+            # Concierge mode: the views the owner just saw go out with the estimate. They are copied beside the
+            # estimate's email (the claim's folder is cleaned when the claim closes) and named on the card.
+            work_dir = estimate_work_dir(args.monitor_root, args.estimate_id, args.message_id)
+            work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            kept = []
+            for item in renders:
+                source = Path(str(item["path"]))
+                target = work_dir / f"rendering-{int(item['slot'])}.png"
+                target.write_bytes(source.read_bytes())
+                kept.append({"slot": int(item["slot"]), "sha256": _sha256_file(target), "checker": str(item.get("checker") or "")[:120]})
+            approval["renderings"] = kept
+            estimate_record.mark_concierge(args.record_root, args.estimate_id, renderings=kept)
         estimate_record.validate_approval_request(
             args.record_root, args.estimate_id, args.message_id, approval
         )
@@ -647,9 +662,13 @@ def _appointment_approval_details(
     monitor_root: Path | None = None,
 ) -> dict[str, Any]:
     if not {"requested_times", "calendar_availability"} <= set(intent) or not set(intent) <= {
-        "requested_times", "resolved_times", "calendar_availability", "availability_note", "mode", "outside_hours", "hours", "ask_for"
+        "requested_times", "resolved_times", "calendar_availability", "availability_note", "mode", "outside_hours", "hours", "ask_for",
+        "ask_intro",
     }:
         raise ValueError("appointment intent contains missing or unsupported fields")
+    if intent.get("ask_intro") is not None and (not isinstance(intent["ask_intro"], str) or not intent["ask_intro"].strip()
+                                                 or len(intent["ask_intro"]) > 200):
+        raise ValueError("ask_intro must be one short sentence")
     ask_for = intent.get("ask_for") or []
     if not isinstance(ask_for, list) or len(ask_for) > 8 or any(
         not isinstance(q, str) or not q.strip() or len(q) > 200 or any(c in q for c in "\r\n") for q in ask_for
@@ -718,6 +737,8 @@ def _appointment_approval_details(
         details["proposed_time"] = dict(normalized_slots[0])
     if ask_for:
         details["ask_for"] = [q.strip() for q in ask_for]  # the questions the approved email also asks
+        if intent.get("ask_intro"):
+            details["ask_intro"] = str(intent["ask_intro"]).strip()  # concierge: budget and timeframe, introduced as such
     if monitor_root is not None:
         common = {"estimate_id": record["estimate_id"], "message_id": message_id, "brief_id": "<Brief ID>"}
         if mode == "book":
@@ -877,7 +898,8 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
     customer_content_guard.validate_approved_price(
         body, approved["owner_approved_price"]
     )
-    payload = _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body))
+    images = [Path(str(i)) for i in (getattr(args, "images", None) or [])]
+    payload = _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body, images or None))
     receipt = gmail_safe.send_reply_claimed(
         args.claim_root,
         message_id,
@@ -1271,6 +1293,9 @@ def review_thread(args: argparse.Namespace) -> dict[str, Any]:
         args.record_root, args.estimate_id, snapshot, profile
     )
     write_private(Path(paths["current_record"]), record)
+    if getattr(args, "quiet", False):
+        # Concierge mode before the owner's details: the review is on the record, nothing else runs yet.
+        return {"outcome": "reviewed", "next": "done", "missing_required_fields": list(snapshot["missing_required_fields"])}
     if post_estimate:
         decision = finalize_post_estimate(
             argparse.Namespace(
@@ -1448,6 +1473,7 @@ def price(args: argparse.Namespace) -> dict[str, Any]:
             approval_request=Path(paths["approval_request"]),
             shop_profile=args.shop_profile,
             record_output=Path(paths["current_record"]),
+            renderings=getattr(args, "renderings", None),
         )
     )
     return {
@@ -1671,6 +1697,102 @@ def ask_out_of_scope(args: argparse.Namespace, note: str) -> dict[str, Any]:
         )
     inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "out_of_scope_question")
     return question
+
+
+def ask_details_needed(p: dict[str, Path], record: dict[str, Any], message_id: str, runner: Any,
+                       still_missing: list[str] | None = None) -> dict[str, Any]:
+    """Concierge mode: the standing question the owner answers after the call or the visit (the jeweler, 9 September 2026).
+
+    Dormant (no reminders: a visit may be a week away), delivered once with
+    its code; the answer prices and renders. Asked again, with what is still
+    missing, when the owner's details left a gap.
+    """
+    root = owner_questions.questions_root(p["monitor_root"])
+    who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "the customer"))
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their piece"
+    gap = ""
+    if still_missing:
+        import pipeline  # local import: pipeline imports this module
+
+        gap = " Still missing: " + "; ".join(pipeline.describe_missing(record.get("specification") or {}, still_missing)) + "."
+    text = (
+        f"After your call or visit with {who} about {piece}, reply here with the piece's details (the stone and origin, its size or "
+        f"carat, the metal and karat, the setting) and I will price it, render it, and file one card.{gap} "
+        "Or say \"price it\" to use what I have, or \"handle myself\"."
+    )
+    suffix = f"#gap{len(still_missing)}" if still_missing else ""
+    created, question = owner_questions.create_decision(
+        root, "details_needed", record["estimate_id"], f"{message_id}{suffix}", text, {"still_missing": list(still_missing or [])},
+        dormant=True,
+    )
+    question = _attach_answer_command(root, p["monitor_root"], question)
+    if created:
+        owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
+    return question
+
+
+def _answer_details_needed(args: argparse.Namespace, p: dict[str, Path], root: Path, question: dict[str, Any],
+                           outcome: str) -> dict[str, Any]:
+    """The owner's details after the visit: the estimate is priced and rendered from them, one card, one email."""
+    message_id = _question_message_id(question)
+    estimate_id = question["estimate_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "details_needed", "decision": outcome}
+    if outcome == "handle_myself":
+        try:
+            estimate_record.retire(p["record_root"], estimate_id, "owner_handles_thread", "the owner handles this thread after the visit")
+        except ValueError:
+            pass
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        result["note"] = "the desk leaves this thread to the owner"
+        return result
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    if record.get("status") != "awaiting_specs":
+        raise ValueError(f"estimate {estimate_id} is {record.get('status')}; the details question is over")
+    if outcome == "details_given":
+        facts = estimate_record.owner_facts_in_words(args.answer, record.get("specification") or {})
+        if not facts:
+            raise ValueError("no details found in the answer; give the stone, its size or carat, the metal and karat, or say \"price it\"")
+        estimate_record.owner_supplies_facts(p["record_root"], estimate_id, facts)
+        try:
+            import ledger  # local import: the ledger never imports this module
+
+            ledger.add_facts(workspace_of(p["monitor_root"]) / "estimate-desk", estimate_id, [
+                {"field": k, "piece": None, "stone": ledger.stone_of(k), "value": v, "source": "owner", "gmail_message_id": message_id,
+                 "span": str(args.answer)[:200]} for k, v in facts.items()])
+        except Exception:  # noqa: BLE001 - the record carries the facts; the ledger catches up on the re-read
+            pass
+        result["facts"] = facts
+    estimate_record.mark_concierge(p["record_root"], estimate_id, details=True, details_answer=str(args.answer)[:200])
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    # The offer's claim finished long ago; it is reopened on purpose and the tick renders and prices the record.
+    inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], 1, allow_processed=True)
+    result.update(_hand_to_tick(p, message_id, "price_and_render", estimate_id))
+    return result
+
+
+def send_acknowledgement(p: dict[str, Path], record: dict[str, Any], message_id: str, body: str, runner: Any) -> dict[str, Any]:
+    """Concierge mode: the one email that says the owner will work up the estimate; journaled, then the claim is complete."""
+    import gateway_token  # local import; only needed when sending
+
+    customer_content_guard.validate_customer_text(body)
+    if customer_content_guard.DOLLAR_AMOUNT_RE.search(body):
+        raise ValueError("the acknowledgement must not mention any dollar amount")
+    work_dir = p["monitor_root"].resolve().parent / "work" / f"acknowledge-{inbox_claim.claim_key(message_id)[:16]}"
+    work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
+    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body))
+    token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+    delivery = gmail_safe.send_reply_claimed(
+        p["claim_root"], message_id, token, f"acknowledged:{record['estimate_id']}:{message_id}",
+        payload_path, response_path, gateway_token.load_token(), runner=runner,
+    )
+    updated = estimate_record.mark_concierge(p["record_root"], record["estimate_id"], acknowledged=message_id,
+                                             acknowledged_provider_message_id=delivery.get("id"))
+    mirror_record(updated, work_dir / "current-record.json")
+    kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
+    return {"outcome": "acknowledged", "provider_message_id": delivery.get("id")}
 
 
 def ask_prior_piece(args: argparse.Namespace, record: dict[str, Any], specification: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2170,6 +2292,8 @@ def answer_decision(
         return result
     if question["kind"] == "prior_piece":
         return _answer_prior_piece(args, p, root, question, outcome)
+    if question["kind"] == "details_needed":
+        return _answer_details_needed(args, p, root, question, outcome)
     if question["kind"] == "unclear_reply" and outcome in {"design_change", "second_piece"}:
         return _answer_design_change(args, workspace, p, root, question, outcome)
     if question["kind"] == "appointment_next":
@@ -2591,15 +2715,21 @@ def _offer_facts(approval: dict[str, Any], piece: str, labels: list[str], shop: 
     asks = [str(q).strip() for q in (approval.get("ask_for") or []) if str(q).strip()]
     if asks:
         # The customer also asked for a price: the same email asks the details the estimate needs (8 September 2026).
+        # In concierge mode the questions are budget and timeframe, introduced as such (the jeweler, 9 September 2026).
         facts["details to ask for the estimate, one bullet each, plain questions"] = asks
         questions = "\n".join(f"- {q}" for q in asks)
         vision = ""
         if understanding:
             facts["their vision from their photo and words, confirm it first in one sentence the way a jeweler would"] = understanding
             vision = pipeline_understanding_line(understanding) + "\n\n"
-        fixed = fixed.replace(f"\n\n{shop}\n", f"\n\n{vision}Since you asked about the price as well, to get the estimate started could "
-                              f"you tell me:\n\n{questions}\n\nIf you are not sure about any of it, say so and I will suggest "
-                              f"what usually looks best.\n\n{shop}\n")
+        intro = str(approval.get("ask_intro") or "").strip()
+        if intro:
+            facts["how to introduce the questions"] = intro
+            lead = f"{intro}\n\n{questions}\n\nIf you are not sure about either, no problem at all; we can work it out when we talk."
+        else:
+            lead = (f"Since you asked about the price as well, to get the estimate started could you tell me:\n\n{questions}\n\n"
+                    "If you are not sure about any of it, say so and I will suggest what usually looks best.")
+        fixed = fixed.replace(f"\n\n{shop}\n", f"\n\n{vision}{lead}\n\n{shop}\n")
     return facts, fixed
 
 
@@ -3077,6 +3207,10 @@ def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any,
         result["brief_report"] = "already reported by the earlier run: " + str(exc)[:120]
 
 
+ACKNOWLEDGE_NOTE = (
+    "Hello,\n\nThank you for the details on {piece}. I am going to work up the estimate myself and get back to you "
+    "shortly. If it is easier to talk it through by phone or in person in the meantime, just say so.\n\n{shop}\n"
+)
 ESTIMATE_CLOSING = (
     "If you would like to move forward, reply here and we will set up a time to go over the design "
     "together.\n\n"
@@ -3148,6 +3282,10 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
         facts["chosen by the jeweler, say if you have a preference"] = ", ".join(chosen)
     if (record.get("prior_piece") or {}).get("on_file"):
         facts["on file"] = "this follows the piece the shop made for them before, with the changes they named; say so in a sentence"
+    renders = (record.get("concierge") or {}).get("renderings") or []
+    if renders:
+        facts["renderings attached"] = f"{len(renders)} view{'s' if len(renders) != 1 else ''} of the design, for guidance only"
+        fixed = fixed.replace("Estimate: $", "Attached are renderings of the design, for guidance only.\n\nEstimate: $", 1)
     booked = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else None
     if booked and booked.get("confirmed_start"):
         facts["meeting booked"] = str(booked["confirmed_start"])[:16].replace("T", " ")
@@ -3199,7 +3337,15 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         body, body_source = _draft_customer_email(p, record, source_message, "estimate", facts, fixed, args)
         prepared.write_text(body, encoding="utf-8")
     write_private(work_dir / "approved.json", approved)
+    images: list[Path] = []
+    for item in (record.get("concierge") or {}).get("renderings") or []:
+        # The very views the owner approved with the price; a changed file is refused, as for a rendering card.
+        image = work_dir / f"rendering-{int(item['slot'])}.png"
+        if not image.is_file() or _sha256_file(image) != item.get("sha256"):
+            raise ValueError("the renderings changed since the owner approved the card; run the doctor before sending")
+        images.append(image)
     sent = send_approved_estimate(argparse.Namespace(
+        images=images,
         claim_root=p["claim_root"], record_root=p["record_root"], estimate_id=args.estimate_id,
         approved=work_dir / "approved.json", body=work_dir / "customer-reply.txt",
         gmail_payload=work_dir / "gmail-send.json", provider_response=work_dir / "gmail-provider-response.json",

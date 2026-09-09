@@ -711,8 +711,12 @@ def record_thread_review(
             if (
                 not post_estimate
                 and record["status"] == "awaiting_specs"
-                and existing.get("outcome") == "specs_complete"
-                and not followup_sent(record, source_message_id)
+                and (
+                    (existing.get("outcome") == "specs_complete" and not followup_sent(record, source_message_id))
+                    # Concierge mode: the owner's details after the visit review the same email again; the
+                    # offer's review is replaced, nothing was priced on it (9 September 2026).
+                    or bool((record.get("concierge") or {}).get("details"))
+                )
             ):
                 # Nothing was sent or priced on the earlier reading; a fresh
                 # reading of the same email (after an owner answer, or a
@@ -1960,6 +1964,39 @@ def owner_supplies_facts(root: Path, estimate_id: str, facts: dict[str, Any]) ->
         return record
 
 
+DESK_MODES = ("concierge", "auto")
+
+
+def desk_mode(profile: dict[str, Any] | None) -> str:
+    """concierge (the default): the desk books the call and the owner gathers the details; auto: the desk asks by email."""
+    mode = str(((profile or {}).get("desk") or {}).get("mode") or "concierge").strip().lower()
+    return mode if mode in DESK_MODES else "concierge"
+
+
+CONCIERGE_QUESTIONS = (
+    ("budget", "do you have a budget in mind, even a rough range?"),
+    ("event_date", "is there a date you would like it by?"),
+)
+
+
+def concierge_questions(specification: dict[str, Any] | None) -> list[str]:
+    """Budget and timeframe, the two things the desk asks before the call (the jeweler, 9 September 2026), unless already given."""
+    spec = specification if isinstance(specification, dict) else {}
+    return [q[0].upper() + q[1:] for key, q in CONCIERGE_QUESTIONS if not _present(spec.get(key))]
+
+
+def mark_concierge(root: Path, estimate_id: str, **info: Any) -> dict[str, Any]:
+    """Remember the concierge steps taken on this estimate (the offer, the standing details question, the owner's details)."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        block = dict(record.get("concierge") or {})
+        block.update(info)
+        record["concierge"] = block
+        write_object(path, record)
+        return record
+
+
 def photo_reading(specification: dict[str, Any] | None) -> str:
     """The desk's reading of the customer's example photo ("from the photo: ..."), else ''."""
     text = str((specification or {}).get("reference_images") or "").strip()
@@ -2910,7 +2947,7 @@ def record_appointment_approval_requested(
     # The owner's card also carries the piece, the proposed time, and a note
     # about availability; they are display fields, not binding ones.
     optional = {"piece", "proposed_time", "availability_note", "execute", "execute_on_reject", "reject_code", "outside_hours", "hours",
-                "ask_for"}  # ask_for: the questions the approved offer email also asks (8 September 2026)
+                "ask_for", "ask_intro"}  # ask_for: the questions the approved offer email also asks (8 September 2026)
     if (
         not isinstance(approval, dict)
         or not required <= set(approval)

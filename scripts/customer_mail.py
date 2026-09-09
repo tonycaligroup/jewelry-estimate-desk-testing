@@ -143,7 +143,9 @@ KIND_BRIEFS = {
         "plainly, for example stone color and clarity) and that they can tell you if they have a preference. Never "
         "say a meeting time is reserved, booked, or confirmed unless the facts name a booked meeting; if they "
         "named a time, say only that you will confirm it separately. If the facts say their visit is being "
-        "confirmed separately, say only that and do not invite them to set up a time. When "
+        "confirmed separately, say only that and do not invite them to set up a time. If the facts say renderings are "
+        "attached, say in one sentence that the attached renderings are for guidance only and show the direction of the "
+        "design. When "
         "the facts say there is more than one piece, name each piece in a sentence and give the one total for all of them."
     ),
     "confirmation": (
@@ -170,10 +172,16 @@ KIND_BRIEFS = {
         "price, a few details from them would get the estimate started (you are asking; never write that they "
         "need anything), ask for each listed detail as a short dash list of plain questions in the customer's "
         "words, one question per detail exactly as listed, and say it is fine not to know; never a technical question. "
+        "If the facts say how to introduce the questions, use that introduction instead of the price wording. "
         "If the facts give their vision, confirm it before those questions in one sentence the way a jeweler speaks to "
         "a client (\"Just so I have your vision right: you are after ...\"), naming the piece, the stones, and the "
         "setting as given, and ask them to say if anything is off. "
         "Nothing is booked yet. No prices."
+    ),
+    "acknowledge": (
+        "The customer asked for a price rather than a visit. Thank them warmly for the details, say you will work up "
+        "the estimate yourself and get back to them shortly, and that you are glad to talk it through by phone or in "
+        "person if they would like. Do not ask any design question. No prices, no dates, nothing promised beyond getting back to them."
     ),
     "rendering": (
         "Send the attached design renderings. Say warmly that the renderings are for guidance only: they show "

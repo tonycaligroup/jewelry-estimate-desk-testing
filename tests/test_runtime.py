@@ -7639,7 +7639,9 @@ class InlinePipelineTests(unittest.TestCase):
         return ws, args, estimate_id
 
     def profile(self) -> dict:
-        return BundledWorkerStepTests("test_thread_digest_decodes_bodies_in_order_and_marks_the_shop").profile()
+        profile = BundledWorkerStepTests("test_thread_digest_decodes_bodies_in_order_and_marks_the_shop").profile()
+        profile["desk"] = {**(profile.get("desk") or {}), "mode": "auto"}  # these tests exercise the auto flows
+        return profile
 
     def intake_result(self, estimate_id: str) -> dict:
         return {"message_id": "inquiry-1", "estimate_id": estimate_id, "next_action": "review_thread",

@@ -60,7 +60,7 @@ version come from the SKILL.md frontmatter (`name:` and `version:`).
   `installed scripts` line must PASS. On 8 September 2026 a pod ran the 4.14.2
   pipeline.py and estimate_record.py under a 4.14.5 SKILL.md for three releases;
   the version line alone proved nothing.
-- Frontmatter version is `4.15.3` on master (the meeting card is filed before the review so a missing rate never skips it; the estimate says the visit is being confirmed separately while that card is pending; a customer-named setting is theirs; one metal question; pair stones in the plural; renderings for guidance only and edited from the example photo with high input fidelity; 49 scripts, manifest checked) (4.13.8 was the pod's republish of 4.13.7 after a stale publishing folder) (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
+- Frontmatter version is `4.15.4` on master (concierge mode by default: the call first, the owner's details in chat, one price card with renderings; the earring style question; times inside the days named; a bare day or a flat day-and-time after an offer; the vision confirmed from a photo; the center stone never an accent; the sender's own name; millimetre sizes; repeat pieces on file; the wider 'I don't know'; 49 scripts, manifest checked) (4.13.8 was the pod's republish of 4.13.7 after a stale publishing folder) (the team listing "jewelry-estimate-desk-testing"). Bump it with every publish.
 - `tests/`, `ARCHITECTURE.md`, `WORKFLOW.md`, `KOLO-SKILL-PLAYBOOK.md`,
   `HANDOFF.md`, and `TESTING-CHANGE-REPORT.md` are not needed on an
   instance; shipping them is harmless.

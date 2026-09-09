@@ -72,6 +72,14 @@ def validate_profile(data: Any) -> dict[str, Any]:
             if views is not None and (isinstance(views, bool) or not isinstance(views, int) or not 1 <= views <= 2):
                 errors.append("rendering.views_per_piece must be 1 or 2 (two views per piece is the default)")
 
+    desk_block = data.get("desk")
+    if desk_block is not None:
+        if not isinstance(desk_block, dict):
+            errors.append("desk must be an object")
+        elif desk_block.get("mode") is not None and desk_block.get("mode") not in ("concierge", "auto"):
+            errors.append("desk.mode must be concierge (the desk books the call, the owner gathers the details) or auto "
+                          "(the desk asks the details by email)")
+
     mirror_block = data.get("mirror")
     if mirror_block is not None:
         if not isinstance(mirror_block, dict):

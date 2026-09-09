@@ -313,10 +313,11 @@ def run_inline_claim(
         summary["inline"].append(held)
         return held
     progress_path = Path(paths["work_dir"]) / pipeline.PROGRESS_FILE
-    if progress_path.exists():
+    if progress_path.exists() and not (Path(paths["work_dir"]) / workflow_safe.NEXT_STEP_FILE).exists():
         # A rendering under way (RELEASE-PLAN-4.12.md follow-up): one more
         # view this tick, no re-reading of the customer, the card when the
-        # last view is done.
+        # last view is done. (A rendering inside an owner's step, concierge
+        # mode, continues through that step below.)
         intake_path = Path(paths["work_dir"]) / "intake-result.json"
         estimate_id = str((workflow_safe.read_object(intake_path) if intake_path.exists() else {}).get("estimate_id") or "")
         if not estimate_id:
@@ -350,6 +351,14 @@ def run_inline_claim(
         elif step == "resend_followup":
             done = pipeline.resend_followup(workspace, base_dir, message_id, estimate_id, model=switch.get("model"),
                                             judge_runner=judge_runner, command_runner=runner, openclaw=openclaw)
+        elif step == "price_and_render":
+            tick_started = summary.get("tick_started")
+            deadline = (tick_started + cron_config.WATCHER_TIMEOUT_SECONDS - TICK_MARGIN_SECONDS) if tick_started else None
+            done = pipeline.price_and_render(workspace, message_id, estimate_id, model=switch.get("model"),
+                                             judge_runner=judge_runner, command_runner=runner, openclaw=openclaw, deadline=deadline)
+            if done.get("outcome") == "rendering_in_progress":
+                # The step file stays: the next tick renders the next view and then prices.
+                return _rendering_continues(p, message_id, claim_token, done, summary, started, calls_before)
         else:
             raise ValueError(f"unknown next step {step!r}")
         step_path.unlink(missing_ok=True)

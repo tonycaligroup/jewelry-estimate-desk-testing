@@ -109,6 +109,24 @@ halts all outbound work immediately until that owner says to resume.
 
 ## 6. The lifecycle, message by message
 
+The desk works in one of two modes, chosen at setup (`desk.mode`), concierge
+by default. In **concierge** mode the desk gets the conversation to a call
+or a visit and the owner gathers the specification: the first email
+acknowledges, confirms the vision from a photo when there is one, asks only
+budget and timeframe, and offers times (one card); a reply that picks a time
+gets the booking card; a reply that pushes for a number gets one
+acknowledgement ("I will work up the estimate and get back to you") and the
+owner a nudge; every other reply is read for facts and left alone. After the
+visit the owner types the details in chat in reply to the desk's standing
+question; the desk renders the design, shows the views, and files one price
+card naming them; approving it sends the estimate with the renderings
+attached, for guidance only. No specification question ever reaches the
+customer in concierge mode, and nothing is priced until the owner says so
+("price it" uses what the desk has). In **auto** mode the desk asks the
+details by email and prices from the replies, as 6.2 to 6.5 describe.
+Everything else (cards, the ledger, the sheet, bookings, renderings on
+request, repeat pieces, "I don't know") is the same in both.
+
 ### 6.1 A new inquiry arrives
 
 **Triage the request.**
@@ -438,6 +456,12 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): concierge mode, the default, as
+  described at the head of section 6 (the jeweler, 9 September 2026). One
+  profile setting (`desk.mode`), the standing details question per
+  estimate, the acknowledgement email, one price card that carries the
+  renderings and one estimate email that attaches them. Auto mode is the
+  behaviour built before this date, unchanged.
 - Built 9 September 2026 (unpublished), the jeweler's rule from the Blue
   Topaz thread: a customer who says the shop made the piece ("an exact
   replica of the pendant you made for me") is never asked about it. The

@@ -146,6 +146,11 @@ def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (price, hard, profit)):
         pct = f" ({profit / price * 100:.0f}%)" if price else ""
         tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}" + _assumptions(review) + _choices(details.get("specification"))
+    renders = details.get("renderings") if isinstance(details.get("renderings"), list) else []
+    if renders:
+        # Concierge mode (the owner, 9 September 2026): the estimate goes out with the renderings the owner just saw.
+        checks = "; ".join(f"view {r.get('slot')} {r.get('checker') or 'rendered'}" for r in renders if isinstance(r, dict))
+        tail += f"; {len(renders)} rendering{'s' if len(renders) != 1 else ''} attached, sent to you just before this card ({checks})"
     head = f"Price approval for {who}: "
     room = TITLE_LIMIT - len(head)
     if len(piece) + len(tail) > room:
