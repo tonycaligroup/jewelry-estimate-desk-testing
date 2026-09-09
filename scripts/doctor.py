@@ -230,6 +230,34 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
     return findings
 
 
+def revive(workspace: Path, estimate_id: str) -> dict[str, Any]:
+    """Bring a dormant estimate back and hand its opening message to the desk again (a "handle myself" said in error).
+
+    The record returns to awaiting_specs, its finished claim is reopened on
+    purpose, and the next tick reads the thread again against the ledger,
+    where the owner's facts stand.
+    """
+    import inbox_monitor
+    import workflow_safe
+
+    desk = workspace / "estimate-desk"
+    record_root = desk / "records"
+    record = estimate_record.revive(record_root, estimate_id, "revived by the doctor")
+    message_id = str((record.get("route") or {}).get("gmail_message_id") or "")
+    p = {"monitor_root": desk / "inbox-monitor", "claim_root": desk / "inbox-claims", "record_root": record_root}
+    claim_file = inbox_claim.claim_path(p["claim_root"], message_id)
+    if claim_file.exists():
+        state = inbox_claim.read_state(claim_file)
+        if state.get("status") == "processed":
+            inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], 1, allow_processed=True)
+            token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+            inbox_claim.mark_inline(p["claim_root"], message_id, token, False)
+            inbox_claim.mark_inline(p["claim_root"], message_id, token, True)
+            inbox_claim.release_lease(p["claim_root"], message_id, token)
+            return {"outcome": "revived", "estimate_id": estimate_id, "message_id": message_id, "how": "record awaiting specs; the next tick reads it again"}
+    return {**requeue(workspace, message_id), "estimate_id": estimate_id, "revived": True}
+
+
 def requeue(workspace: Path, message_id: str, token: str | None = None, opener: Any = None) -> dict[str, Any]:
     """Hand the desk a message again, through the normal path; refuse one it already finished."""
     workspace = workspace.resolve()
@@ -321,11 +349,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--requeue", default=None, help="a Gmail message id to hand the desk again")
+    parser.add_argument("--revive", default=None, help="a dormant estimate id to bring back and read again")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.requeue:
             print(json.dumps(requeue(args.workspace, args.requeue), sort_keys=True))
+            return 0
+        if args.revive:
+            print(json.dumps(revive(args.workspace.resolve(), args.revive), sort_keys=True))
             return 0
         findings = scan(args.workspace)
     except (OSError, ValueError) as exc:

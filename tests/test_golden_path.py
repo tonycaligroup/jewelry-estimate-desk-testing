@@ -2458,6 +2458,34 @@ class OwnerChangesAFactAfterRejectingTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class ReviveTests(SideBranchTests):
+    """Live 9 Sep: a rejected price card was answered with a fact, read as 'handle myself', and the estimate went dormant."""
+
+    def test_a_dormant_estimate_is_revived_and_read_again(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                          "setting_style": "bead set", "accent_stones": "small lab-grown diamonds along the shoulders",
+                          "stone_type": "diamond", "stone_origin": "lab-grown"}
+            world.customer_message("rv1", "thread-revive", "Quote please: 14k yellow gold signet, size 10, small lab-grown diamonds.\n\nPat")
+            self.tick(ws, world)
+            card = world.cards[-1]
+            world.reject(card, "too high")
+            self.tick(ws, world)
+            self.assertEqual(self.answer(ws, "handle myself")["decision"], "handle_myself")
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "dormant")
+            import doctor
+            revived = doctor.revive(ws, estimate_id)
+            self.assertEqual(revived["outcome"], "revived", revived)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "awaiting_specs")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertNotEqual(world.cards[-1]["brief_id"], card["brief_id"], "a fresh card")
+            self.assertEqual(self.record(ws, estimate_id)["status"], "pending_approval")
+        self.run_branch(branch)
+
+
 class PairCaratTests(SideBranchTests):
     """The owner, 9 Sep: a pair's carat is each stone or the total; the price sheet counts two stones when it is each."""
 

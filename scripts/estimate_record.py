@@ -1922,6 +1922,29 @@ def owner_facts_in_words(text: str, specification: dict[str, Any] | None = None)
     return found
 
 
+def revive(root: Path, estimate_id: str, note: str = "") -> dict[str, Any]:
+    """A dormant record comes back to awaiting_specs so the desk can read and price it again (the owner asked)."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") != "dormant":
+            raise ValueError(f"estimate is {record.get('status')}, not dormant; nothing to revive")
+        rejected = record.setdefault("rejected_approval_bindings", [])
+        old_binding = record.get("approval_binding_hash")
+        if isinstance(old_binding, str) and old_binding not in rejected:
+            rejected.append(old_binding)
+        record["revived"] = [*(record.get("revived") or []), {**(record.get("retirement") or {}), "note": str(note or "")[:200],
+                                                               "revived_at": datetime.now(timezone.utc).isoformat()}]
+        record.pop("retirement", None)
+        record.pop("approval_binding_hash", None)
+        record["status"] = "awaiting_specs"
+        record["missing_required_fields"] = []
+        record["revision"] = int(record.get("revision") or 0) + 1
+        write_object(path, record)
+        return record
+
+
 def owner_changes_specification(root: Path, estimate_id: str, changes: dict[str, Any], question_id: str) -> dict[str, Any]:
     """The owner changed a fact after passing on the price: the record reopens for pricing with the owner's facts.
 
