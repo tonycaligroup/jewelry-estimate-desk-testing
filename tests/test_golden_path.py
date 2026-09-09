@@ -2651,8 +2651,10 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             record = self.record(ws, self.only_estimate(ws))
             self.assertEqual(record["specification"]["earring_style"], "stud")
             self.assertEqual(record["specification"]["setting_style"], "halo")
+            self.assertIn("with sapphires", offer["title"], "the halo's diamonds are not the center stone")
             self.execute(ws, world, offer["payload"]["execute"], offer)
             body = world.sent[-1]["body"]
+            self.assertIn("stud earrings with sapphires", body)
             self.assertIn("Just so I have your vision right: you are after sapphire stud earrings with a diamond halo, round sapphires at 2.5 ct each", body)
             self.assertLess(body.index("your vision right"), body.index("Which metal"))
         self.run_branch(branch)

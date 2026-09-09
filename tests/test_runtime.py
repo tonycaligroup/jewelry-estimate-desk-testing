@@ -10350,3 +10350,23 @@ class ConfirmTheVisionTests(unittest.TestCase):
                      "- Which metal would you like?\n\nIt is fine not to know.\n\nLomelino Jewelry")
         self.assertIn("body", check({"body": confirmed}))
         self.assertTrue(judge.words_covered(confirmed, vision))
+
+
+class AccentStonesAreNotTheCenterTests(unittest.TestCase):
+    """9 Sep: with the ledger's key order (accent_stones before stone_type) a sapphire pair with a diamond halo read as diamonds."""
+
+    def test_the_center_stone_ignores_accent_keys_whatever_the_key_order(self) -> None:
+        import cost_components
+        for spec in (
+            {"accent_stones": "diamond halo", "piece_type": "pair of earrings", "stone_type": "sapphire", "stone_carat": 2.5, "stone_origin": "lab-grown"},
+            {"accent_stone_type": "diamond", "accent_stone_origin": "natural", "accent_stone_color": "G", "stone_type": "sapphire", "stone_origin": "lab-grown"},
+            {"reference_images": "from the photo: a diamond halo, stud backs", "notes": "like the diamond ones", "stone_type": "sapphire",
+             "stone_origin": "lab-grown", "center_stone": "yes"},
+        ):
+            with self.subTest(spec=spec):
+                center = cost_components.extract_center_stone(spec)
+                self.assertEqual(center["stone_type"], "sapphire", center)
+                self.assertEqual(center["origin"], ("lab", "grown"), center)
+        summary = owner_questions.summary_of_piece({"accent_stones": "diamond halo", "piece_type": "pair of earrings", "stone_type": "sapphire",
+                                                     "stone_carat": 2.5, "stone_carat_basis": "each", "stone_origin": "lab-grown"})
+        self.assertEqual(summary, "a pair of earrings with lab-grown sapphires, 2.5 ct each")

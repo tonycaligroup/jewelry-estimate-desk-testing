@@ -1,5 +1,5 @@
 {
-  "defect": "stud earrings with a stated 1.5 ct center emerald, 18k white gold, lab-grown, halo stones D VVS1 (with a reference photo) were asked for 'the exact dimensions for the halo and overall size', then for millimetre diameters and a drop length; a customer does not know those, the jeweler works them out; nothing was missing and the right outcome was a price card (since the pair rule of 9 September, the one question left is whether 1.5 ct is each stone or the pair's total)",
+  "defect": "stud earrings with a stated 1.5 ct center emerald, 18k white gold, lab-grown, halo stones D VVS1 (with a reference photo) were asked for 'the exact dimensions for the halo and overall size', then for millimetre diameters and a drop length; a customer does not know those, the jeweler works them out; nothing was missing and the right outcome was a price card (since the pair rule of 9 September, the one question left is whether 1.5 ct is each stone or the pair's total) (9 Sep: this fixture had priced the emeralds as the halo's diamonds; the center stone now ignores accent keys, so the emerald rate is set here)",
   "seen_on": "4.14.6",
   "fixed_in": "4.14.7",
   "text_is": "verbatim",
@@ -10,7 +10,7 @@
         "id": "s1",
         "thread": "new",
         "subject": "Earrings",
-        "text": "I\u2019d like it to look like these with 1.5 ct emeralds. Lab grown if that\u2019s a thing.\n\n18k white gold please.\n\nHalo stones should be lab grown d color, vvs1 or better."
+        "text": "I’d like it to look like these with 1.5 ct emeralds. Lab grown if that’s a thing.\n\n18k white gold please.\n\nHalo stones should be lab grown d color, vvs1 or better."
       },
       "spec": {
         "piece_type": "stud earrings",
@@ -68,5 +68,10 @@
         "missing_required_fields": []
       }
     }
-  ]
+  ],
+  "profile": {
+    "stones_per_carat": {
+      "lab_grown_emerald": 400.0
+    }
+  }
 }

@@ -215,6 +215,11 @@ def extract_center_stone(specification: Any) -> dict[str, Any]:
     for path, value in flat:
         if isinstance(value, bool) or not isinstance(value, (str, int, float)):
             continue
+        if any(word in path for word in ("accent", "melee", "reference", "note", "photo", "scheduling")):
+            # The halo's diamonds, a photo's reading, and a note are not the center stone. The ledger's derived
+            # specification lists keys in name order, so accent_stones came before stone_type and a sapphire
+            # pair priced as diamonds (9 September 2026).
+            continue
         text = str(value).lower()
         tokens = _tokens(text)
         if stone_type is None and ("stone" in path or "gem" in path or any(w in tokens for w in STONE_WORDS)):
