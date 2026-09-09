@@ -1,7 +1,7 @@
 {
   "defect": "stud earrings with a stated 1.5 ct center emerald, 18k white gold, lab-grown, halo stones D VVS1 (with a reference photo) were asked for 'the exact dimensions for the halo and overall size', then for millimetre diameters and a drop length; a customer does not know those, the jeweler works them out; nothing was missing and the right outcome was a price card",
   "seen_on": "4.14.6",
-  "fixed_in": "unpublished after 4.14.6",
+  "fixed_in": "4.14.7",
   "text_is": "verbatim",
   "kind": "golden_path",
   "steps": [

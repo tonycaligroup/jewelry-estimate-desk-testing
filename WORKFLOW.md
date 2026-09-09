@@ -438,7 +438,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.14.6): the desk asks a
+- Built 8 September 2026 (4.14.7): the desk asks a
   customer only what they can answer about what they want, and interprets
   the reference and the description for the rest. A size is required only
   where a customer can name one (a chain or bracelet length, a wrist, a

@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.14.6 (8 September 2026): no technical questions to customers.**
+**4.14.7 (built 8 September 2026): no technical questions to customers.**
 Live, stud earrings with a stated 1.5 ct emerald were asked for "the exact
 dimensions for the halo and overall size", then for millimetre diameters
 and a drop length; "I don't know, this is just a reference" then went to
