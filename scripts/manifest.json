@@ -4,14 +4,14 @@
     "appointment_options.py": "70fe9ea4bcc25f9eedc48cb442c5bbac",
     "approval_guard.py": "1502cc22754bd8f3e87abe560cd6d691",
     "artwork.py": "16c33aa10dd2bc3b39997c471ec74f3f",
-    "brief_registry.py": "81c132f0936ff5b8813055e32302bf06",
+    "brief_registry.py": "9b86561d08a561cc1fe11f2200ef831c",
     "business_state_reset.py": "464187ae198afce7f2e5ff0257cbff0e",
     "calendar_query.py": "fb0fbac384cb45e0406a8ae936510f3e",
     "cli.py": "11dc98d7c9f266c70225fe7110b4d9df",
     "cost_components.py": "e9d7cf1ca389b722b9bce4250c731587",
     "cron_config.py": "2d60a0ef3e06d91030186b9aab52a836",
     "customer_content_guard.py": "d21e5b76a2da0e67e91f806674ade777",
-    "customer_mail.py": "583e268fda06357eb175639daaed5440",
+    "customer_mail.py": "67319ff9cf5b521d8d37d07419d09dbb",
     "customer_state_reset.py": "e58516280744282cb70ca278a5e4b341",
     "doctor.py": "ee93e435e15850b0980547e535398cb1",
     "estimate_record.py": "935cb61fab2c51a9ea84e40ab5981c1e",
@@ -48,7 +48,7 @@
     "spec_gate.py": "ac8ed9b67006fe093be9e64d1f88d509",
     "spot_price.py": "10a3327c317c1f2a970b73e03b562db8",
     "validate_profile.py": "dd294e2d04031e6008d29c60e1cf78bd",
-    "workflow_safe.py": "fafa78e21ea66862be4e6d740c2ff926"
+    "workflow_safe.py": "6d705ef8f810fe76046f1eeda4f81a4e"
   },
   "version": "4.15.4"
 }

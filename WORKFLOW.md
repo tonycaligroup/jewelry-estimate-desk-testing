@@ -456,6 +456,17 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): cards born from one customer email
+  travel together. When a booking card and a rendering card (or a price
+  card) come from the same message, the first approved holds its email (a
+  booking still lands on the calendar at once, so the invitation reaches
+  the customer) and the second sends one email carrying both, whichever
+  order the owner approves them in; a rejected partner releases the held
+  send alone, and so does a partner left undecided for thirty minutes. An
+  offer of times is never part of a pair. Any command that reports a card
+  executed marks the desk's own registry, so a line the session pasted
+  never leaves a partner waiting (6.4, 6.5, 6.6). Live: a confirmation and
+  the renderings from one reply went out as two emails.
 - Built 9 September 2026 (unpublished): a clock bound in the customer's
   words ("after 1pm any day next week", "before 3", "2pm or later") narrows
   the offered times inside the days they named; "after 1pm on Monday" is a

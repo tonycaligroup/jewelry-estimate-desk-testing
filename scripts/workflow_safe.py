@@ -12,7 +12,7 @@ import os
 import secrets
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -155,43 +155,137 @@ def handle_approved_briefs(workspace: Path, runner: Any = subprocess.run) -> lis
 
     p = inbox_watcher.paths_for(workspace)
     handled: list[dict[str, Any]] = []
-    for entry in brief_registry.approved_since_last_poll(p["monitor_root"], runner=runner):
-        kind, estimate_id, message_id, brief_id = entry["kind"], entry["estimate_id"], entry["message_id"], entry["brief_id"]
-        argv: list[str] | None = None
+    approved = brief_registry.approved_since_last_poll(p["monitor_root"], runner=runner)
+    approved_ids = {e["brief_id"] for e in approved}
+    for entry in approved:
+        handled.append(_run_approved_brief(workspace, p, entry, approved_ids))
+    handled.extend(_release_held_briefs(workspace, p))
+    return handled
+
+
+def _brief_argv(workspace: Path, p: dict[str, Path], entry: dict[str, Any]) -> list[str] | None:
+    kind, estimate_id, message_id, brief_id = entry["kind"], entry["estimate_id"], entry["message_id"], entry["brief_id"]
+    if kind == "price":
+        return ["send-approved-estimate-brief", "--workspace", str(workspace), "--estimate-id", estimate_id, "--brief-id", brief_id]
+    if kind == "rendering":
+        return ["send-approved-rendering", "--workspace", str(workspace), "--estimate-id", estimate_id,
+                "--message-id", message_id, "--brief-id", brief_id]
+    if kind == "appointment":
+        approval = read_object(approval_store_path(p["monitor_root"], estimate_id, message_id))
+        command = "book-approved-appointment" if approval.get("action_type") == "appointment_booking" else "send-approved-times"
+        return [command, "--workspace", str(workspace), "--estimate-id", estimate_id, "--message-id", message_id, "--brief-id", brief_id]
+    return None
+
+
+def _bundle_mode(p: dict[str, Path], entry: dict[str, Any], argv: list[str], approved_ids: set[str]) -> tuple[str, dict[str, Any] | None]:
+    """hold, bundle (with the held partner), or send: cards born from one customer email travel together.
+
+    The owner, 9 September 2026: a booking and a rendering approved from
+    one reply went out as two emails. The first approved of a pair holds
+    its email (a booking still lands on the calendar); the second sends one
+    email carrying both. An offer of times is never part of a pair.
+    """
+    if argv[0] == "send-approved-times":
+        return "send", None
+    partners = [s for s in brief_registry.siblings(p["monitor_root"], entry) if not _is_offer_card(p, s)]
+    held = next((s for s in partners if s.get("outcome") == "held"), None)
+    if held is not None:
+        return "bundle", held
+    open_partner = any(
+        s.get("outcome") == "pending" or (s.get("brief_id") in approved_ids and s.get("outcome") != "executed")
+        for s in partners
+    )
+    return ("hold", None) if open_partner else ("send", None)
+
+
+def _is_offer_card(p: dict[str, Path], entry: dict[str, Any]) -> bool:
+    """An offer of times is never part of a pair: its email carries the questions and goes out on its own."""
+    if entry.get("kind") != "appointment":
+        return False
+    try:
+        approval = read_object(approval_store_path(p["monitor_root"], entry["estimate_id"], entry["message_id"]))
+    except (OSError, ValueError):
+        return False
+    return approval.get("action_type") != "appointment_booking"
+
+
+def _run_approved_brief(workspace: Path, p: dict[str, Path], entry: dict[str, Any], approved_ids: set[str]) -> dict[str, Any]:
+    kind, estimate_id, message_id, brief_id = entry["kind"], entry["estimate_id"], entry["message_id"], entry["brief_id"]
+    try:
+        argv = _brief_argv(workspace, p, entry)
+        if argv is None:
+            return {"brief_id": brief_id, "kind": kind, "outcome": "skipped"}
+        mode, partner = _bundle_mode(p, entry, argv, approved_ids)
+        if mode == "hold":
+            argv = argv + (["--hold-email"] if argv[0] == "book-approved-appointment" else ["--hold"])
+        elif mode == "bundle" and partner is not None:
+            argv = argv + ["--with-held", partner["brief_id"]]
+        buffer, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
+            code = main(argv)
+        printed = buffer.getvalue().strip()
+        if code == LEASE_HELD_EXIT:
+            # The session (or a retry) is running this very line now. Its
+            # own run reports the brief or asks the owner; this approval
+            # stays pending and is tried again next tick.
+            brief_registry.mark(p["monitor_root"], brief_id, "pending", "another run in progress",
+                                approved_at=entry.get("approved_at") or datetime.now(timezone.utc).isoformat())
+            return {"brief_id": brief_id, "kind": kind, "estimate_id": estimate_id, "command": argv[0], "outcome": "in_progress"}
+        if code == 0 and mode == "hold":
+            brief_registry.mark(p["monitor_root"], brief_id, "held", "waiting for its partner card from the same email",
+                                held_at=datetime.now(timezone.utc).isoformat())
+            outcome = "held"
+        else:
+            brief_registry.mark(p["monitor_root"], brief_id, "executed" if code == 0 else "failed",
+                                None if code == 0 else errors.getvalue().strip()[:300])
+            outcome = "executed" if code == 0 else "failed"
+        return {"brief_id": brief_id, "kind": kind, "estimate_id": estimate_id, "command": argv[0], "outcome": outcome,
+                **({"bundled_with": partner["brief_id"]} if partner else {}),
+                **({"result": json.loads(printed)} if code == 0 and printed.startswith("{") else {}),
+                **({"error": errors.getvalue().strip()[-300:]} if code != 0 else {})}
+    except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        return {"brief_id": brief_id, "kind": kind, "error": str(exc)[:160]}
+
+
+def _release_held_briefs(workspace: Path, p: dict[str, Path]) -> list[dict[str, Any]]:
+    """A held send goes alone when its partner was rejected, or when the partner is still undecided after HOLD_MINUTES."""
+    handled: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    for entry in brief_registry.load_all(p["monitor_root"]):
+        if entry.get("outcome") != "held":
+            continue
+        partners = [s for s in brief_registry.siblings(p["monitor_root"], entry) if not _is_offer_card(p, s)]
+        rejected = any(s.get("outcome") == "rejected" for s in partners)
+        undecided = any(s.get("outcome") in ("pending", "failed") for s in partners)  # a failed partner is retried or asked about
         try:
-            if kind == "price":
-                argv = ["send-approved-estimate-brief", "--workspace", str(workspace), "--estimate-id", estimate_id,
-                        "--brief-id", brief_id]
-            elif kind == "rendering":
-                argv = ["send-approved-rendering", "--workspace", str(workspace), "--estimate-id", estimate_id,
-                        "--message-id", message_id, "--brief-id", brief_id]
-            elif kind == "appointment":
-                approval = read_object(approval_store_path(p["monitor_root"], estimate_id, message_id))
-                command = "book-approved-appointment" if approval.get("action_type") == "appointment_booking" else "send-approved-times"
-                argv = [command, "--workspace", str(workspace), "--estimate-id", estimate_id,
-                        "--message-id", message_id, "--brief-id", brief_id]
+            held_at = datetime.fromisoformat(str(entry.get("held_at") or entry.get("decided_at") or now.isoformat()))
+        except ValueError:
+            held_at = now
+        if held_at.tzinfo is None:
+            held_at = held_at.replace(tzinfo=timezone.utc)
+        stale = (now - held_at) >= timedelta(minutes=brief_registry.HOLD_MINUTES)
+        if not (rejected or (undecided and stale) or not partners):
+            continue
+        why = "its partner card was rejected" if rejected else "its partner card stayed undecided" if undecided else "no partner card left"
+        try:
+            argv = _brief_argv(workspace, p, entry)
             if argv is None:
                 continue
+            argv = argv + ["--released"]
             buffer, errors = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
                 code = main(argv)
             printed = buffer.getvalue().strip()
             if code == LEASE_HELD_EXIT:
-                # The session (or a retry) is running this very line now. Its
-                # own run reports the brief or asks the owner; this approval
-                # stays pending and is tried again next tick.
-                brief_registry.mark(p["monitor_root"], brief_id, "pending", "another run in progress",
-                                    approved_at=entry.get("approved_at") or datetime.now(timezone.utc).isoformat())
-                handled.append({"brief_id": brief_id, "kind": kind, "estimate_id": estimate_id, "command": argv[0],
-                                "outcome": "in_progress"})
                 continue
-            brief_registry.mark(p["monitor_root"], brief_id, "executed" if code == 0 else "failed",
-                                None if code == 0 else errors.getvalue().strip()[:300])
-            handled.append({"brief_id": brief_id, "kind": kind, "estimate_id": estimate_id, "command": argv[0],
-                            "outcome": "executed" if code == 0 else "failed",
-                            **({"result": json.loads(printed)} if code == 0 and printed.startswith("{") else {})})
+            brief_registry.mark(p["monitor_root"], entry["brief_id"], "executed" if code == 0 else "failed",
+                                f"sent alone: {why}" if code == 0 else errors.getvalue().strip()[:300])
+            handled.append({"brief_id": entry["brief_id"], "kind": entry["kind"], "estimate_id": entry["estimate_id"], "command": argv[0],
+                            "outcome": "executed" if code == 0 else "failed", "released": why,
+                            **({"result": json.loads(printed)} if code == 0 and printed.startswith("{") else {}),
+                            **({"error": errors.getvalue().strip()[-300:]} if code != 0 else {})})
         except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-            handled.append({"brief_id": brief_id, "kind": kind, "error": str(exc)[:160]})
+            handled.append({"brief_id": entry["brief_id"], "kind": entry["kind"], "error": str(exc)[:160]})
     return handled
 
 
@@ -2489,25 +2583,49 @@ def _send_approved_rendering(args: argparse.Namespace, p: dict[str, Path], paths
     if len(images) != len(expected) or any(_sha256_file(img) != expected.get(i) for i, img in enumerate(images, start=1)):
         raise ValueError("rendering images changed since the owner approved them")
     body = Path(paths["customer_reply"])
-    if body.exists() and body.read_text(encoding="utf-8").strip():
+    shop_now = (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"
+    held = _read_held(p, "rendering", args.estimate_id, args.message_id)
+    if held and held.get("body"):
+        body.write_text(str(held["body"]), encoding="utf-8")
+        body_source = "held"
+    elif body.exists() and body.read_text(encoding="utf-8").strip():
         body_source = "prepared"
     else:
         record_now = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
-        shop_now = (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"
         text, body_source = _draft_customer_email(
             p, record_now, args.message_id, "rendering",
             {"piece": approval.get("piece") or "the piece", "shop name": shop_now},
             RENDERING_NOTE.format(piece=approval.get("piece") or "the piece", shop=shop_now), args,
         )
         body.write_text(text, encoding="utf-8")
+    if getattr(args, "hold", False):
+        # The booking (or the price) from the same email is still open: the pictures wait for it (the owner, 9 September 2026).
+        _hold_email(p, "rendering", args.estimate_id, args.message_id, body.read_text(encoding="utf-8"))
+        token = inbox_claim.authoritative_claim_token(p["claim_root"], args.message_id)
+        inbox_monitor.park_item(p["monitor_root"], args.message_id, p["claim_root"], token, "rendering_approval")
+        result = {"outcome": "rendering_held", "images": len(images), "email": body_source,
+                  "note": "the renderings go out with the other card's email"}
+        _report_brief(args, result, runner)
+        return result
+    partner = _partner_entry(p, args)
+    if partner is not None:
+        merged, _extra = _bundle_with_partner(p, partner, "rendering", body.read_text(encoding="utf-8"), shop_now)
+        body.write_text(merged, encoding="utf-8")
+    body_text = body.read_text(encoding="utf-8")  # the send closes the claim and cleans its folder
     record = send_rendering(argparse.Namespace(
         monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
         message_id=args.message_id, estimate_id=args.estimate_id, body=body, images=images,
         gmail_payload=Path(paths["gmail_payload"]), provider_response=Path(paths["gmail_provider_response"]),
         record_output=Path(paths["current_record"]), approved_rendering=approval,
     ))
-    result = {"outcome": "rendering_sent", "images": len(images), "record_status": record.get("status"), "email": body_source}
-    _report_brief(args, result, runner)
+    if partner is not None:
+        delivery = next((d for d in reversed(record.get("rendering_deliveries") or []) if isinstance(d, dict)
+                         and d.get("source_message_id_sha256") == estimate_record.sha256_text(args.message_id)), {})
+        receipt = {"id": delivery.get("provider_message_id"), "threadId": delivery.get("thread_id")}
+        record = _record_partner_delivery(p, partner, body_text, images, receipt, runner)
+    result = {"outcome": "rendering_sent", "images": len(images), "record_status": record.get("status"), "email": body_source,
+              **({"bundled_with": partner["kind"]} if partner else {})}
+    _report_brief(args, result, runner, repeat=bool(getattr(args, "released", False)))
     return result
 
 
@@ -2522,6 +2640,132 @@ CONFIRMATION_NOTE = (
     "please accept it so it lands on your calendar.\n\nWe will go over the design for {piece} together. "
     "If the time stops working for you, reply here and we will find another.\n\n{shop}\n"
 )
+
+
+HELD_EMAIL_FILE = "held-email.json"
+
+
+def _booking_work_dir(p: dict[str, Path], message_id: str) -> Path:
+    return p["monitor_root"].resolve().parent / "work" / f"booking-{inbox_claim.claim_key(message_id)[:16]}"
+
+
+def _claim_work_dir(p: dict[str, Path], message_id: str) -> Path:
+    """The claim's work folder without touching the claim (a parked claim keeps it)."""
+    return p["monitor_root"].resolve().parent / "work" / inbox_monitor.message_key(message_id)
+
+
+def _held_email_path(p: dict[str, Path], kind: str, estimate_id: str, message_id: str) -> Path:
+    """Where a held send keeps its email until its partner card is decided (the owner, 9 September 2026)."""
+    if kind == "appointment":
+        return _booking_work_dir(p, message_id) / HELD_EMAIL_FILE
+    if kind == "rendering":
+        return _claim_work_dir(p, message_id) / HELD_EMAIL_FILE
+    if kind == "price":
+        return estimate_work_dir(p["monitor_root"], estimate_id, message_id) / HELD_EMAIL_FILE
+    raise ValueError("unsupported held kind")
+
+
+def _hold_email(p: dict[str, Path], kind: str, estimate_id: str, message_id: str, body: str, **extra: Any) -> Path:
+    path = _held_email_path(p, kind, estimate_id, message_id)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    write_private(path, {"kind": kind, "estimate_id": estimate_id, "message_id": message_id, "body": body,
+                         "held_at": datetime.now(timezone.utc).isoformat(), **extra})
+    return path
+
+
+def _read_held(p: dict[str, Path], kind: str, estimate_id: str, message_id: str) -> dict[str, Any] | None:
+    path = _held_email_path(p, kind, estimate_id, message_id)
+    if not path.exists():
+        return None
+    try:
+        return read_object(path)
+    except (OSError, ValueError):
+        return None
+
+
+def _partner_entry(p: dict[str, Path], args: argparse.Namespace) -> dict[str, Any] | None:
+    """The held partner card named by --with-held, from the registry."""
+    partner_id = getattr(args, "with_held", None)
+    if not partner_id:
+        return None
+    entry = brief_registry.load(p["monitor_root"], partner_id)
+    if entry is None:
+        raise ValueError(f"no card {partner_id} on file to bundle with")
+    if entry.get("outcome") != "held":
+        raise ValueError(f"card {partner_id} is {entry.get('outcome')}, not held")
+    return entry
+
+
+def _held_rendering_images(p: dict[str, Path], message_id: str) -> list[Path]:
+    """The very images on the held rendering card, verified against its approval."""
+    work_dir = _claim_work_dir(p, message_id)
+    approval = read_object(work_dir / "rendering-approval.json")
+    images = [work_dir / f"rendering-{slot}.png" for slot in range(1, 5) if (work_dir / f"rendering-{slot}.png").exists()]
+    expected = {item["slot"]: item["sha256"] for item in approval.get("images", [])}
+    if len(images) != len(expected) or any(_sha256_file(img) != expected.get(i) for i, img in enumerate(images, start=1)):
+        raise ValueError("rendering images changed since the owner approved them")
+    return images
+
+
+def _record_partner_delivery(p: dict[str, Path], partner: dict[str, Any], body: str, images: list[Path],
+                             delivery: dict[str, Any], runner: Any) -> dict[str, Any]:
+    """After a bundled send, the held partner's own effect goes on the record as if it had sent the email."""
+    kind, estimate_id, message_id = partner["kind"], partner["estimate_id"], partner["message_id"]
+    if kind == "rendering":
+        record = estimate_record.record_rendering_sent(p["record_root"], estimate_id, message_id, body, images, delivery)
+        if _claim_parked(p, message_id):
+            _resume_parked_claim(p, message_id)
+        finish_processed(p["monitor_root"], p["claim_root"], p["record_root"], message_id)
+        outcome = {"outcome": "rendering_sent", "images": len(images), "bundled": True}
+    elif kind == "price":
+        work_dir = estimate_work_dir(p["monitor_root"], estimate_id, message_id)
+        approved = read_object(work_dir / "approved.json")
+        current = estimate_record.current_approval_state(p["record_root"], estimate_id)
+        valid, errors = approval_guard.verify_execution(approved, current)
+        if not valid:
+            raise ValueError("approval verification failed: " + "; ".join(errors))
+        record = estimate_record.record_estimate_sent(p["record_root"], estimate_id, message_id, approved, current, delivery)
+        outcome = {"outcome": "estimate_sent", "price": approved.get("owner_approved_price"), "bundled": True}
+    elif kind == "appointment":
+        held = _read_held(p, "appointment", estimate_id, message_id) or {}
+        chosen = held.get("chosen") or {}
+        record = estimate_record.record_appointment_booked(p["record_root"], estimate_id, {
+            "estimate_id": estimate_id, "source_message_id": message_id, "calendar_event_id": held.get("event_id"),
+            "confirmed_start": chosen.get("start"), "confirmed_end": chosen.get("end"),
+            "confirmation_message_id": delivery["id"], "confirmation_thread_id": delivery["threadId"],
+        })
+        _supersede_reject_question(p, estimate_id, message_id, "the card was approved and the time booked")
+        outcome = {"outcome": "appointment_booked", "confirmed_start": chosen.get("start"), "bundled": True}
+    else:
+        raise ValueError("unsupported partner kind")
+    brief_registry.mark(p["monitor_root"], partner["brief_id"], "executed", "sent in one email with its partner card")
+    _report_brief(argparse.Namespace(brief_id=partner["brief_id"]), outcome, runner, repeat=True)  # reported once when held
+    return record
+
+
+def _bundle_with_partner(p: dict[str, Path], partner: dict[str, Any], own_kind: str, own_body: str, shop: str) -> tuple[str, list[Path]]:
+    """The one email: the confirmation first, the pictures or the price after it; the partner's images ride along."""
+    held = _read_held(p, partner["kind"], partner["estimate_id"], partner["message_id"])
+    if held is None:
+        raise ValueError(f"card {partner['brief_id']} is held but its email is missing; run the doctor")
+    partner_body = str(held.get("body") or "")
+    if partner["kind"] == "appointment":
+        body = customer_mail.merge_bodies(partner_body, own_body, shop)
+    elif own_kind == "appointment":
+        body = customer_mail.merge_bodies(own_body, partner_body, shop)
+    else:
+        body = customer_mail.merge_bodies(partner_body, own_body, shop)
+    images: list[Path] = []
+    if partner["kind"] == "rendering":
+        images = _held_rendering_images(p, partner["message_id"])
+    elif partner["kind"] == "price":
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], partner["estimate_id"]))
+        work_dir = estimate_work_dir(p["monitor_root"], partner["estimate_id"], partner["message_id"])
+        for item in (record.get("concierge") or {}).get("renderings") or []:
+            image = work_dir / f"rendering-{int(item['slot'])}.png"
+            if image.is_file() and _sha256_file(image) == item.get("sha256"):
+                images.append(image)
+    return body, images
 
 
 def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
@@ -2636,9 +2880,24 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
                if record.get("status") == "awaiting_specs" else {}),
             **_inventory_fact(record),
         }, fixed, args)
+    held = _read_held(p, "appointment", args.estimate_id, args.message_id)
+    if held and held.get("body") and held.get("chosen", {}).get("start") == chosen["start"]:
+        body, body_source = str(held["body"]), "held"  # the email drafted when the time was booked and the send held
+    if getattr(args, "hold_email", False):
+        # The partner card (a rendering, a price) from the same email is still open: the time is on the calendar,
+        # the confirmation waits so both go out as one email (the owner, 9 September 2026).
+        _hold_email(p, "appointment", args.estimate_id, args.message_id, body, chosen=chosen, event_id=event["id"], kind_of_email=kind)
+        result = {"outcome": "appointment_booked_email_held", "confirmed_start": chosen["start"], "calendar_event_id": event["id"],
+                  "email": body_source, "note": "the time is on your calendar; the confirmation goes out with the other card's email"}
+        _report_brief(args, result, runner)
+        return result
+    partner = _partner_entry(p, args)
+    images: list[Path] = []
+    if partner is not None:
+        body, images = _bundle_with_partner(p, partner, "appointment", body, shop)
     customer_content_guard.validate_customer_text(body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
-    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body))
+    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body, images or None))
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], args.message_id, None,
         f"appointment_confirmation:{args.estimate_id}:{args.message_id}",
@@ -2655,13 +2914,16 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     })
     mirror_record(booked, work_dir / "current-record.json")
     _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the time booked")
+    if partner is not None:
+        booked = _record_partner_delivery(p, partner, body, images, delivery, runner)
+        mirror_record(booked, work_dir / "current-record.json")
     result = {"outcome": "appointment_rescheduled" if existing else "appointment_booked",
               "confirmed_start": chosen["start"], "calendar_event_id": event["id"], "record_status": booked.get("status"),
-              "email": body_source}
+              "email": body_source, **({"bundled_with": partner["kind"]} if partner else {})}
     if existing:
         result["previous_start"] = existing.get("confirmed_start")
         result["previous_event_cancelled"] = bool(cancelled_old)
-    _report_brief(args, result, runner)
+    _report_brief(args, result, runner, repeat=bool(getattr(args, "released", False)))
     return result
 
 
@@ -3199,6 +3461,19 @@ def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any,
     # Said in the output itself, because the main session keeps running update-brief after the line and
     # reporting the refusal as a fault (9 September 2026).
     result["brief_reported"] = f"this command reported brief {brief_id} as executed; run nothing else, in particular no kolo update-brief"
+    workspace = getattr(args, "workspace", None)
+    if workspace is not None:
+        # The registry learns of it too, whoever ran the line (the tick or a pasted command), so a partner card
+        # from the same email is never held waiting for a send that already happened.
+        try:
+            import inbox_watcher  # local import: inbox_watcher imports this module
+
+            monitor_root = inbox_watcher.paths_for(Path(workspace).resolve())["monitor_root"]
+            entry = brief_registry.load(monitor_root, brief_id)
+            if entry is not None and entry.get("outcome") == "pending":
+                brief_registry.mark(monitor_root, brief_id, "executed", "reported by the command that ran the line")
+        except (OSError, ValueError):
+            pass
     try:
         kolo_safe.run_command(kolo_safe.build_update_brief(brief_id, "executed", result), runner=runner)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
@@ -3337,6 +3612,22 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         body, body_source = _draft_customer_email(p, record, source_message, "estimate", facts, fixed, args)
         prepared.write_text(body, encoding="utf-8")
     write_private(work_dir / "approved.json", approved)
+    held = _read_held(p, "price", args.estimate_id, source_message)
+    if held and held.get("body"):
+        body, body_source = str(held["body"]), "held"
+        prepared.write_text(body, encoding="utf-8")
+    if getattr(args, "hold", False):
+        # The booking from the same email is still open: the estimate waits for it (the owner, 9 September 2026).
+        _hold_email(p, "price", args.estimate_id, source_message, body)
+        result = {"outcome": "estimate_held", "price": price, "email": body_source,
+                  "note": "the estimate goes out with the booking's confirmation in one email"}
+        _report_brief(args, result, runner)
+        return result
+    partner = _partner_entry(p, args)
+    if partner is not None:
+        shop_now = (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"
+        body, _extra = _bundle_with_partner(p, partner, "price", body, shop_now)
+        prepared.write_text(body, encoding="utf-8")
     images: list[Path] = []
     for item in (record.get("concierge") or {}).get("renderings") or []:
         # The very views the owner approved with the price; a changed file is refused, as for a rendering card.
@@ -3351,8 +3642,13 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         gmail_payload=work_dir / "gmail-send.json", provider_response=work_dir / "gmail-provider-response.json",
         record_output=work_dir / "current-record.json", message_id=None, current_state=None,
     ))
-    result = {"outcome": "estimate_sent", "price": price, "record_status": sent.get("status"), "email": body_source}
-    _report_brief(args, result, runner)
+    if partner is not None:
+        delivery = sent.get("estimate_delivery") if isinstance(sent.get("estimate_delivery"), dict) else {}
+        receipt = {"id": delivery.get("provider_message_id"), "threadId": delivery.get("thread_id")}
+        sent = _record_partner_delivery(p, partner, body, images, receipt, runner)
+    result = {"outcome": "estimate_sent", "price": price, "record_status": sent.get("status"), "email": body_source,
+              **({"bundled_with": partner["kind"]} if partner else {})}
+    _report_brief(args, result, runner, repeat=bool(getattr(args, "released", False)))
     return result
 
 
@@ -3568,6 +3864,9 @@ def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
     render_ok.add_argument("--estimate-id", required=True)
     render_ok.add_argument("--message-id", required=True)
     render_ok.add_argument("--brief-id", default=None)
+    render_ok.add_argument("--hold", action="store_true", help="keep the pictures for one email with the partner card from the same message")
+    render_ok.add_argument("--with-held", default=None, help="the held partner card's brief id: one email carries both")
+    render_ok.add_argument("--released", action="store_true", help="a held send going alone: its card was reported when held")
     book = sub.add_parser("book-approved-appointment")
     book.add_argument("--workspace", type=Path, required=True)
     book.add_argument("--estimate-id", required=True)
@@ -3575,6 +3874,9 @@ def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
     book.add_argument("--brief-id", default=None)
     book.add_argument("--option", type=int, default=1)
     book.add_argument("--start", default=None)
+    book.add_argument("--hold-email", action="store_true", help="book the time, keep the confirmation for one email with the partner card")
+    book.add_argument("--with-held", default=None, help="the held partner card's brief id: one email carries both")
+    book.add_argument("--released", action="store_true", help="a held send going alone: its card was reported when held")
     offer = sub.add_parser("send-approved-times")
     offer.add_argument("--workspace", type=Path, required=True)
     offer.add_argument("--estimate-id", required=True)
@@ -3590,6 +3892,9 @@ def main(argv: list[str] | None = None, _retry_of: str | None = None) -> int:
     send_brief.add_argument("--estimate-id", required=True)
     send_brief.add_argument("--brief-id", default=None)
     send_brief.add_argument("--approved-price", type=float, default=None)
+    send_brief.add_argument("--hold", action="store_true", help="keep the estimate for one email with the booking from the same message")
+    send_brief.add_argument("--with-held", default=None, help="the held partner card's brief id: one email carries both")
+    send_brief.add_argument("--released", action="store_true", help="a held send going alone: its card was reported when held")
     render_no = sub.add_parser("reject-rendering")
     render_no.add_argument("--workspace", type=Path, required=True)
     render_no.add_argument("--message-id", required=True)

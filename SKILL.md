@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.4
+version: 4.15.5
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -263,6 +263,11 @@ When a customer mentions an estimate, a price, or a cost, the desk pursues it
 even when they also ask to come in: the appointment card carries the questions
 the estimate needs, and the one email your approval sends offers the times and
 asks them. Nothing reaches the customer before the approval.
+
+Two cards born from one customer email (a booking and a rendering, a booking
+and a price) send one email: the first approved waits for the second,
+whichever order the owner approves them in; a rejected or forgotten partner
+releases the held send alone after thirty minutes.
 
 An optional spreadsheet mirror, off until set up, shows every customer, the
 week's meetings, every price card, and every fact with its source, rewritten

@@ -21,6 +21,25 @@ from typing import Any, Callable
 import kolo_safe
 
 KINDS = {"price", "rendering", "appointment"}
+# Cards born from one customer email whose sends travel together (the owner, 9 September 2026).
+BUNDLE_KINDS = {"price", "rendering", "appointment"}
+HOLD_MINUTES = 30  # a held send waits this long for its partner card, then goes alone
+
+
+def load(monitor_root: Path, brief_id: str) -> dict[str, Any] | None:
+    path = root_for(monitor_root) / f"{brief_id}.json"
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return entry if isinstance(entry, dict) and entry.get("brief_id") else None
+
+
+def siblings(monitor_root: Path, entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """The other cards filed from the same customer message on the same estimate."""
+    return [e for e in load_all(monitor_root)
+            if e.get("brief_id") != entry.get("brief_id") and e.get("estimate_id") == entry.get("estimate_id")
+            and e.get("message_id") == entry.get("message_id") and e.get("kind") in BUNDLE_KINDS]
 
 
 def root_for(monitor_root: Path) -> Path:

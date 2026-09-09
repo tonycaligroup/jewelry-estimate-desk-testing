@@ -3116,6 +3116,114 @@ class CombinedIntentTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class BundledSendsTests(CombinedIntentTests):
+    """The owner, 9 Sep: a booking and a rendering approved from one reply went out as two emails; they travel together now."""
+
+    def _registry(self, ws: Path, brief_id: str) -> dict:
+        return json.loads((ws / "estimate-desk" / "briefs" / f"{brief_id}.json").read_text(encoding="utf-8"))
+
+    def test_rendering_approved_first_waits_for_the_booking_and_one_email_goes_out(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, render, wanted = self._both_cards(ws, world)
+            sent_before = len(world.sent)
+            world.approve(render)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["held"], summary["approvals"])
+            self.assertEqual(len(world.sent), sent_before, "nothing goes out while the booking card is open")
+            self.assertEqual(len(world.calendar_events), 0)
+            self.assertEqual(self._registry(ws, render["brief_id"])["outcome"], "held")
+            self.assertIn((render["brief_id"], "executed"), world.updates, "the card is reported; the email waits")
+            world.approve(book)
+            summary = self.tick(ws, world)
+            done = [a for a in summary["approvals"] if a.get("brief_id") == book["brief_id"]]
+            self.assertEqual(done[0]["outcome"], "executed", summary["approvals"])
+            self.assertEqual(done[0]["bundled_with"], render["brief_id"])
+            self.assertEqual(len(world.sent), sent_before + 1, "one email for both cards")
+            mail = world.sent[-1]
+            self.assertEqual(len(mail["attachments"]), 2)
+            self.assertIn(book["payload"]["calendar_availability"][0]["label"], mail["body"])
+            self.assertIn("renderings", mail["body"].lower())
+            self.assertEqual(mail["body"].count("Kolo Jewelers"), 1, "one sign-off")
+            self.assertEqual(len(world.calendar_events), 1)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["appointment_booked"]["confirmation_message_id"], mail["id"])
+            self.assertEqual(record["rendering_deliveries"][-1]["provider_message_id"], mail["id"])
+            self.assertEqual(self._registry(ws, render["brief_id"])["outcome"], "executed")
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_booking_approved_first_lands_on_the_calendar_and_its_email_waits_for_the_rendering(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, render, wanted = self._both_cards(ws, world)
+            sent_before = len(world.sent)
+            world.approve(book)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["held"], summary["approvals"])
+            self.assertEqual(len(world.calendar_events), 1, "the time is on the calendar at once")
+            self.assertEqual(len(world.sent), sent_before, "the confirmation waits")
+            self.assertIsNone(self.record(ws, self.only_estimate(ws)).get("appointment_booked"), "recorded when the email goes")
+            world.approve(render)
+            summary = self.tick(ws, world)
+            done = [a for a in summary["approvals"] if a.get("brief_id") == render["brief_id"]]
+            self.assertEqual((done[0]["outcome"], done[0]["bundled_with"]), ("executed", book["brief_id"]), summary["approvals"])
+            self.assertEqual(len(world.sent), sent_before + 1)
+            mail = world.sent[-1]
+            self.assertEqual(len(mail["attachments"]), 2)
+            self.assertIn(book["payload"]["calendar_availability"][0]["label"], mail["body"])
+            self.assertLess(mail["body"].index("booked"), mail["body"].lower().index("rendering"), "the confirmation comes first")
+            self.assertEqual(len(world.calendar_events), 1, "the same event, not a second one")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["appointment_booked"]["confirmation_message_id"], mail["id"])
+            self.assertEqual(record["rendering_deliveries"][-1]["provider_message_id"], mail["id"])
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_a_rejected_partner_releases_the_held_send_alone(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, render, wanted = self._both_cards(ws, world)
+            sent_before = len(world.sent)
+            world.approve(render)
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), sent_before)
+            world.reject(book, "not that day")
+            summary = self.tick(ws, world)
+            released = [a for a in summary["approvals"] if a.get("released")]
+            self.assertEqual([(a["brief_id"], a["outcome"]) for a in released], [(render["brief_id"], "executed")], summary["approvals"])
+            self.assertEqual(len(world.sent), sent_before + 1, "the renderings went alone")
+            self.assertEqual(len(world.sent[-1]["attachments"]), 2)
+            self.assertNotIn("booked", world.sent[-1]["body"])
+            self.assertEqual(len(world.calendar_events), 0)
+            self.assertEqual(self.claim(ws, "s2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_a_partner_left_undecided_for_half_an_hour_releases_the_held_send(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, render, wanted = self._both_cards(ws, world)
+            sent_before = len(world.sent)
+            world.approve(book)
+            self.tick(ws, world)
+            self.assertEqual(len(world.sent), sent_before)
+            path = ws / "estimate-desk" / "briefs" / f"{book['brief_id']}.json"
+            entry = json.loads(path.read_text(encoding="utf-8"))
+            entry["held_at"] = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+            path.write_text(json.dumps(entry), encoding="utf-8")
+            summary = self.tick(ws, world)
+            released = [a for a in summary["approvals"] if a.get("released")]
+            self.assertEqual([(a["brief_id"], a["outcome"]) for a in released], [(book["brief_id"], "executed")], summary["approvals"])
+            self.assertEqual(len(world.sent), sent_before + 1, "the confirmation went alone")
+            self.assertIn(book["payload"]["calendar_availability"][0]["label"], world.sent[-1]["body"])
+            self.assertEqual(world.sent[-1]["attachments"], [])
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertIsNotNone(self.record(ws, self.only_estimate(ws)).get("appointment_booked"))
+            # The rendering, approved later, goes out on its own as before.
+            world.approve(render)
+            summary = self.tick(ws, world)
+            self.assertEqual([a["outcome"] for a in summary["approvals"] if a.get("brief_id") == render["brief_id"]], ["executed"])
+            self.assertEqual(len(world.sent), sent_before + 2)
+            self.assertEqual(len(world.sent[-1]["attachments"]), 2)
+        self.run_branch(branch)
+
+
 class FailureQuestionTests(SideBranchTests):
     """A card's command that fails becomes one question with the fix attached (plan 3.2), and runs one at a time (3.1)."""
 
@@ -3948,8 +4056,8 @@ class DeskExecutesApprovalsTests(SideBranchTests):
             self.assertEqual(result["outcome"], "rendering_sent", result)
             sent_before, questions_before = len(world.sent), len(world.notices)
             summary = self.tick(ws, world)
-            self.assertEqual([a["outcome"] for a in summary["approvals"]], ["executed"], summary)
-            self.assertEqual(summary["approvals"][0]["result"]["outcome"], "already_sent", summary)
+            # The pasted line reported the brief and marked the registry (9 September 2026), so the tick has nothing left to run.
+            self.assertEqual(summary["approvals"], [], summary)
             self.assertEqual(len(world.sent), sent_before, "the renderings went out once")
             self.assertEqual(len(world.notices), questions_before, "no question to the owner")
             self.assertEqual(world.updates.count((card["brief_id"], "executed")), 1)

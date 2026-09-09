@@ -66,6 +66,37 @@ def _last_desk_email(digest: dict[str, Any]) -> str:
 GREETING_RE = re.compile(r"^(hi|hello|hey|dear|good (morning|afternoon|evening))\b", re.IGNORECASE)
 
 
+_CLOSING_RE = re.compile(r"^(warmly|best|best regards|kind regards|regards|thanks|thank you|cheers|sincerely|talk soon|see you (then|soon))[,!.]?$", re.IGNORECASE)
+
+
+def _parts(body: str, shop: str) -> tuple[str | None, list[str], str | None]:
+    """(greeting, middle paragraphs, sign-off) of one email body."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", str(body or "").strip()) if p.strip()]
+    greeting = None
+    if paragraphs and GREETING_RE.match(paragraphs[0]) and len(paragraphs[0]) < 60 and "\n" not in paragraphs[0]:
+        greeting = paragraphs.pop(0)
+    signoff = None
+    if paragraphs:
+        last = paragraphs[-1]
+        lines = last.split("\n")
+        if len(lines) <= 3 and len(last) < 120 and (shop.lower() in last.lower() or _CLOSING_RE.match(lines[0].strip())):
+            signoff = paragraphs.pop()
+    return greeting, paragraphs, signoff
+
+
+def merge_bodies(first: str, second: str, shop: str) -> str:
+    """One email from two drafts written for the same customer message: one greeting, both middles, one sign-off.
+
+    The owner, 9 September 2026: a booking and a rendering approved from one
+    reply went out as two emails. The confirmation comes first, the pictures
+    or the price after it.
+    """
+    g1, m1, s1 = _parts(first, shop)
+    g2, m2, s2 = _parts(second, shop)
+    pieces = [g1 or g2] + m1 + m2 + [s2 or s1]
+    return "\n\n".join(p for p in pieces if p) + "\n"
+
+
 def _opening(text: str) -> str:
     """The first real sentence after the greeting line, lowercased; empty when short."""
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
