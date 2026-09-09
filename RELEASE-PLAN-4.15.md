@@ -152,8 +152,9 @@ The mirror is optional: off unless the profile names a sheet
 Excel-on-OneDrive adapter later, so the desk never depends on either.
 The owner wants the ledger visible in a sheet. The desk already reaches
 Google through Kolo's gateway token, proven for Gmail and Calendar;
-whether that token carries the Sheets scope is an open fact until the
-probe in 7.4 runs on the pod. If it does, a small module pushes changed
+the probe in 7.4 ran on the desk's pod on 9 September 2026: read 200,
+addSheet 200, append 200 through `gateway.maton.ai/google-sheets/v4`, so
+the same token serves the mirror. A small module pushes changed
 rows after each ledger write, best-effort and journaled, to a "Facts" tab
 (one row per fact) and an "Estimates" tab (one row per estimate:
 customer, piece, status, missing, price, next step). If the scope is

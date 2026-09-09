@@ -450,3 +450,15 @@ that said 4.14.5, through three publishes. Readiness printed the version and
 READY; every fix "recurred" live. Only per-file checksums caught it. Every
 skill should ship a manifest of script checksums, verify it in readiness,
 and verify the publishing folder against it before publishing.
+
+
+## Verified 9 September 2026: Google Sheets through the Maton gateway
+
+The desk's gateway token (the one Gmail and Calendar use) reads and writes
+Google Sheets through `https://gateway.maton.ai/google-sheets/v4/...`:
+GET `spreadsheets/{id}?fields=...` returned 200 with the title; POST
+`spreadsheets/{id}:batchUpdate` (addSheet) and POST
+`spreadsheets/{id}/values/{tab}!A1:append?valueInputOption=RAW` both
+returned 200 and the row landed. No second credential is needed for a
+spreadsheet mirror. A placeholder id returns a Sheets "not found" 404,
+which itself shows the gateway path and the scope are right.
