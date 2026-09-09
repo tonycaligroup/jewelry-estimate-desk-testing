@@ -144,8 +144,12 @@ the customer as "they"; the fixed text goes instead. (The owner has said
 not to prioritise the greeting; it is one line in the check, so it rides
 along.)
 
-### 2.8 A Google Sheet mirror
+### 2.8 An optional spreadsheet mirror (Google Sheets first, OneDrive/Office 365 later)
 
+The mirror is optional: off unless the profile names a sheet
+(`mirror.kind` and `mirror.id`), and built as one small interface
+(`push_rows(tab, rows)`) with a Google Sheets adapter first and an
+Excel-on-OneDrive adapter later, so the desk never depends on either.
 The owner wants the ledger visible in a sheet. The desk already reaches
 Google through Kolo's gateway token, proven for Gmail and Calendar;
 whether that token carries the Sheets scope is an open fact until the
