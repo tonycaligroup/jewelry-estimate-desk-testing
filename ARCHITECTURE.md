@@ -381,6 +381,16 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.7 (8 September 2026): an answer without a code finds its question.**
+Live, the owner replied "skip" while three questions were open; the
+session listed and read `estimate-desk/questions/` and answered an old
+question. `owner_questions.code_in_answer` reads a code the owner put in
+the reply ("skip 036BAF"); `pick_open` scores each open question's options
+against the words (an option named outright beats a synonym) and returns
+the one that fits, refusing with the codes listed otherwise;
+`workflow_safe._question_to_answer` uses both before its older fallbacks.
+SKILL.md forbids choosing a question by reading the folder.
+
 **4.14.7 (built 8 September 2026): no technical questions to customers.**
 Live, stud earrings with a stated 1.5 ct emerald were asked for "the exact
 dimensions for the halo and overall size", then for millimetre diameters

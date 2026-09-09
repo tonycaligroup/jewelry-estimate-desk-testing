@@ -681,7 +681,12 @@ so and stop. A missed email is handed back with `doctor.py --requeue
 While a desk question is open (the last desk message ended with
 `desk-answer <CODE>`), the owner's next reply is the answer to it: run
 `answer-question` with their words first, and only if that command refuses
-treat the reply as anything else. The command returns in seconds; when its
+treat the reply as anything else. When the reply carries no code, run the
+command without `--question`: the desk matches the words to the one open
+question they fit ("skip" fits only a stalled follow-up), or reads a code the
+owner put in the reply ("skip 036BAF"). Never list or read the files under
+`estimate-desk/questions/` to pick a question yourself; if the command refuses,
+it names the open codes: paste that line and wait for the owner. The command returns in seconds; when its
 output says `queued_for_tick`, the desk reads and prices on its next tick
 (within two minutes) and the card follows on its own. Tell the owner
 nothing in between. Never ask the owner a question of your
@@ -796,8 +801,9 @@ question arrives, in their own words: times to offer, "other times", or
 with their words; the desk matches it to the customer whose card was filed
 last, or to the customer they named. Times become a new offer card; nothing
 reaches the customer until that card is approved. Paste the output. If the command
-refuses, tell the owner what it said and wait; never pick an answer or
-re-run with a different one. If it fails part way (a traceback), run the
+refuses, tell the owner what it said and wait; never pick an answer, never
+re-run with a different one, and never choose a question by reading the
+questions folder. If it fails part way (a traceback), run the
 same command again: it carries on from where it stopped.
 
 ## Phase 5: records, follow-up, and cleanup

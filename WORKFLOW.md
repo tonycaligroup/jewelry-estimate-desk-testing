@@ -438,6 +438,11 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.14.7): an owner's reply
+  without a code goes to the one open question its words fit ("skip" fits
+  only a stalled follow-up), or to the code the owner put in the reply
+  ("skip 036BAF"); when the words fit several, the desk refuses and names
+  the codes. The session never reads the questions folder to choose (6.10).
 - Built 8 September 2026 (4.14.7): the desk asks a
   customer only what they can answer about what they want, and interprets
   the reference and the description for the rest. A size is required only

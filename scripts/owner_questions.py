@@ -211,6 +211,65 @@ def find(root: Path, ref_or_id: str) -> dict[str, Any]:
     return matches[0]
 
 
+CODE_RE = re.compile(r"\b([0-9A-Fa-f]{6})\b")
+
+
+def code_in_answer(root: Path, answer: str) -> tuple[dict[str, Any] | None, str]:
+    """A question code the owner put in the reply ("skip 036BAF"), and the reply without it."""
+    text = str(answer or "")
+    for match in CODE_RE.finditer(text):
+        code = match.group(1).upper()
+        matches = [q for q in list_questions(root) if reference(q["question_id"]) == code]
+        if len(matches) == 1:
+            return matches[0], (text[:match.start()] + text[match.end():]).strip()
+    return None, text
+
+
+def _option_score(question: dict[str, Any], answer: str) -> int:
+    """How well the owner's words fit this question's options: 2 for an option named outright, 1 for a synonym, 0 for none."""
+    if question.get("kind") not in DECISION_OPTIONS:
+        return 0
+    words = " " + re.sub(r"[^a-z0-9' ]+", " ", (answer or "").lower()) + " "
+    words = re.sub(r"\s+", " ", words)
+    best = 0
+    for key, phrases in DECISION_OPTIONS[question["kind"]].items():
+        if f" {key.replace('_', ' ')} " in words or f" {key} " in words:
+            best = max(best, 2)
+        elif any(f" {phrase} " in words for phrase in phrases):
+            best = max(best, 1)
+    return best
+
+
+def describe_open(questions: list[dict[str, Any]]) -> str:
+    return "; ".join(f"{reference(q['question_id'])} ({q['kind'].replace('_', ' ')}: {str(q.get('text') or '')[:70].strip()}…)" for q in questions)
+
+
+def pick_open(root: Path, answer: str) -> dict[str, Any]:
+    """The open question the owner's words fit best; refuse, naming the codes, when that is not one question.
+
+    Live (8 September 2026): the owner replied "skip" while three questions
+    were open; the session browsed the questions folder and answered an old
+    one. "skip" names an option of exactly one open question, so the desk
+    resolves it; when the words fit several, the refusal lists the codes so
+    the owner can reply "skip 036BAF".
+    """
+    open_questions = [q for q in list_questions(root, "open") if not q.get("dormant")]
+    if len(open_questions) == 1:
+        return open_questions[0]
+    if not open_questions:
+        raise ValueError("0 question(s) are open; name the one being answered")
+    scored = [(_option_score(q, answer), q) for q in open_questions]
+    top = max(score for score, _q in scored)
+    best = [q for score, q in scored if score == top and score > 0]
+    if len(best) == 1:
+        return best[0]
+    raise ValueError(
+        f"{len(open_questions)} questions are open and the reply fits "
+        + ("none of them" if not best else f"{len(best)} of them")
+        + "; reply with the code, for example \"skip 036BAF\": " + describe_open(best or open_questions)
+    )
+
+
 def only_open(root: Path) -> dict[str, Any]:
     """The one open question, when there is exactly one; otherwise refuse.
 

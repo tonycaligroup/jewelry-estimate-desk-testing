@@ -7035,6 +7035,45 @@ class PhotoClauseTests(unittest.TestCase):
         self.assertIn("Never take a carat weight, a karat, a ring size, or a length from a photo", clause)
 
 
+class AnswerWithoutACodeTests(unittest.TestCase):
+    """8 Sep: 'skip' with three questions open sent the session browsing the questions folder; the desk resolves it."""
+
+    def _root(self, directory: str) -> Path:
+        root = Path(directory) / "questions"
+        _c, stalled = owner_questions.create_decision(root, "followup_stalled", "jed-1111111111111111", "m-1",
+                                                      "Michael Park replied about a pair of earrings. I already asked once for dimensions. Reply skip, ask again, or handle myself.", {"repeated": ["dimensions"]})
+        _c, scope = owner_questions.create_decision(root, "out_of_scope", "jed-2222222222222222", "m-2",
+                                                    "Sam wrote about an appraisal. Reply quote it or handle myself.", {})
+        _c, dormant = owner_questions.create_decision(root, "appointment_next", "jed-3333333333333333", "m-3",
+                                                      "You passed on offering those times.", {}, dormant=True)
+        self.stalled, self.scope, self.dormant = stalled, scope, dormant
+        return root
+
+    def test_the_words_pick_the_one_open_question_they_fit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            self.assertEqual(owner_questions.pick_open(root, "skip")["question_id"], self.stalled["question_id"])
+            self.assertEqual(owner_questions.pick_open(root, "quote it")["question_id"], self.scope["question_id"])
+            self.assertEqual(owner_questions.pick_open(root, "ask again")["question_id"], self.stalled["question_id"])
+            with self.assertRaises(ValueError) as refused:
+                owner_questions.pick_open(root, "handle myself")
+            message = str(refused.exception)
+            self.assertIn(owner_questions.reference(self.stalled["question_id"]), message)
+            self.assertIn(owner_questions.reference(self.scope["question_id"]), message)
+            self.assertIn("skip 036BAF", message)
+
+    def test_a_code_in_the_reply_names_the_question(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            code = owner_questions.reference(self.scope["question_id"])
+            question, rest = owner_questions.code_in_answer(root, f"handle myself {code}")
+            self.assertEqual(question["question_id"], self.scope["question_id"])
+            self.assertEqual(rest, "handle myself")
+            question, rest = owner_questions.code_in_answer(root, "handle myself")
+            self.assertIsNone(question)
+            self.assertEqual(rest, "handle myself")
+
+
 class TechnicalQuestionGuardTests(unittest.TestCase):
     """8 Sep: the desk asked a customer for millimetre diameters and a drop length; technical questions never go out."""
 

@@ -1842,8 +1842,12 @@ def _question_to_answer(args: argparse.Namespace, p: dict[str, Path], root: Path
     """The named question, the only open one, or an answered one whose inquiry is still waiting."""
     if args.question:
         return owner_questions.find(root, args.question)
+    coded, rest = owner_questions.code_in_answer(root, args.answer or "")
+    if coded is not None:
+        args.answer = rest or args.answer
+        return coded
     try:
-        return owner_questions.only_open(root)
+        return owner_questions.pick_open(root, args.answer or "")
     except ValueError as exc:
         answered = [
             q for q in owner_questions.list_questions(root, "answered")

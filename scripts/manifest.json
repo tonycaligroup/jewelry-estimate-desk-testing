@@ -29,7 +29,7 @@
     "judge.py": "3dcd269616434e63bcd684cf3025057f",
     "kolo_safe.py": "4e6942fe5ee8633eb58eadea69f4279a",
     "manifest.py": "a94d8af8a570000c8e2dbe027243555f",
-    "owner_questions.py": "51e82b3e04cf1ebfd44ad0787b280791",
+    "owner_questions.py": "f0432c6add3b6fd278f3206db0becea8",
     "pipeline.py": "1cf942974eedf8bc8968a1df4914da48",
     "pricing_model.py": "133e46b1d5047ff321ea0f2e38fe8c57",
     "readiness.py": "842b933452173bd69a92ced5eb83fed9",
@@ -46,7 +46,7 @@
     "spec_gate.py": "7641d56711c5bc8efcdd1c1ecce243ba",
     "spot_price.py": "10a3327c317c1f2a970b73e03b562db8",
     "validate_profile.py": "f8c6997b87be1d1afa7709d3e722a3d3",
-    "workflow_safe.py": "576fd101c74e6e42f6f595a4dad47012"
+    "workflow_safe.py": "5609eb1c21bcca92b03175450b9d801c"
   },
   "version": "4.14.7"
 }
