@@ -167,6 +167,9 @@ KIND_BRIEFS = {
         "price, a few details from them would get the estimate started (you are asking; never write that they "
         "need anything), ask for each listed detail as a short dash list of plain questions in the customer's "
         "words, one question per detail exactly as listed, and say it is fine not to know; never a technical question. "
+        "If the facts give their vision, confirm it before those questions in one sentence the way a jeweler speaks to "
+        "a client (\"Just so I have your vision right: you are after ...\"), naming the piece, the stones, and the "
+        "setting as given, and ask them to say if anything is off. "
         "Nothing is booked yet. No prices."
     ),
     "rendering": (

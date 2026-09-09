@@ -789,7 +789,7 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
                            getattr(args, "runner", subprocess.run))
         elif options:
             labels = [o.get("label") or o["start"] for o in options]
-            facts, fixed = _offer_facts(approval, piece, labels, shop)
+            facts, fixed = _offer_facts(approval, piece, labels, shop, estimate_record.vision_in_words(record.get("specification")))
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
                            "offer", {**facts, **before}, fixed, prepared_email_path(store), digest,
                            getattr(args, "runner", subprocess.run))
@@ -2481,8 +2481,13 @@ def _asks_covered(body: str, asks: list[str]) -> bool:
     return True
 
 
-def _offer_facts(approval: dict[str, Any], piece: str, labels: list[str], shop: str) -> tuple[dict[str, Any], str]:
-    """The facts and the fixed text for an offer email; a time outside the hours is said plainly, with the hours."""
+def _offer_facts(approval: dict[str, Any], piece: str, labels: list[str], shop: str,
+                 understanding: str | None = None) -> tuple[dict[str, Any], str]:
+    """The facts and the fixed text for an offer email; a time outside the hours is said plainly, with the hours.
+
+    With questions to ask and a photo on the record, the customer's vision is
+    confirmed first, the way a jeweler would say it (the owner, 9 September 2026).
+    """
     lines = "\n".join(f"- {l}" for l in labels)
     outside = [str(o) for o in (approval.get("outside_hours") or []) if str(o).strip()]
     hours = str(approval.get("hours") or "").strip()
@@ -2498,10 +2503,20 @@ def _offer_facts(approval: dict[str, Any], piece: str, labels: list[str], shop: 
         # The customer also asked for a price: the same email asks the details the estimate needs (8 September 2026).
         facts["details to ask for the estimate, one bullet each, plain questions"] = asks
         questions = "\n".join(f"- {q}" for q in asks)
-        fixed = fixed.replace(f"\n\n{shop}\n", "\n\nSince you asked about the price as well, to get the estimate started could "
+        vision = ""
+        if understanding:
+            facts["their vision from their photo and words, confirm it first in one sentence the way a jeweler would"] = understanding
+            vision = pipeline_understanding_line(understanding) + "\n\n"
+        fixed = fixed.replace(f"\n\n{shop}\n", f"\n\n{vision}Since you asked about the price as well, to get the estimate started could "
                               f"you tell me:\n\n{questions}\n\nIf you are not sure about any of it, say so and I will suggest "
                               f"what usually looks best.\n\n{shop}\n")
     return facts, fixed
+
+
+def pipeline_understanding_line(understanding: str) -> str:
+    import pipeline  # local import: pipeline imports this module
+
+    return pipeline.UNDERSTANDING_LINE.format(vision=understanding)
 
 
 def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, options: list[dict[str, Any]],
@@ -2511,7 +2526,8 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     labels = [o.get("label") or o["start"] for o in options]
     store = approval_store_path(p["monitor_root"], record["estimate_id"], message_id)
     approval_now = read_object(store) if store.exists() else {}
-    facts, fixed = _offer_facts(approval_now, piece, labels, shop)
+    understanding = estimate_record.vision_in_words(record.get("specification")) if approval_now.get("ask_for") else None
+    facts, fixed = _offer_facts(approval_now, piece, labels, shop, understanding)
     prepared = prepared_email_path(store)
     if prepared.exists() and all(l in prepared.read_text(encoding="utf-8") for l in labels):
         body, body_source = prepared.read_text(encoding="utf-8"), "prepared"
@@ -2519,7 +2535,7 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
         body, body_source = _draft_customer_email(p, record, message_id, "offer", facts, fixed, args or argparse.Namespace())
     if judge.bench_measurement_questions(body):
         body, body_source = fixed, "fallback"  # never a technical question to a customer
-    if not _asks_covered(body, approval_now.get("ask_for") or []):
+    if not _asks_covered(body, list(approval_now.get("ask_for") or []) + ([understanding] if understanding else [])):
         body, body_source = fixed, "fallback"  # the card promised these questions; the fixed text asks them all
     customer_content_guard.validate_customer_text(body)
     work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"

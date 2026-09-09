@@ -1862,6 +1862,75 @@ def earring_style_in_words(words: str) -> str | None:
     return next((style for word, style in EARRING_STYLE_WORDS if stem.startswith(word)), None)
 
 
+def photo_reading(specification: dict[str, Any] | None) -> str:
+    """The desk's reading of the customer's example photo ("from the photo: ..."), else ''."""
+    text = str((specification or {}).get("reference_images") or "").strip()
+    return text if text.lower().startswith("from the photo") else ""
+
+
+def vision_in_words(specification: dict[str, Any] | None) -> str | None:
+    """The customer's vision as a jeweler would say it back, when a photo came with the words (the owner, 9 September 2026).
+
+    "I want the attached but with sapphires" plus a photo of halo studs is
+    confirmed, not questioned: "sapphire stud earrings with a diamond halo,
+    round lab-grown sapphires at 2.5 ct each, in 14K white gold". Built from
+    the facts on the record (their words, then the photo), for one piece;
+    None when there was no photo or the reading has nothing to say.
+    """
+    spec = specification if isinstance(specification, dict) else {}
+    if not photo_reading(spec):
+        return None
+    raw = spec.get("pieces")
+    if isinstance(raw, list) and len(raw) > 1:
+        return None
+    import cost_components  # local import: cost_components imports this module
+
+    def clean(value: Any) -> str:
+        text = str(value or "").strip()
+        return "" if not text or text.lower() in ("jeweler's choice", "n/a", "unknown", "none", "unspecified") else text
+
+    piece = clean(spec.get("piece_type")).lower()
+    stone = clean(spec.get("stone_type")).lower()
+    style = clean(spec.get("earring_style")).lower()
+    setting = clean(spec.get("setting_style")).lower()
+    if not piece and not stone:
+        return None
+    pair = is_pair(spec)
+    # The piece, named the way a jeweler says it: "sapphire stud earrings", "a sapphire halo ring".
+    if "earring" in piece:
+        head = " ".join(w for w in (stone, style, "earrings") if w)
+    else:
+        core = piece if not stone or stone in piece else f"{stone} {piece}"
+        head = core if core.startswith(("a ", "an ")) else ("an " if core[:1] in "aeiou" else "a ") + core
+    parts = [head]
+    accents = clean(spec.get("accent_stones")).lower() + " " + clean(spec.get("accent_stone_type")).lower()
+    if "halo" in setting:
+        accent = "diamond" if "diamond" in accents or "melee" in accents else clean(spec.get("accent_stone_type")).lower()
+        parts[0] += f" with a {accent} halo" if accent else " with a halo"
+    elif setting:
+        parts[0] += f", {setting}" if setting.endswith(("set", "setting")) else f" in a {setting} setting"
+    if stone:
+        shape = clean(spec.get("stone_shape") or spec.get("stone_cut")).lower()
+        origin = clean(spec.get("stone_origin")).lower()
+        carat = spec.get("stone_carat")
+        basis = clean(spec.get("stone_carat_basis")).lower()
+        noun = stone + ("s" if pair and not stone.endswith("s") else "")
+        words = " ".join(w for w in (shape, origin, noun) if w)
+        detail = bool(shape or origin or carat not in (None, "", 0))
+        if carat not in (None, "", 0):
+            try:
+                number = f"{float(carat):g}"
+            except (TypeError, ValueError):
+                number = str(carat)
+            words += f" at {number} ct" + (" each" if basis == "each" else " total for the pair" if basis == "total" else "")
+        if detail:
+            parts.append(words)  # the bare stone is already in the piece's name
+    metal = cost_components.extract_metal(spec).get("description")
+    if metal:
+        parts.append(f"in {metal}")
+    return ", ".join(parts)
+
+
 def settle_earring_style(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
     """Earrings are studs, hoops, or drops: the piece's own name or the customer's words say which (the owner, 9 September 2026).
 
@@ -1879,7 +1948,7 @@ def settle_earring_style(specification: dict[str, Any], own_words: str) -> dict[
     piece = str(specification.get("piece_type") or "").lower()
     if "earring" not in piece or _present(specification.get("earring_style")):
         return specification
-    style = earring_style_in_words(piece) or earring_style_in_words(own_words)
+    style = earring_style_in_words(piece) or earring_style_in_words(own_words) or earring_style_in_words(photo_reading(specification))
     return {**specification, "earring_style": style} if style else specification
 
 
@@ -1906,7 +1975,8 @@ def settle_setting_style(specification: dict[str, Any], own_words: str) -> dict[
 
     if not spec_gate.has_stones(specification):
         return specification
-    named = setting_in_words(own_words)
+    # The photo's reading stands in when the words say nothing: the email states it back and the customer corrects.
+    named = setting_in_words(own_words) or (setting_in_words(photo_reading(specification)) if not current else None)
     if not named:
         return specification
     return {**specification, "setting_style": named}

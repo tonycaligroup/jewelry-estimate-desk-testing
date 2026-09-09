@@ -2629,6 +2629,34 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.assertIn("a pair of stud earrings", world.cards[-1]["title"])
         self.run_branch(branch)
 
+    def test_a_photo_with_words_is_confirmed_not_questioned(self) -> None:
+        """The owner, 9 Sep: 'the attached but with sapphires' is confirmed back the way a jeweler would say it; the photo's style is never asked."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            thread = "thread-confirm-vision"
+            world.spec = {"piece_type": "pair of earrings", "stone_type": "sapphire", "stone_carat": 2.5, "stone_carat_basis": "each",
+                          "stone_shape": "round", "center_stone": "yes", "accent_stones": "diamond halo",
+                          "reference_images": "from the photo: cushion halo studs with a diamond halo, round center stones, white metal",
+                          "scheduling_intent": "I can also come in"}
+            world.requested = ([], [])
+            world.customer_message("cv1", thread, "I want the attached earrings but with sapphires, 2.5 ct each. Could you give me an "
+                                   "estimate? I can also come in.\n\nAnthony", subject="Sapphire earrings", attachments=("studs.jpg",))
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            offer = world.cards[-1]
+            asks = offer["payload"]["ask_for"]
+            self.assertFalse(any("studs, hoops, or drops" in a for a in asks), asks)
+            self.assertEqual(asks, ["Which metal would you like: yellow, white, or rose gold, and 14K or 18K?",
+                                    "Would you like natural or lab-grown stones?"])
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["specification"]["earring_style"], "stud")
+            self.assertEqual(record["specification"]["setting_style"], "halo")
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            body = world.sent[-1]["body"]
+            self.assertIn("Just so I have your vision right: you are after sapphire stud earrings with a diamond halo, round sapphires at 2.5 ct each", body)
+            self.assertLess(body.index("your vision right"), body.index("Which metal"))
+        self.run_branch(branch)
+
     def test_a_pending_booking_card_keeps_the_estimate_from_asking_for_a_time(self) -> None:
         """The price card is approved before the booking card: the estimate says the visit is being confirmed separately."""
         def branch(ws: Path, world: World) -> None:

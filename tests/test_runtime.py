@@ -10299,3 +10299,54 @@ class EarringStyleTests(unittest.TestCase):
         self.assertEqual(rendering.archetype_for({**spec, "earring_style": "drop"}), "drop_earrings")
         self.assertEqual(rendering.exact_facts(spec)[0], "the piece is pair of stud earrings")
         self.assertEqual(rendering.exact_facts({"piece_type": "stud earrings", "earring_style": "stud"})[0], "the piece is stud earrings")
+
+
+class ConfirmTheVisionTests(unittest.TestCase):
+    """The owner, 9 Sep: with a reference photo, the desk confirms what it understood the way a jeweler would, before any question."""
+
+    SPEC = {"piece_type": "pair of earrings", "earring_style": "stud", "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_shape": "round",
+            "stone_carat": 2.5, "stone_carat_basis": "each", "setting_style": "halo", "accent_stones": "diamond halo", "metal": "white gold",
+            "metal_karat": "14k", "reference_images": "from the photo: cushion halo studs, round center stones"}
+
+    def test_the_vision_is_said_the_way_a_jeweler_would(self) -> None:
+        self.assertEqual(estimate_record.vision_in_words(self.SPEC),
+                         "sapphire stud earrings with a diamond halo, round lab-grown sapphires at 2.5 ct each, in 14K white gold")
+        bare = {k: v for k, v in self.SPEC.items() if k not in ("metal", "metal_karat", "accent_stones", "stone_carat", "stone_shape", "stone_origin")}
+        self.assertEqual(estimate_record.vision_in_words(bare), "sapphire stud earrings with a halo")
+        self.assertEqual(estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "emerald", "setting_style": "bezel",
+                                                          "reference_images": "from the photo: a bezel ring"}), "an emerald ring in a bezel setting")
+        self.assertEqual(estimate_record.vision_in_words({"piece_type": "pendant", "reference_images": "from the photo: a bar pendant"}), "a pendant")
+        self.assertIsNone(estimate_record.vision_in_words({**self.SPEC, "reference_images": ""}), "no photo, nothing to confirm")
+        self.assertIsNone(estimate_record.vision_in_words({"pieces": [{"piece_type": "ring"}, {"piece_type": "band"}], "reference_images": "from the photo: x"}))
+
+    def test_the_photo_fills_the_style_and_the_setting_to_be_confirmed(self) -> None:
+        photo = {"piece_type": "earrings", "stone_type": "sapphire", "reference_images": "from the photo: cushion halo studs"}
+        self.assertEqual(estimate_record.settle_earring_style(photo, "like the attached but with sapphires")["earring_style"], "stud")
+        self.assertEqual(estimate_record.settle_setting_style(photo, "like the attached but with sapphires")["setting_style"], "halo")
+        self.assertEqual(estimate_record.settle_setting_style({**photo, "setting_style": "bezel"}, "")["setting_style"], "bezel")
+        self.assertEqual(spec_gate.missing_required_fields({**photo, "earring_style": "stud", "setting_style": "halo", "stone_origin": "lab-grown",
+                                                            "stone_carat": 2.5, "stone_carat_basis": "each", "stone_shape": "round",
+                                                            "metal": "14k white gold"}, {"defaults": {}}), [])
+
+    def test_the_follow_up_and_the_offer_confirm_it_before_the_questions(self) -> None:
+        vision = estimate_record.vision_in_words(self.SPEC)
+        body = pipeline.plain_followup(["metal", "metal_karat", "metal_color"], "Lomelino Jewelry", self.SPEC, vision)
+        self.assertIn("Just so I have your vision right: you are after sapphire stud earrings with a diamond halo", body)
+        self.assertLess(body.index("your vision"), body.index("- Which metal"))
+        facts, fixed = workflow_safe._offer_facts({"ask_for": ["Would you like natural or lab-grown stones?"]}, "a pair", ["Monday at 9"],
+                                                  "Lomelino Jewelry", vision)
+        self.assertEqual(facts["their vision from their photo and words, confirm it first in one sentence the way a jeweler would"], vision)
+        self.assertLess(fixed.index("your vision right"), fixed.index("Since you asked about the price"))
+        without, fixed_without = workflow_safe._offer_facts({"ask_for": []}, "a pair", ["Monday at 9"], "Lomelino Jewelry", vision)
+        self.assertNotIn("vision", fixed_without, "no questions, nothing to confirm in the offer")
+        self.assertIn("confirm it before those questions", customer_mail.KIND_BRIEFS["offer"])
+        # A draft that skips the confirmation is refused.
+        check = judge.check_body_covers(["metal"], vision)
+        skipped = "Hi Anthony,\n\nLovely idea for the anniversary.\n\n- Which metal would you like?\n\nIt is fine not to know.\n\nLomelino Jewelry"
+        with self.assertRaisesRegex(ValueError, "confirm their vision"):
+            check({"body": skipped})
+        confirmed = ("Hi Anthony,\n\nLovely idea for the anniversary. Just so I have your vision right: you are after sapphire stud earrings "
+                     "with a diamond halo, round lab-grown sapphires at 2.5 ct each, in 14K white gold; tell me if anything is off.\n\n"
+                     "- Which metal would you like?\n\nIt is fine not to know.\n\nLomelino Jewelry")
+        self.assertIn("body", check({"body": confirmed}))
+        self.assertTrue(judge.words_covered(confirmed, vision))

@@ -631,13 +631,29 @@ def bench_measurement_questions(body: str) -> list[str]:
             if "?" in line and BENCH_MEASUREMENT_RE.search(line)]
 
 
-def check_body_covers(missing_fields: list[str]):
+_COVER_STOP = {"with", "and", "the", "for", "each", "total", "pair", "in", "at", "a", "an"}
+
+
+def words_covered(body: str, text: str) -> bool:
+    """At least half of `text`'s distinctive words appear in the body (a confirmed vision, a promised question)."""
+    haystack = re.sub(r"[^a-z0-9 ]+", " ", str(body or "").lower())
+    words = [w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if w not in _COVER_STOP and len(w) > 2]
+    if not words:
+        return True
+    hits = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"s?\b", haystack))
+    return hits * 2 >= len(words)
+
+
+def check_body_covers(missing_fields: list[str], understanding: str | None = None):
     def check(value: dict[str, Any]) -> dict[str, Any]:
         result = check_body(value)
         left = uncovered_fields(result["body"], missing_fields)
         if left:
             raise ValueError("the email must ask about every missing detail; it never mentions: " + "; ".join(left)
                              + ". Ask for each of them, one bullet each")
+        if understanding and not words_covered(result["body"], understanding):
+            raise ValueError("before the questions, confirm their vision in one sentence the way a jeweler would, naming it: "
+                             + understanding[:200])
         bench = bench_measurement_questions(result["body"])
         if bench:
             raise ValueError("never ask the customer a technical question the jeweler works out (millimetres, diameters, drop "
@@ -656,8 +672,9 @@ def draft_followup(
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
     photos: list[str] | None = None,
+    understanding: str | None = None,
 ) -> dict[str, Any]:
-    """One friendly, price-free email asking only for what is still missing."""
+    """One friendly, price-free email asking only for what is still missing; a photo's vision is confirmed first."""
     closing = "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. "
     prompt = (
         "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
@@ -680,13 +697,16 @@ def draft_followup(
         "with a blank line between paragraphs. "
         f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
         f"MISSING DETAILS TO ASK FOR: {', '.join(missing_fields)}\n\n"
+        + ((f"THEIR VISION, from their photo and their words: {understanding}\nBefore the questions, confirm it in one "
+            "sentence the way a jeweler speaks to a client (for example \"Just so I have your vision right: you are after "
+            f"{understanding}.\"), and ask them to say if anything is off. Never call it a summary.\n\n") if understanding else "")
         + (("PHOTO READING (what the desk saw in the photo they attached): " + " | ".join(str(t)[:400] for t in photos[:3])
-            + "\nBefore the questions, say in one sentence what you took from their photo (the piece, the metal color, "
-            "the stones) and ask them to say if anything is off.\n\n") if photos else "")
+            + ("\n\n" if understanding else "\nBefore the questions, say in one sentence what you took from their photo (the piece, "
+               "the metal color, the stones) and ask them to say if anything is off.\n\n")) if photos else "")
         + f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
-    return ask_json(prompt, check_body_covers(list(missing_fields)), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
+    return ask_json(prompt, check_body_covers(list(missing_fields), understanding), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
 
 
 LOCAL_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")

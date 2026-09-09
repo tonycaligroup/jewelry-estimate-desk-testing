@@ -288,7 +288,10 @@ reference and the description for the rest; it never asks a technical question
 customer's "I don't know" makes that detail the jeweler's choice.
 
 Example photos a customer attaches are read at intake by the vision model: what
-is visible fills the reading, marked "from the photo"; a carat, karat, size, or
+is visible fills the reading, marked "from the photo", and the first email says
+the customer's vision back the way a jeweler would ("Just so I have your vision
+right: you are after ...") before asking anything, so a photo is confirmed, never
+questioned; a carat, karat, size, or
 length never comes from a photo, and the follow-up says what was taken from it.
 
 A customer asking for ready-made pieces (in stock, ready to ship) is offered a

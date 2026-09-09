@@ -181,7 +181,11 @@ def question_lines(missing: list[str], specification: dict[str, Any] | None = No
     return asks
 
 
-def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None) -> str:
+UNDERSTANDING_LINE = "Just so I have your vision right: you are after {vision}. Tell me if any of that is off."
+
+
+def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None,
+                   understanding: str | None = None) -> str:
     asks = []
     for name, question in _one_metal_question(missing)[:8]:
         if reading_check.is_confirm(name):
@@ -192,8 +196,9 @@ def plain_followup(missing: list[str], shop_name: str, specification: dict[str, 
             question = f"for the {estimate_record.piece_label(specification or {}, index)}, {question}"
         asks.append(question)
     lines = "\n".join(f"- {q[0].upper() + q[1:]}" for q in asks) or "- Is there anything else we should know?"
+    vision = (UNDERSTANDING_LINE.format(vision=understanding) + "\n\n") if understanding else ""
     return (
-        "Hello,\n\nThank you for reaching out. To put together an accurate estimate, could you share:\n\n"
+        f"Hello,\n\nThank you for reaching out. {vision}To put together an accurate estimate, could you share:\n\n"
         f"{lines}\n\nIf you are not sure about any of these, tell us the look you are after and we will recommend.\n\n{shop_name}\n"
     )
 
@@ -266,15 +271,16 @@ def _send_followup(
         specification = record_now.get("specification") or {}
     except (OSError, ValueError):
         specification = {}
+    understanding = estimate_record.vision_in_words(specification)
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
-                                       shop_name, model, judge_runner, openclaw, photos=photos)
+                                       shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding)
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
         # The model could not write a proper question twice; a plain one
         # still moves the inquiry, and the owner sees nothing odd.
-        drafted = {"body": plain_followup(missing, shop_name, specification)}
+        drafted = {"body": plain_followup(missing, shop_name, specification, understanding)}
     body_path = Path(paths["customer_reply"])
     body_path.parent.mkdir(parents=True, exist_ok=True)
     body_path.write_text(drafted["body"] + "\n", encoding="utf-8")

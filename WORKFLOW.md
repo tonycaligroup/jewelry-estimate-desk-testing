@@ -438,6 +438,14 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): with a reference photo, the desk
+  confirms rather than questions. What the photo shows (the kind of earring,
+  the setting) fills the reading, and the first email says the customer's
+  vision back the way a jeweler would ("Just so I have your vision right:
+  you are after sapphire stud earrings with a diamond halo, round lab-grown
+  sapphires at 2.5 ct each, in 14K white gold. Tell me if any of that is
+  off.") before the details it still needs; a draft that skips the
+  confirmation is refused. Nothing the photo shows is asked (6.2).
 - Built 9 September 2026 (unpublished): "earrings" alone are studs,
   hoops, or drops. The customer's words settle it ("studs please", "hoops");
   a photo that shows which is read and stated; otherwise the desk asks the
