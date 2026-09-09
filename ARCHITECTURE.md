@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**4.15 (unpublished, 9 September 2026): the spreadsheet mirror, step 6.**
+**4.15.0 (built 9 September 2026): the spreadsheet mirror, step 6.**
 `scripts/sheet_mirror.py` talks to Google Sheets through the Maton gateway
 with the desk's own token (`gateway.maton.ai/google-sheets/v4`, verified on
 the pod: read, addSheet, append, create). `setup` creates "Jewelry
@@ -395,7 +395,7 @@ budget; readiness reports the mirror and re-applies the layout without the
 colour rules. `validate_profile` accepts the block. `SheetMirrorTests`
 drive it against a fake gateway.
 
-**4.15 (unpublished, 9 September 2026): renderings from the ledger, step 4.**
+**4.15.0 (built 9 September 2026): renderings from the ledger, step 4.**
 `rendering.exact_facts` turns the specification into the facts that must
 be exact, in order: the piece, each stone with its colour word ("green
 emerald center stone, round, 1.5 ct each (lab-grown)"), the accents, the
@@ -408,7 +408,7 @@ make the same design, changed only as follows" and the facts;
 `exact_checks` adds one yes-or-no question per fact that `check_image`
 asks beside the archetype's own. Golden `RenderFromExampleTests`.
 
-**4.15 (unpublished, 9 September 2026): the estimate ledger, steps 1 and 3.**
+**4.15.0 (built 9 September 2026): the estimate ledger, steps 1 and 3.**
 `scripts/ledger.py` keeps every fact with its source in
 `estimate-desk/ledger.sqlite` (see RELEASE-PLAN-4.15.md): `absorb` records
 a settled reading row by row with the source its value supports (the
@@ -426,7 +426,7 @@ price card; `estimate_email_facts` hands both to the estimate email; the
 extraction keeps accent-stone grades in `accent_stone_*` keys. The reset
 removes the ledger file.
 
-**Unpublished after 4.14.7 (8 September 2026): the questions ride on the offer card.**
+**4.15.0 (built 8 September 2026): the questions ride on the offer card.**
 Live, "please provide an estimate... I can also come in person" produced
 the questions email at once and the times after the approval; the owner
 wants nothing before the approval. `pipeline.process_claim` now puts the
@@ -438,7 +438,7 @@ or `record_followup_sent`) once the email is sent, and falls back to the
 fixed text if the draft asks a technical question. The follow-up's
 `meeting_offered` closing is gone. Golden `MeetingAndEstimateTests`.
 
-**Unpublished after 4.14.7 (8 September 2026): an answer without a code finds its question.**
+**4.15.0 (built 8 September 2026): an answer without a code finds its question.**
 Live, the owner replied "skip" while three questions were open; the
 session listed and read `estimate-desk/questions/` and answered an old
 question. `owner_questions.code_in_answer` reads a code the owner put in

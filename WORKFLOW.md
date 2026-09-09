@@ -438,7 +438,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 9 September 2026 (4.15, unpublished): an optional spreadsheet
+- Built 9 September 2026 (4.15.0): an optional spreadsheet
   mirror built for the counter: "Customers" first (one row per customer,
   status in plain words, next meeting, what is still open, a link to the
   thread), "This week", "Price cards" (quote, cost, profit, assumptions,
@@ -446,14 +446,14 @@ closed by follow-up changes:
   source). Created at setup in the shop's Google account through the same
   gateway token, or adopted by URL; rewritten after a tick that changed
   something; never read back (7).
-- Built 9 September 2026 (4.15, unpublished): renderings from the ledger.
+- Built 9 September 2026 (4.15.0): renderings from the ledger.
   The facts that must be exact open the prompt in order (the piece, each
   stone with its colour, the metal, the setting), the checker asks about
   each by name, the archetype follows the piece's own words ("stud
   earrings" is never drops), and when the customer sent an example piece
   the render is that photograph changed only as specified, not a logo to
   reproduce (6.6).
-- Built 9 September 2026 (4.15, unpublished): the estimate ledger. Every
+- Built 9 September 2026 (4.15.0): the estimate ledger. Every
   fact the desk holds carries its source (the customer's own words with the
   span, the photo, the jeweler's choice, the owner, a quoted estimate, or a
   bare reading), in `estimate-desk/ledger.sqlite`; the record's
@@ -465,13 +465,13 @@ closed by follow-up changes:
   the jeweler chose them and invites a preference; a grade the customer
   gives for the halo or accent stones is kept apart from the center stone's
   (6.2, 6.3).
-- Built 8 September 2026 (unpublished, after 4.14.7): when a customer asks
+- Built 8 September 2026 (4.15.0): when a customer asks
   to come in and for a price in one email, nothing reaches them before the
   owner's approval: the offer card carries the questions the estimate needs,
   and the one email the approval sends offers the times and asks them
   (6.6, 6.10). This replaces the 4.14.5 rule that sent the questions in the
   same tick as the card.
-- Built 8 September 2026 (unpublished, after 4.14.7): an owner's reply
+- Built 8 September 2026 (4.15.0): an owner's reply
   without a code goes to the one open question its words fit ("skip" fits
   only a stalled follow-up), or to the code the owner put in the reply
   ("skip 036BAF"); when the words fit several, the desk refuses and names

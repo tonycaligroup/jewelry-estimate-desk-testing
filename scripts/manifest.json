@@ -50,5 +50,5 @@
     "validate_profile.py": "b32007dae77780354403ad30b120200c",
     "workflow_safe.py": "c4c31fb71c283ba8cdaab51df759bd80"
   },
-  "version": "4.14.7"
+  "version": "4.15.0"
 }
