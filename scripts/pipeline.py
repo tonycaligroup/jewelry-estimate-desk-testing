@@ -211,7 +211,7 @@ def _send_followup(
     p: dict[str, Path], base_dir: Path, message_id: str, estimate_id: str,
     digest: dict[str, Any], missing: list[str], initiating: bool, paths: dict[str, str],
     profile: dict[str, Any], model: str | None, judge_runner: Runner, openclaw: str | None,
-    command_runner: Runner = subprocess.run, photos: list[str] | None = None,
+    command_runner: Runner = subprocess.run, photos: list[str] | None = None, meeting_offered: bool = False,
 ) -> dict[str, Any]:
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
     missing = prioritized(missing)
@@ -222,7 +222,7 @@ def _send_followup(
         specification = {}
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
-                                       shop_name, model, judge_runner, openclaw, photos=photos)
+                                       shop_name, model, judge_runner, openclaw, photos=photos, meeting_offered=meeting_offered)
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
@@ -801,12 +801,17 @@ def process_claim(
         return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
     if nxt == "send_spec_followup":
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        meeting_offered = False
         if specification.get("scheduling_intent") and (
             not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words)
         ):
             # Meeting first: a customer who asks to come in gets the meeting,
             # not a questionnaire. The details are settled at the meeting or
-            # in a later email, and pricing picks up from there.
+            # in a later email, and pricing picks up from there. When they
+            # also ask for a price ("could I get a ballpark before I come
+            # in?"), the desk pursues both: the card offers the times, and
+            # the questions for the estimate go now (the owner's rule).
+            wants_estimate = estimate_record.asks_for_estimate(handled_words)
             intent_path = Path(paths["appointment_intent"])
             workflow_safe.write_private(intent_path, appointment_intent(
                 p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id,
@@ -815,10 +820,12 @@ def process_claim(
                 monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
                 shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
                 appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
-                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=False,
+                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=wants_estimate,
                 runner=command_runner, judge_runner=judge_runner,
             ))
-            return {"outcome": "appointment_approval_requested", "before_estimate": True, "next": "done"}
+            if not wants_estimate:
+                return {"outcome": "appointment_approval_requested", "before_estimate": True, "next": "done"}
+            meeting_offered = True
         repeated = estimate_record.followup_stalled(record, message_id, reviewed["missing_required_fields"])
         if repeated and not reviewed["initiating"]:
             # The customer was already asked for exactly this and did not
@@ -828,10 +835,14 @@ def process_claim(
                 _namespace(p, message_id, estimate_id, runner=command_runner), record, repeated,
             )
             return {"outcome": "awaiting_owner", "question_id": asked.get("question_id"), "next": "done"}
-        return _send_followup(
+        sent = _send_followup(
             p, base_dir, message_id, estimate_id, digest, reviewed["missing_required_fields"],
             reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner, photos=photos,
+            meeting_offered=meeting_offered,
         )
+        if meeting_offered:
+            sent = {**sent, "appointment_approval_requested": True, "before_estimate": True}
+        return sent
     if nxt == "price":
         return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")

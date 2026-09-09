@@ -2338,6 +2338,34 @@ class ExamplePhotoTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class MeetingAndEstimateTests(SideBranchTests):
+    """The owner's rule (8 Sep): when an estimate is mentioned the desk pursues it, meeting or not."""
+
+    def test_a_meeting_and_a_ballpark_in_one_email_file_the_card_and_ask_the_questions(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-both"
+            world.spec = {"piece_type": "earrings", "stone_type": "emerald", "stone_carat": 1.5,
+                          "scheduling_intent": "could I come by next week?"}
+            world.requested = (["next week"], [])
+            world.customer_message("b1", thread, "Hi Tony, my wife loves these emerald earrings, about 1.5 ct. Could I come by next week? "
+                                   "And is there any way I can get a ballpark estimate first?\n\nDavid", subject="Emerald earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            offer = world.cards[-1]
+            self.assertEqual(offer["kind"], "appointment_offer", offer["payload"])
+            self.assertEqual(len(world.sent), 1, "the questions go now")
+            self.assertRegex(world.sent[0]["body"], r"(?i)metal")
+            self.assertEqual(self.claim(ws, "b1")["status"], "processed")
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["status"], "awaiting_specs")
+            # Approving the card sends the times; the record still waits for the details.
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            self.assertEqual(len(world.sent), 2)
+            for option in offer["payload"]["calendar_availability"]:
+                self.assertIn(option["label"], world.sent[1]["body"])
+        self.run_branch(branch)
+
+
 class CombinedIntentTests(SideBranchTests):
     """A rendering and a meeting in one email: two cards, approved in either order, booked once."""
 

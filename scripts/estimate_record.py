@@ -1748,6 +1748,17 @@ ACCEPTS_TIME_RE = re.compile(
 )
 
 
+ASKS_FOR_ESTIMATE_RE = re.compile(
+    r"(?i)\b(?:estimates?|ballpark|quotes?|quotation|pricing|prices?|priced|costs?|how much|"
+    r"what (?:would|does|do|will) (?:it|that|they|this|these|one|something like (?:this|that)) (?:run|cost|come to|be))\b"
+)
+
+
+def asks_for_estimate(own_words: str) -> bool:
+    """The customer mentions an estimate, a price, or a cost: the desk pursues it (the owner's rule, 8 September 2026)."""
+    return bool(ASKS_FOR_ESTIMATE_RE.search(str(own_words or "")))
+
+
 def accepts_a_time(own_words: str) -> bool:
     """The customer picks or accepts an offered time, in their own words."""
     return bool(ACCEPTS_TIME_RE.search(str(own_words or "")))

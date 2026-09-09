@@ -381,6 +381,17 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.4 (8 September 2026): an estimate mentioned is pursued, meeting or not.**
+The owner's rule: when estimates are mentioned the desk pursues them too.
+`estimate_record.asks_for_estimate` reads the handled message's own words
+(estimate, ballpark, quote, price, cost, how much); in the meeting-first
+branch of `pipeline.process_claim` the appointment card is filed with the
+claim's finalisation deferred (`defer_finalize_for_rendering=True`, the
+existing "another step follows" switch) and the follow-up goes out in the
+same tick with `meeting_offered=True`, so `judge.draft_followup` closes by
+saying the times are coming separately instead of inviting them to come
+by. Golden `MeetingAndEstimateTests`.
+
 **4.14.4 (built 8 September 2026): example photos are read at intake.**
 The owner's rule: look at the images customers send when they are example
 pieces. `pipeline.example_photos` collects the customer's newest photos on

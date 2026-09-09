@@ -7087,6 +7087,15 @@ class SchedulingWordsTests(unittest.TestCase):
             with self.subTest(words=words):
                 self.assertNotIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, record, words), words)
 
+    def test_an_estimate_mentioned_is_pursued(self) -> None:
+        for words in ("Before I come in, is there any way I can get a ballpark estimate for this?", "How much would that run?",
+                      "Could you quote me?", "What would it cost?", "Any idea on pricing?"):
+            with self.subTest(words=words):
+                self.assertTrue(estimate_record.asks_for_estimate(words), words)
+        for words in ("Could I come by next week?", "The second one works for me.", "She loves these earrings."):
+            with self.subTest(words=words):
+                self.assertFalse(estimate_record.asks_for_estimate(words), words)
+
     def test_deadlines_products_and_the_website_are_not_meetings(self) -> None:
         for text in ("Does it come in rose gold?", "Can you have it ready by Friday at 5pm?", "I visited your website. Could you do a 1 ct stone?",
                      "Could you ship it by Tuesday?", "Can I pick it up Friday at 4pm?", "I want a 2 ct stone, whatever you think works."):

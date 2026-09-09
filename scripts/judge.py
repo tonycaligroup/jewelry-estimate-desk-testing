@@ -616,8 +616,15 @@ def draft_followup(
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
     photos: list[str] | None = None,
+    meeting_offered: bool = False,
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing."""
+    closing = (
+        "Close by saying you look forward to seeing them, since meeting times are being offered in a separate note; "
+        "do not invite them to come by or name times. "
+        if meeting_offered else
+        "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. "
+    )
     prompt = (
         "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
         "body (no subject line, no headers) in the tone of the template: warm, personal, unhurried. Open with "
@@ -628,8 +635,7 @@ def draft_followup(
         "size?\", \"- Is the diamond natural or lab-grown?\"); ask for all of them in this one email so the "
         "customer is not asked twice, and tell them it is fine not to know and you will suggest what usually "
         "looks best. Never write a line that merely restates what they said (no \"I've noted\", no \"I have you "
-        "down for\"); never add a timing or budget section unless it asks a question. Close by inviting them "
-        "to come by the shop if they would rather talk it through in person, without naming times. Keep it "
+        "down for\"); never add a timing or budget section unless it asks a question. " + closing + "Keep it "
         "under 180 words. Use the customer's name if they gave one. Never mention prices, costs, rates, or "
         "budgets as requirements. Do not use template placeholders; write real text. No headings or labels, "
         "and the sign-off is a plain line with no question mark. Do not wrap lines: each paragraph is one line, "
