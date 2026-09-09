@@ -77,6 +77,12 @@ def _opening(text: str) -> str:
     return sentence if len(sentence) > 20 else ""
 
 
+CLAIMS_A_MEETING_RE = re.compile(
+    r"(?i)\b(?:reserved|booked|i have (?:you|us|it) down for|(?:confirm(?:ed|ing)|locked in|set aside) (?:our|your|the|that) "
+    r"(?:meeting|appointment|time|slot)|(?:meeting|appointment) is (?:set|confirmed|booked)|see you (?:on|at) )"
+)
+
+
 def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def check(value: dict[str, Any]) -> dict[str, Any]:
         body = value.get("body")
@@ -88,6 +94,10 @@ def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[st
         if "{{" in body or "}}" in body or "<" in body and ">" in body:
             raise ValueError("body must not contain placeholders or markup")
         customer_content_guard.validate_customer_text(body)
+        if kind in ("estimate", "followup", "offer") and not facts.get("meeting booked") and CLAIMS_A_MEETING_RE.search(body):
+            # Live, 9 September 2026: an estimate email said "Thursday at 11am, which I have reserved" with nothing booked.
+            raise ValueError("never say a meeting time is reserved, booked, or confirmed: no meeting is booked; "
+                             "if they named a time, say only that you will confirm it separately")
         if kind == "estimate":
             approved = float(str(facts["price"]).replace("$", "").replace(",", ""))
             customer_content_guard.validate_approved_price(body, approved)
@@ -122,7 +132,9 @@ KIND_BRIEFS = {
         "the estimate is good through. Invite them to reply to set up a time to go over the design. Do not "
         "list the specification back to them line by line; refer to the piece naturally. If the facts name details "
         "chosen by the jeweler, say in one sentence that you priced it with your own choice of those (name them "
-        "plainly, for example stone color and clarity) and that they can tell you if they have a preference. When "
+        "plainly, for example stone color and clarity) and that they can tell you if they have a preference. Never "
+        "say a meeting time is reserved, booked, or confirmed unless the facts name a booked meeting; if they "
+        "named a time, say only that you will confirm it separately. When "
         "the facts say there is more than one piece, name each piece in a sentence and give the one total for all of them."
     ),
     "confirmation": (

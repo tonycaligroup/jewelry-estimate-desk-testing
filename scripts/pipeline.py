@@ -884,6 +884,25 @@ def process_claim(
             reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner, photos=photos,
         )
     if nxt == "price":
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        if specification.get("scheduling_intent") and (
+            not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words)
+        ):
+            # The reply gave the last details and picked a time in one breath (live, 9 September 2026: the desk
+            # priced and the estimate email claimed a meeting it never booked). The meeting card is filed first,
+            # the price card follows; the claim finishes with the price.
+            intent = appointment_intent(p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id)
+            intent_path = Path(paths["appointment_intent"])
+            workflow_safe.write_private(intent_path, intent)
+            workflow_safe.request_appointment_approval(argparse.Namespace(
+                monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+                shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
+                appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
+                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=True,
+                runner=command_runner, judge_runner=judge_runner,
+            ))
+            priced = _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
+            return {**priced, "appointment_approval_requested": True}
         return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")
 

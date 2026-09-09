@@ -3031,6 +3031,9 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
     }
     if chosen:
         facts["chosen by the jeweler, say if you have a preference"] = ", ".join(chosen)
+    booked = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else None
+    if booked and booked.get("confirmed_start"):
+        facts["meeting booked"] = str(booked["confirmed_start"])[:16].replace("T", " ")
     reference = str(spec.get("reference_images") or "").strip()
     if reference.lower().startswith("from the photo"):
         facts["read from their photo"] = reference[:160]

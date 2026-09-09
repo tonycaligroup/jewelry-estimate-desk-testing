@@ -2458,6 +2458,45 @@ class OwnerChangesAFactAfterRejectingTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class DetailsAndATimeInOneReplyTests(SideBranchTests):
+    """Live 9 Sep: the reply gave the last details and picked a time; the desk priced and the estimate claimed a meeting it never booked."""
+
+    def test_the_reply_files_a_booking_card_and_a_price_card(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            thread = "thread-both-at-once"
+            world.spec = {"piece_type": "halo earrings", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
+                          "stone_shape": "round", "setting_style": "halo", "center_stone": "yes",
+                          "scheduling_intent": "I can also come in person if easier"}
+            world.requested = ([], [])
+            world.customer_message("dt1", thread, "Earrings like these with a round emerald in the center, 2.5 ct each. Can you please provide an "
+                                   "estimate? I can also come in person if easier!\n\nAnthony", subject="Custom earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            offer = world.cards[-1]
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            self.assertEqual(len(world.sent), 1)
+            # The details and a pick in one reply.
+            pick = offer["payload"]["calendar_availability"][2]
+            world.spec = {**world.spec, "metal": "white gold", "metal_karat": "18k", "metal_color": "white", "stone_origin": "lab-grown",
+                          "scheduling_intent": f"{pick['label']} works for me"}
+            world.requested = ([pick["label"]], [pick["start"][:16]])
+            world.customer_message("dt2", thread, f"18k white gold, lab grown stones please.\n{pick['label']} works for me.\n\nAnthony",
+                                   subject="Re: Custom earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            last_two = world.cards[-2:]
+            self.assertIn("appointment_booking", [c.get("kind") for c in last_two], [c["title"] for c in last_two])
+            self.assertTrue(any(str(c["title"]).startswith("Price approval") for c in last_two), [c["title"] for c in last_two])
+            self.assertEqual(len(world.sent), 1, "nothing goes out until the cards are approved")
+            self.assertEqual(self.claim(ws, "dt2")["status"], "processed")
+        self.run_branch(branch)
+
+
 class ReviveTests(SideBranchTests):
     """Live 9 Sep: a rejected price card was answered with a fact, read as 'handle myself', and the estimate went dormant."""
 

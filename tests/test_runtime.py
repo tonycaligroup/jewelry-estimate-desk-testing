@@ -7138,6 +7138,24 @@ class RenderFromTheLedgerTests(unittest.TestCase):
         self.assertNotIn("example piece", mark[0])
 
 
+class NoInventedMeetingTests(unittest.TestCase):
+    """Live 9 Sep: the estimate email said 'Thursday at 11am, which I have reserved' while nothing was booked."""
+
+    def test_an_email_that_claims_a_booking_is_rejected_unless_one_exists(self) -> None:
+        import customer_mail
+        body = ("Thank you for confirming Thursday at 11am, which I have reserved for us. I have prepared an estimate at $5,000.00, "
+                "estimated on the high side on purpose, pending final design approval; the final price often comes in lower and any "
+                "saving is passed to you; nothing is committed until you approve the final design. Good through September 16, 2026.")
+        facts = {"price": "5,000.00", "valid_through": "September 16, 2026"}
+        with self.assertRaises(ValueError) as caught:
+            customer_mail._check("estimate", facts, "")({"body": body})
+        self.assertIn("never say a meeting", str(caught.exception))
+        checked = customer_mail._check("estimate", {**facts, "meeting booked": "2026-09-10 11:00"}, "")({"body": body})
+        self.assertIn("reserved", checked["body"])
+        self.assertTrue(customer_mail.CLAIMS_A_MEETING_RE.search("I have you down for Thursday."))
+        self.assertFalse(customer_mail.CLAIMS_A_MEETING_RE.search("Reply to set up a time to go over the design."))
+
+
 class OwnerChangesAFactTests(unittest.TestCase):
     """Live 9 Sep: the owner answered a rejected price card with '5 ct' and the desk stood down; it re-prices now."""
 
