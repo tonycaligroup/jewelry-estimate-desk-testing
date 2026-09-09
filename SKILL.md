@@ -243,6 +243,10 @@ must keep: never replace the cron or reset its activation timestamp or
 discovery watermark, and the Kolo user who installs and activates the skill is
 automatically the approver.
 
+Example photos a customer attaches are read at intake by the vision model: what
+is visible fills the reading, marked "from the photo"; a carat, karat, size, or
+length never comes from a photo, and the follow-up says what was taken from it.
+
 A customer asking for ready-made pieces (in stock, ready to ship) is offered a
 visit through the appointment card, never a quote or a questionnaire; after two
 replies without a booking the desk tells the owner to open the email and handle

@@ -739,8 +739,8 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         options = approval.get("calendar_availability") or []
         paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
         digest = _digest_from_work(paths, args.message_id, profile)
-        before = {"before the estimate": "no estimate yet; the design details (metal, setting, size, stone) "
-                                         "get settled at the meeting, so do not ask for them now"} \
+        before = {"the visit": "the visit is to design their perfect piece together; never mention an estimate or a "
+                               "quote, and do not ask for design details (metal, setting, size, stone) now"} \
             if record.get("status") == "awaiting_specs" else {}
         before.update(_inventory_fact(record))
         if approval.get("action_type") == "appointment_booking" and options:
@@ -2373,7 +2373,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
             "piece": piece, "time_labels": [chosen["label"]], "shop name": shop,
             "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
-            **({"before the estimate": "no estimate yet; the design details get settled at the meeting"}
+            **({"the visit": "the visit is to design their perfect piece together; never mention an estimate or a quote"}
                if record.get("status") == "awaiting_specs" else {}),
             **_inventory_fact(record),
         }, fixed, args)

@@ -1,0 +1,48 @@
+{
+  "defect": "the desk offered times for a pair of emerald earrings; the customer replied 'Before I come in, is there any way I can get a ballpark estimate?' and the desk offered times again (card #69) instead of asking for the details an estimate needs; the first email's meeting request rode along on the reading of the thread",
+  "seen_on": "4.14.2",
+  "fixed_in": "unpublished after 4.14.3",
+  "text_is": "verbatim",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "customer": {
+        "id": "k1",
+        "thread": "new",
+        "subject": "Looking for something similar",
+        "text": "Hello Tony,\n\nI want to gift my wife something special for our 20th anniversary; she has been obsessed with these earrings. Could I come by to talk it through?\n\nDo you have or can you make something similar?"
+      },
+      "spec": {
+        "piece_type": "earrings",
+        "stone_type": "emerald",
+        "stone_carat": 1.5,
+        "scheduling_intent": "Could I come by to talk it through?"
+      },
+      "expect": {
+        "outcomes": [
+          "appointment_approval_requested"
+        ],
+        "sent": 0
+      }
+    },
+    {
+      "customer": {
+        "id": "k2",
+        "text": "Thank you Tony,\n\nBefore I come in, is there any way I can get a ballpark estimate?"
+      },
+      "spec": {
+        "piece_type": "earrings",
+        "stone_type": "emerald",
+        "stone_carat": 1.5,
+        "scheduling_intent": "Could I come by to talk it through?"
+      },
+      "expect": {
+        "outcomes": [
+          "followup_sent"
+        ],
+        "sent": 1,
+        "no_new_card": true
+      }
+    }
+  ]
+}

@@ -6989,6 +6989,16 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
 
 
+class PhotoClauseTests(unittest.TestCase):
+    def test_the_reading_is_told_what_the_photo_shows_and_what_never_comes_from_it(self) -> None:
+        self.assertEqual(judge.photo_clause([]), "")
+        self.assertEqual(judge.photo_clause(None), "")
+        clause = judge.photo_clause(["A pair of drop earrings in yellow gold with green emeralds."])
+        self.assertIn("EXAMPLE PHOTOS", clause)
+        self.assertIn("drop earrings", clause)
+        self.assertIn("Never take a carat weight, a karat, a ring size, or a length from a photo", clause)
+
+
 class ReadsLikeAnOrderTests(unittest.TestCase):
     """Live 8 Sep: a ready-to-ship question carrying metal, stones, size, and a budget was filed as inventory."""
 

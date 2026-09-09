@@ -314,6 +314,31 @@ def check_specification(value: dict[str, Any]) -> dict[str, Any]:
     return {"specification": clean}
 
 
+EXAMPLE_PHOTO_PROMPT = (
+    "You are helping a jeweler read a customer's example photo of jewelry. In two or three plain sentences, describe "
+    "the jewelry in the photo for intake: the piece type, the metal color, the stones (type and color, shape, roughly "
+    "how many, whether one center stone or small accents), the setting style, and any notable design detail. Say only "
+    "what is visible; never guess a carat weight, a karat, a ring size, or a length; no prices. Answer in plain text."
+)
+
+
+def photo_clause(photos: list[str] | None) -> str:
+    """What the desk read from the customer's example photos, handed to the reading (8 September 2026)."""
+    lines = [str(t).strip() for t in (photos or []) if str(t).strip()]
+    if not lines:
+        return ""
+    listed = "\n".join(f"- {line[:600]}" for line in lines[:3])
+    return (
+        "\nEXAMPLE PHOTOS the customer attached, as read by the desk's vision check (one line per photo):\n"
+        f"{listed}\n"
+        "When the customer asks for something like a photo (\"these earrings\", \"something similar\"), the facts visible "
+        "in it (piece type, metal color, stone type and color, stone shape, setting style, stone count, design details) "
+        "fill the specification as if the customer had written them, and reference_images says what came from the "
+        "photo (\"from the photo: emerald drops in yellow gold\"). Never take a carat weight, a karat, a ring size, or a "
+        "length from a photo; those are asked.\n"
+    )
+
+
 def known_clause(known: dict[str, Any] | None) -> str:
     """The specification the desk already holds for this customer, handed to the reading.
 
@@ -340,6 +365,7 @@ def extract_specification(
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
     known: dict[str, Any] | None = None,
+    photos: list[str] | None = None,
 ) -> dict[str, Any]:
     """Every fact the customer gave, merged across the thread, nothing invented."""
     prompt = (
@@ -373,7 +399,7 @@ def extract_specification(
         "diamond\", \"reset my stone\", \"my own gold\"); when the stone is theirs, still fill stone_type and any "
         "shape or size they gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "
         "A photo mention can go in reference_images but never fills another key.\n\n"
-        f"{known_clause(known)}THREAD:\n{thread_text(digest)}"
+        f"{photo_clause(photos)}{known_clause(known)}THREAD:\n{thread_text(digest)}"
     )
     return ask_json(prompt, check_specification, model, runner, openclaw)
 
@@ -388,6 +414,7 @@ def check_triage_and_specification(value: dict[str, Any]) -> dict[str, Any]:
 def triage_and_extract(
     digest: dict[str, Any], model: str | None = None, runner: Runner = subprocess.run, openclaw: str | None = None,
     known: dict[str, Any] | None = None,
+    photos: list[str] | None = None,
 ) -> dict[str, Any]:
     """One call for a new inquiry: what the thread is, and every fact the customer gave.
 
@@ -437,7 +464,7 @@ def triage_and_extract(
         "second piece. Leave pieces out for a single object. "
         "Never write placeholders such as unknown, n/a, or not specified; omit the key instead. "
         "Never include prices, costs, or anything the SHOP messages said.\n\n"
-        f"{known_clause(known)}THREAD:\n{thread_text(digest)}"
+        f"{photo_clause(photos)}{known_clause(known)}THREAD:\n{thread_text(digest)}"
     )
     return ask_json(prompt, check_triage_and_specification, model, runner, openclaw)
 
@@ -588,6 +615,7 @@ def draft_followup(
     model: str | None = None,
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
+    photos: list[str] | None = None,
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing."""
     prompt = (
@@ -608,7 +636,10 @@ def draft_followup(
         "with a blank line between paragraphs. "
         f"Sign off as {shop_name}. Answer with one JSON object only: {{\"body\": \"...\"}}.\n\n"
         f"MISSING DETAILS TO ASK FOR: {', '.join(missing_fields)}\n\n"
-        f"TEMPLATE (tone and structure only):\n{template}\n\n"
+        + (("PHOTO READING (what the desk saw in the photo they attached): " + " | ".join(str(t)[:400] for t in photos[:3])
+            + "\nBefore the questions, say in one sentence what you took from their photo (the piece, the metal color, "
+            "the stones) and ask them to say if anything is off.\n\n") if photos else "")
+        + f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
     return ask_json(prompt, check_body_covers(list(missing_fields)), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)

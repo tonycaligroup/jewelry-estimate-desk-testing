@@ -381,6 +381,34 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.3 (8 September 2026): example photos are read at intake.**
+The owner's rule: look at the images customers send when they are example
+pieces. `pipeline.example_photos` collects the customer's newest photos on
+a first inquiry (only the reply's own photos on a reply), at most two,
+describes each with `rendering.describe_example` (direct
+`image_provider.describe` or the CLI, `judge.EXAMPLE_PHOTO_PROMPT`, plain
+text, never raising) and caches the readings in the claim's work
+(`example-photos.json`). `judge.photo_clause` hands them to
+`triage_and_extract` and `extract_specification`: visible facts fill the
+specification, `reference_images` says what came from the photo, and no
+carat, karat, size, or length is ever taken from one. `draft_followup`
+gets the same readings and says in one sentence what was taken from the
+photo. Golden `ExamplePhotoTests`. The appointment offer and confirmation
+emails no longer say there is no estimate yet: the visit is to design
+their perfect piece together (`customer_mail`, the `the visit` fact).
+
+**Unpublished after 4.14.3 (8 September 2026): a carried meeting request does not re-offer times.**
+Live, after the desk offered times, "Before I come in, is there any way I
+can get a ballpark estimate?" produced a second offer card. The reading
+merges the thread, so the first email's `scheduling_intent` came back on
+the reply and `pipeline.process_claim` took the meeting-first branch again.
+`estimate_record.drop_carried_scheduling_intent` removes a reply's
+scheduling intent when it equals the one already on the record and the
+reply's own words do not ask for a meeting; a differing intent (the reading
+found it in the new words) or a proposed time keeps the appointment path.
+Golden `BallparkBeforeTheVisitTests`; fixture
+`2026-09-08-ballpark-before-the-visit.json` (verbatim).
+
 **4.14.3 (built 8 September 2026): a ready-made inquiry gets a visit, then the owner.**
 The owner's rule (8 September): people looking for premade inventory are
 offered an appointment; if nothing is booked within two replies the desk

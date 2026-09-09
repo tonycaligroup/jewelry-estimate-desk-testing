@@ -127,8 +127,9 @@ KIND_BRIEFS = {
         "Confirm the appointment at exactly the time given (write the time exactly as provided). Say a calendar "
         "invitation is on its way to this address. Say what the meeting is for in a personal way: mention what "
         "they are bringing or planning if they said, and that you are looking forward to it. If the facts say "
-        "there is no estimate yet, say you will go through the design together at the meeting and do not ask "
-        "for any detail now. Say to reply if the time stops working. No prices."
+        "the visit is to design the piece, say you look forward to designing their perfect piece together at the "
+        "meeting; never mention an estimate, a quote, or that there is none yet, and do not ask for any detail "
+        "now. Say to reply if the time stops working. No prices."
     ),
     "reschedule": (
         "Confirm that the appointment has been moved to exactly the time given (write it exactly as provided), "
@@ -139,9 +140,10 @@ KIND_BRIEFS = {
         "Say you would be glad to meet, in a personal way that reacts to what they said, then offer exactly these "
         "meeting times, each written exactly as provided, one per line, and ask them to reply with the one that "
         "works or say what does. If the facts give consultation hours, say the time they asked for falls outside "
-        "those hours and state the hours exactly as written before offering the times. If the facts say there is "
-        "no estimate yet, say you will go through the design together when they come in and do not ask for any "
-        "detail now. Nothing is booked yet. No prices."
+        "those hours and state the hours exactly as written before offering the times. If the facts say the visit "
+        "is to design the piece, say you look forward to designing their perfect piece together when they come in; "
+        "never mention an estimate, a quote, or that there is none yet, and do not ask for any detail now. "
+        "Nothing is booked yet. No prices."
     ),
     "rendering": (
         "Send the attached design renderings. Say they illustrate the design direction discussed, that the "

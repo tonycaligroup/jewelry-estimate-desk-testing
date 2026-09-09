@@ -134,6 +134,7 @@ class World:
         self.busy: list[dict[str, str]] = []
         self.design_change: list[str] = []
         self.describe_argv: list[list[str]] = []
+        self.example_description = "A pair of drop earrings: pear-shaped green emeralds framed by small white diamonds, in yellow gold."
         self.failed_render_jobs: list[str] = []
         self.calendar_events: dict[str, dict] = {}
         self.created_events: list[dict] = []
@@ -339,6 +340,8 @@ class World:
             self._service("image_describe", argv, "checked")
             self.describe_argv.append(list(argv))
             ids = re.findall(r"^- (\w+):", flag(argv, "--prompt") or "", re.MULTILINE)
+            if "example photo" in (flag(argv, "--prompt") or ""):
+                return ok(argv, json.dumps({"ok": True, "outputs": [{"text": self.example_description}]}))
             text = json.dumps({"answers": {i: "yes" for i in ids}, "notes": {}})
             return ok(argv, json.dumps({"ok": True, "outputs": [{"text": text}]}))
         if argv[1:3] == ["cron", "list"]:
@@ -2266,6 +2269,71 @@ class ProposedTimeTests(SideBranchTests):
                 friday += timedelta(days=1)
             self.assertEqual(book["payload"]["calendar_availability"][0]["start"][:16], friday.strftime("%Y-%m-%dT%H:%M"))
             self.assertEqual(len(world.sent), 1, "no offer email; the booking waits for the owner's yes")
+        self.run_branch(branch)
+
+
+class BallparkBeforeTheVisitTests(SideBranchTests):
+    """Live 8 Sep: after an offer of times, 'can I get a ballpark estimate?' was answered with more times."""
+
+    def test_a_price_question_after_an_offer_goes_to_the_estimate_not_to_more_times(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-ballpark"
+            world.spec = {"piece_type": "earrings", "stone_type": "emerald", "stone_carat": 1.5,
+                          "scheduling_intent": "could I come by to talk it through?"}
+            world.requested = ([], [])
+            world.customer_message("k1", thread, "Hi Tony, my wife loves these emerald earrings, about 1.5 ct. Could I come by to talk it through?\n\nDavid",
+                                   subject="Looking for something similar")
+            self.tick(ws, world)
+            offer = world.cards[-1]
+            self.assertEqual(offer["kind"], "appointment_offer", offer["payload"])
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            self.assertEqual(len(world.sent), 1)
+            cards_before = len(world.cards)
+            # The reading merges the thread, so the same scheduling words come back; the reply asks for a price.
+            world.customer_message("k2", thread, "Thank you Tony,\n\nBefore I come in, is there any way I can get a ballpark estimate?\n\nDavid",
+                                   subject="Re: Looking for something similar")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual(len(world.cards), cards_before, "no second offer of times")
+            self.assertEqual(len(world.sent), 2)
+            self.assertRegex(world.sent[1]["body"], r"(?i)metal")
+            # He picks one of the offered times later: that is a meeting again.
+            pick = offer["payload"]["calendar_availability"][1]
+            world.spec["scheduling_intent"] = f"{pick['label']} works"
+            world.requested = ([pick["label"]], [pick["start"][:16]])
+            world.customer_message("k3", thread, f"{pick['label']} works for me, we can go over the rest then.\n\nDavid",
+                                   subject="Re: Looking for something similar")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertEqual(world.cards[-1]["kind"], "appointment_booking", world.cards[-1]["payload"])
+        self.run_branch(branch)
+
+
+class ExamplePhotoTests(SideBranchTests):
+    """8 Sep: a customer's example photo is read at intake and its facts reach the reading and the follow-up."""
+
+    def test_the_photo_is_read_once_and_reaches_the_reading_and_the_followup(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "earrings", "stone_type": "emerald", "metal_color": "yellow",
+                          "reference_images": "from the photo: emerald drops in yellow gold"}
+            world.customer_message("ph1", "thread-photo", "Hello Tony,\n\nMy wife has been obsessed with these earrings. "
+                                   "Do you have or can you make something similar?\n\nDavid",
+                                   subject="Looking for something similar", attachments=("earrings.png",))
+            prompts_before = len(world.prompts)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            caches = [json.loads(f.read_text()) for f in (ws / "estimate-desk").rglob("example-photos.json")]
+            self.assertEqual(len(world.describe_argv), 1, f"the photo is read exactly once: {caches}")
+            reading = [pr for pr in world.prompts[prompts_before:] if "EXAMPLE PHOTOS" in pr]
+            self.assertTrue(reading, "the reading saw the photo")
+            self.assertIn(world.example_description, reading[0])
+            followup = [pr for pr in world.prompts[prompts_before:] if "PHOTO READING" in pr]
+            self.assertTrue(followup, "the follow-up knows what was read from the photo")
+            self.assertEqual(len(world.sent), 1)
+            # A reply without a photo reads no photo again.
+            world.customer_message("ph2", "thread-photo", "14k please, and about 1.5 ct each.\n\nDavid", subject="Re: Looking for something similar")
+            self.tick(ws, world)
+            self.assertEqual(len(world.describe_argv), 1)
         self.run_branch(branch)
 
 

@@ -1773,6 +1773,24 @@ def settle_scheduling_intent(specification: dict[str, Any], own_words: str) -> d
     return {**specification, "scheduling_intent": " ".join(sentences)[:300]}
 
 
+def drop_carried_scheduling_intent(specification: dict[str, Any], record: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """A meeting asked for in an earlier email is not asked for again by a reply about something else.
+
+    Live (8 September 2026): the desk offered times; the customer replied
+    "Before I come in, is there any way I can get a ballpark estimate?" and
+    the desk offered times again. The reading merges the thread, so the first
+    email's request rode along. A reply keeps a scheduling intent only when it
+    differs from the one already on the record (the reading found it in the
+    new words) or the new words themselves ask for a meeting.
+    """
+    if not isinstance(specification, dict) or not present_value(specification.get("scheduling_intent")):
+        return specification
+    prior = ((record or {}).get("specification") or {}).get("scheduling_intent")
+    if specification["scheduling_intent"] != prior or scheduling_sentences(own_words):
+        return specification
+    return {k: v for k, v in specification.items() if k != "scheduling_intent"}
+
+
 def present_value(value: Any) -> bool:
     return bool(value) and not (isinstance(value, str) and not value.strip())
 

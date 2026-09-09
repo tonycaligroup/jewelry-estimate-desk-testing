@@ -438,6 +438,21 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.14.3): example photos a
+  customer attaches are read at intake by the vision model, once per
+  message; what is visible (piece, metal color, stones, setting, design)
+  fills the reading as if written, marked "from the photo"; a carat,
+  karat, size, or length is never taken from a photo; the follow-up says
+  in one sentence what was taken from the photo so the customer can
+  correct it (6.2). An appointment offered or confirmed before any
+  estimate never mentions an estimate: the visit is to design their
+  perfect piece together (6.6).
+- Built 8 September 2026 (unpublished, after 4.14.3): a meeting asked for
+  in an earlier email is not asked for again by a reply about something
+  else; "before I come in, can I get a ballpark estimate?" after an offer
+  of times goes to the estimate (the gate, the follow-up, the price), and
+  only a reply that itself asks for a meeting or picks a time gets an
+  appointment card (6.6).
 - Built 8 September 2026 (4.14.3): a ready-made
   inquiry (in stock, ready to ship, "do you have any") is offered a visit
   through the appointment card, never a quote or a questionnaire; the time

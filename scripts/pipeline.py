@@ -152,11 +152,66 @@ def plain_followup(missing: list[str], shop_name: str, specification: dict[str, 
     )
 
 
+EXAMPLE_PHOTOS_FILE = "example-photos.json"
+MAX_EXAMPLE_PHOTOS = 2
+
+
+def example_photos(p: dict[str, Path], message_id: str, paths: dict[str, str], openclaw: str,
+                   command_runner: Runner, initiating: bool) -> list[str]:
+    """What the desk read from the customer's example photos, once per claim (WORKFLOW.md 6.2, 8 September 2026).
+
+    A first inquiry reads the customer's newest photos on the thread; a
+    reply reads only photos attached to that reply. The readings are kept
+    in the claim's work so a resumed claim never pays for them twice, and
+    any failure leaves the reading to the words alone.
+    """
+    cache = Path(paths["work_dir"]) / EXAMPLE_PHOTOS_FILE
+    if cache.exists():
+        try:
+            stored = workflow_safe.read_object(cache)
+            return [str(t) for t in (stored.get("photos") or []) if str(t).strip()]
+        except (OSError, ValueError):
+            pass
+    found: list[str] = []
+    try:
+        import artwork as artwork_module  # local import, as in render_step
+
+        thread = workflow_safe.read_object(Path(paths["gmail_thread"])) if Path(paths["gmail_thread"]).exists() else {}
+        try:
+            mailbox = (workflow_safe.read_object(p["shop_profile"]).get("shop") or {}).get("outbound_mailbox") if p.get("shop_profile") else None
+        except (OSError, ValueError):
+            mailbox = None
+        parts = artwork_module.image_parts(thread, mailbox)
+        if not initiating:
+            parts = [part for part in parts if part.get("message_id") == message_id]
+        if parts:
+            import gateway_token  # local import; only needed when the thread carries images
+            import rendering
+
+            vision_model, _image_model = _render_settings(p)
+            rendering.PROVIDER_MODE = _render_options(p)["provider"]
+            images = artwork_module.collect(thread, Path(paths["work_dir"]) / "examples", gateway_token.load_token(),
+                                            mailbox=mailbox, limit=MAX_EXAMPLE_PHOTOS)
+            for image in images[:MAX_EXAMPLE_PHOTOS]:
+                text = rendering.describe_example(image, judge.EXAMPLE_PHOTO_PROMPT, openclaw, command_runner, vision_model)
+                if text:
+                    found.append(text)
+    except Exception as exc:  # noqa: BLE001 - a photo is a bonus; the words are read either way
+        error = f"{type(exc).__name__}: {str(exc)[:200]}"
+    else:
+        error = ""
+    try:
+        workflow_safe.write_private(cache, {"photos": found, **({"error": error} if error else {})})
+    except (OSError, ValueError):
+        pass
+    return found
+
+
 def _send_followup(
     p: dict[str, Path], base_dir: Path, message_id: str, estimate_id: str,
     digest: dict[str, Any], missing: list[str], initiating: bool, paths: dict[str, str],
     profile: dict[str, Any], model: str | None, judge_runner: Runner, openclaw: str | None,
-    command_runner: Runner = subprocess.run,
+    command_runner: Runner = subprocess.run, photos: list[str] | None = None,
 ) -> dict[str, Any]:
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
     missing = prioritized(missing)
@@ -167,7 +222,7 @@ def _send_followup(
         specification = {}
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
-                                       shop_name, model, judge_runner, openclaw)
+                                       shop_name, model, judge_runner, openclaw, photos=photos)
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
@@ -685,9 +740,10 @@ def process_claim(
     # continuing; only the message that opened the record is triaged. A
     # customer asking "what does this have to do with it?" is not junk mail.
     known = estimate_record.known_specification(record)
+    photos = example_photos(p, message_id, paths, openclaw or judge.default_openclaw(), command_runner, initiating)
     handled_words = " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
                              if m.get("sent_by") == "customer" and m.get("claimed"))
-    judged = judge.triage_and_extract(digest, model, judge_runner, openclaw, known=known) if initiating else None
+    judged = judge.triage_and_extract(digest, model, judge_runner, openclaw, known=known, photos=photos) if initiating else None
     reread = False
     if judged and judged["kind"] != "estimate_request":
         if (Path(paths["work_dir"]) / workflow_safe.OWNER_SAYS_ESTIMATE_FILE).exists():
@@ -718,7 +774,7 @@ def process_claim(
     if judged and not reread:
         specification = judged["specification"]
     else:
-        specification = judge.extract_specification(digest, model, judge_runner, openclaw, known=known)["specification"]
+        specification = judge.extract_specification(digest, model, judge_runner, openclaw, known=known, photos=photos)["specification"]
     specification = estimate_record.carry_prior_facts(record, specification)
     specification = estimate_record.merge_known_facts(record, specification)
     specification = estimate_record.settle_center_stone(
@@ -727,6 +783,9 @@ def process_claim(
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
     specification = estimate_record.settle_scheduling_intent(specification, handled_words)
+    if not initiating:
+        # "Before I come in, can I get a ballpark?": the first email's meeting request does not ride along.
+        specification = estimate_record.drop_carried_scheduling_intent(specification, record, handled_words)
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
     # customer's own words in code. A disagreement is never priced; it is
@@ -771,7 +830,7 @@ def process_claim(
             return {"outcome": "awaiting_owner", "question_id": asked.get("question_id"), "next": "done"}
         return _send_followup(
             p, base_dir, message_id, estimate_id, digest, reviewed["missing_required_fields"],
-            reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner,
+            reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner, photos=photos,
         )
     if nxt == "price":
         return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)

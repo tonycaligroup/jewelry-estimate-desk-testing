@@ -230,6 +230,29 @@ def _describe_text(stdout: str) -> str:
     return raw
 
 
+def describe_example(image: Path, prompt: str, openclaw: str, runner: Runner = subprocess.run,
+                     vision_model: str | None = DEFAULT_VISION_MODEL, deadline: float | None = None) -> str:
+    """Plain text about one customer photo (intake, 8 September 2026); empty when the vision model cannot be reached."""
+    if image_provider.available(PROVIDER_MODE):
+        try:
+            text = image_provider.describe(image, prompt, model=vision_model,
+                                           timeout=image_provider.timed(remaining_seconds(deadline), 90))
+        except OSError:
+            return ""
+        return " ".join(str(text or "").split())[:1200]
+    for attempt in range(DESCRIBE_TRIES):
+        try:
+            completed = run_cli(describe_argv(image, prompt, openclaw, vision_model), runner, deadline, "photo reading")
+            return " ".join(_describe_text(completed.stdout).split())[:1200]
+        except (OSError, subprocess.CalledProcessError):
+            left = remaining_seconds(deadline)
+            if left is not None and left < RETRY_MIN_SECONDS:
+                break
+            if attempt + 1 < DESCRIBE_TRIES:
+                time.sleep(DESCRIBE_PAUSE_SECONDS * (attempt + 1))
+    return ""
+
+
 def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner = subprocess.run,
                 vision_model: str | None = DEFAULT_VISION_MODEL, reference: Path | None = None,
                 deadline: float | None = None) -> dict[str, Any]:
