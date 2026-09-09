@@ -381,6 +381,20 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.15 (unpublished, 9 September 2026): the spreadsheet mirror, step 6.**
+`scripts/sheet_mirror.py` talks to Google Sheets through the Maton gateway
+with the desk's own token (`gateway.maton.ai/google-sheets/v4`, verified on
+the pod: read, addSheet, append, create). `setup` creates "Jewelry
+Estimate Desk" with four tabs and the formatting (frozen bold header,
+widths, status colours) or adopts the owner's sheet by URL, and writes
+`mirror.{kind,id,url}` to the profile; `rows_for` builds the tabs from the
+records and the ledger; `push` clears and rewrites each tab when the
+content hash changed, journaled in `run-work/sheet-mirror.json`, never
+raising; `inbox_watcher.tick` pushes after the customers' work inside the
+budget; readiness reports the mirror and re-applies the layout without the
+colour rules. `validate_profile` accepts the block. `SheetMirrorTests`
+drive it against a fake gateway.
+
 **4.15 (unpublished, 9 September 2026): renderings from the ledger, step 4.**
 `rendering.exact_facts` turns the specification into the facts that must
 be exact, in order: the piece, each stone with its colour word ("green

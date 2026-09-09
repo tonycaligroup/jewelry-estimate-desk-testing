@@ -599,6 +599,15 @@ def tick(
     if rehearsal_state.get("enabled"):
         notes.insert(0, rehearsal.banner(rehearsal_state) + (f"; {summary.get('held', 0)} held this tick" if summary.get("held") else ""))
     summary["notes"] = notes
+    # The optional spreadsheet mirror (RELEASE-PLAN-4.15.md 2.8): rewritten when the desk's state changed, after
+    # the customers' work, best effort; a Google failure is journaled and never reaches the owner or a customer.
+    try:
+        import sheet_mirror  # local import: keeps the watcher importable without the mirror's dependencies
+
+        if time.monotonic() - started < max(60.0, cron_config.WATCHER_TIMEOUT_SECONDS - 60):
+            summary["mirror"] = sheet_mirror.push(workspace)
+    except Exception as exc:  # noqa: BLE001
+        summary["mirror"] = {"pushed": False, "reason": str(exc)[:120]}
     if report["message"] != "NO_REPLY" and not report.get("settled"):
         unleased = report["counts"]["processing"] - report.get("delegated", 0)
         if unleased <= len(deferred) and len(report["message"].splitlines()) == 1:

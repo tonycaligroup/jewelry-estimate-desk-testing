@@ -62,6 +62,11 @@ model with thinking off. If Kolo cannot verify the model, stop.
 - `scripts/validate_profile.py`: validate runtime shop configuration.
 - `scripts/manifest.py`: the checksum of every script for this version; readiness
   fails, naming the files, when the installed folder does not match.
+- `scripts/ledger.py`: the estimate ledger (every fact with its source) in
+  `estimate-desk/ledger.sqlite`; the record's specification is derived from it.
+- `scripts/sheet_mirror.py`: the optional spreadsheet mirror for the counter;
+  `setup` creates the sheet (or adopts one by `--url`), `push` rewrites it,
+  `check` is what readiness reports.
 - `scripts/activation_binding.py`: privately bind approvals to the Kolo user
   who installs and activates the skill.
 - `scripts/customer_state_reset.py`: clear prior customer/job state for a fresh
@@ -249,6 +254,18 @@ When a customer mentions an estimate, a price, or a cost, the desk pursues it
 even when they also ask to come in: the appointment card carries the questions
 the estimate needs, and the one email your approval sends offers the times and
 asks them. Nothing reaches the customer before the approval.
+
+An optional spreadsheet mirror, off until set up, shows every customer, the
+week's meetings, every price card, and every fact with its source, rewritten
+after each tick that changed something; nothing is ever read back from it. To
+set it up once, in the desk session:
+
+```bash
+python3 {baseDir}/scripts/sheet_mirror.py setup --workspace '<absolute-workspace>'
+```
+
+Add `--url '<the owner's sheet URL>'` to use a sheet they already have. The
+sheet's URL lands in the profile and readiness reports it.
 
 A rendering starts from the customer's example photo when they sent one and
 names the piece, each stone's colour, and the metal first; the checker asks

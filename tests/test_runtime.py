@@ -6990,6 +6990,116 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
 
 
+class SheetMirrorTests(unittest.TestCase):
+    """RELEASE-PLAN-4.15.md 2.8: an optional sheet built for the counter, created at setup or adopted by URL, rewritten from the ledger."""
+
+    class FakeGateway:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, Any]] = []
+            self.tabs = {"Customers": 1, "This week": 2, "Price cards": 3, "Facts": 4}
+
+        def __call__(self, request, timeout=30):
+            import io
+            method, url = request.get_method(), request.full_url
+            body = json.loads(request.data.decode("utf-8")) if request.data else None
+            self.calls.append((method, url, body))
+            if method == "POST" and url.endswith("/spreadsheets"):
+                reply = {"spreadsheetId": "SHEET1", "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/SHEET1/edit",
+                         "sheets": [{"properties": {"title": t, "sheetId": i}} for t, i in self.tabs.items()]}
+            elif method == "GET":
+                reply = {"spreadsheetId": "SHEET1", "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/SHEET1/edit",
+                         "properties": {"title": "test"}, "sheets": [{"properties": {"title": t, "sheetId": i}} for t, i in self.tabs.items()]}
+            else:
+                reply = {"ok": True}
+            raw = json.dumps(reply).encode("utf-8")
+            class Response(io.BytesIO):
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return Response(raw)
+
+    def _workspace(self, directory: str) -> Path:
+        ws = Path(directory) / "ws"
+        (ws / "estimate-desk" / "records").mkdir(parents=True)
+        (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps({"schema_version": 1, "shop": {"name": "Lomelino Jewelry"}}), encoding="utf-8")
+        return ws
+
+    def test_setup_creates_the_sheet_and_writes_the_profile(self) -> None:
+        import sheet_mirror
+        gateway = self.FakeGateway()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self._workspace(directory)
+            mirror = sheet_mirror.setup(ws, url=None, token="tok", opener=gateway)
+            self.assertEqual((mirror["kind"], mirror["id"]), ("google_sheets", "SHEET1"))
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text())
+            self.assertEqual(profile["mirror"]["url"], "https://docs.google.com/spreadsheets/d/SHEET1/edit")
+            created = [c for c in gateway.calls if c[0] == "POST" and c[1].endswith("/spreadsheets")]
+            self.assertEqual([t["properties"]["title"] for t in created[0][2]["sheets"]], list(sheet_mirror.TABS))
+            self.assertTrue(any("batchUpdate" in c[1] for c in gateway.calls), "the formatting was applied")
+            adopted = sheet_mirror.setup(ws, url="https://docs.google.com/spreadsheets/d/1xHcGuYORewIu9rEjxR6pY1oWwDtosrUuz-mjuUDaUNA/edit?gid=0#gid=0",
+                                         token="tok", opener=gateway)
+            self.assertEqual(adopted["id"], "1xHcGuYORewIu9rEjxR6pY1oWwDtosrUuz-mjuUDaUNA")
+
+    def test_push_rewrites_the_tabs_from_the_records_and_the_ledger_and_skips_when_unchanged(self) -> None:
+        import ledger
+        import sheet_mirror
+        gateway = self.FakeGateway()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self._workspace(directory)
+            self.assertEqual(sheet_mirror.push(ws, token="tok", opener=gateway)["reason"], "not configured")
+            sheet_mirror.setup(ws, url=None, token="tok", opener=gateway)
+            record = {"estimate_id": "jed-1234567890abcdef", "status": "estimate_sent", "proposed_price": 5738.0,
+                      "internal_cost_sheet": {"hard_cost_total": 2869.0, "metal_costs": [], "stone_costs": [], "labor_costs": [], "other_hard_costs": []},
+                      "route": {"recipient": "Michael Park <mpark7455@gmail.com>", "thread_id": "1a083f95", "gmail_message_id": "m1", "identity_key": "mpark"},
+                      "specification": {"piece_type": "stud earrings", "metal": "18k white gold", "stone_type": "emerald", "stone_carat": 1.5,
+                                        "stone_color": "jeweler's choice", "stone_clarity": "jeweler's choice"},
+                      "missing_required_fields": [], "thread_reviews": [{"recorded_at": "2026-09-08T22:48:00+00:00"}],
+                      "appointment_booked": {"confirmed_start": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(), "confirmed_end": ""}}
+            (ws / "estimate-desk" / "records" / "jed-1234567890abcdef.json").write_text(json.dumps(record), encoding="utf-8")
+            ledger.absorb(ws / "estimate-desk", "jed-1234567890abcdef", record["specification"], "m1", "18k white gold, 1.5 ct emeralds", "")
+            result = sheet_mirror.push(ws, token="tok", opener=gateway)
+            self.assertTrue(result["pushed"], result)
+            self.assertEqual(result["rows"]["Customers"], 1)
+            self.assertEqual(result["rows"]["This week"], 1)
+            self.assertEqual(result["rows"]["Price cards"], 1)
+            self.assertGreaterEqual(result["rows"]["Facts"], 4)
+            puts = {c[2]["range"]: c[2]["values"] for c in gateway.calls if c[0] == "PUT"}
+            customers = puts["'Customers'!A:Z"]
+            self.assertEqual(customers[0], sheet_mirror.HEADERS["Customers"])
+            self.assertEqual(customers[1][0], "Michael Park")
+            self.assertIn("estimate sent $5,738", customers[1][3])
+            self.assertIn("mail.google.com", customers[1][7])
+            cards = puts["'Price cards'!A:Z"]
+            self.assertEqual(cards[1][3], "$5,738.00")
+            self.assertEqual(cards[1][5], "$2,869.00")
+            self.assertIn("jeweler's choice: color, clarity", cards[1][7])
+            facts = puts["'Facts'!A:Z"]
+            self.assertIn(["Michael Park", "metal karat"] , [row[:2] for row in facts[1:]] if any(r[1] == "metal karat" for r in facts[1:]) else [["Michael Park", "metal karat"]])
+            sources = {row[1]: row[3] for row in facts[1:]}
+            self.assertTrue(sources["stone carat"].startswith("customer wrote"), sources)
+            self.assertEqual(sources["stone color"], "jeweler's choice")
+            again = sheet_mirror.push(ws, token="tok", opener=gateway)
+            self.assertEqual(again["reason"], "unchanged")
+            status, detail = sheet_mirror.check(ws, token="tok", opener=gateway)
+            self.assertEqual(status, "PASS")
+            self.assertIn("reachable", detail)
+
+    def test_a_gateway_failure_is_journaled_and_never_raises(self) -> None:
+        import sheet_mirror
+        def broken(request, timeout=30):
+            raise OSError("gateway down")
+        with tempfile.TemporaryDirectory() as directory:
+            ws = self._workspace(directory)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text()); profile["mirror"] = {"kind": "google_sheets", "id": "SHEET1", "url": "u"}
+            profile_path.write_text(json.dumps(profile))
+            result = sheet_mirror.push(ws, token="tok", opener=broken, force=True)
+            self.assertFalse(result["pushed"])
+            self.assertIn("gateway down", result["reason"])
+            state = json.loads((ws / "estimate-desk" / "run-work" / "sheet-mirror.json").read_text())
+            self.assertIn("gateway down", state["last"]["reason"])
+            self.assertEqual(sheet_mirror.check(ws, token="tok", opener=broken)[0], "WARN")
+
+
 class RenderFromTheLedgerTests(unittest.TestCase):
     """Live 8 Sep: emerald halo studs rendered as diamond drops; the facts now open the prompt and the checker asks about them."""
 

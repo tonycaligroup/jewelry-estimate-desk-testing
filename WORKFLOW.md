@@ -438,6 +438,14 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (4.15, unpublished): an optional spreadsheet
+  mirror built for the counter: "Customers" first (one row per customer,
+  status in plain words, next meeting, what is still open, a link to the
+  thread), "This week", "Price cards" (quote, cost, profit, assumptions,
+  owner-only figures off the first tab), and "Facts" (every fact with its
+  source). Created at setup in the shop's Google account through the same
+  gateway token, or adopted by URL; rewritten after a tick that changed
+  something; never read back (7).
 - Built 9 September 2026 (4.15, unpublished): renderings from the ledger.
   The facts that must be exact open the prompt in order (the piece, each
   stone with its colour, the metal, the setting), the checker asks about

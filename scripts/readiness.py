@@ -131,6 +131,14 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
     else:
         add("watcher cron", "PASS", f"enabled={watcher.get('enabled')} schedule={watcher.get('schedule') or watcher.get('cron')}")
 
+    # The optional spreadsheet mirror: not configured, reachable (formatting re-applied), or unreachable.
+    try:
+        import sheet_mirror  # local import: keeps the readiness checks importable on their own
+
+        status, detail = sheet_mirror.check(workspace)
+        add("spreadsheet mirror", status, detail)
+    except Exception as exc:  # noqa: BLE001
+        add("spreadsheet mirror", "WARN", f"could not check: {exc}")
     # Desk state: what the doctor sees. A finding is not a readiness failure,
     # but the owner should know before the cron runs on top of it.
     try:

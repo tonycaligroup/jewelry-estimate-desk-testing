@@ -72,6 +72,15 @@ def validate_profile(data: Any) -> dict[str, Any]:
             if views is not None and (isinstance(views, bool) or not isinstance(views, int) or not 1 <= views <= 2):
                 errors.append("rendering.views_per_piece must be 1 or 2 (two views per piece is the default)")
 
+    mirror_block = data.get("mirror")
+    if mirror_block is not None:
+        if not isinstance(mirror_block, dict):
+            errors.append("mirror must be an object")
+        else:
+            if mirror_block.get("kind") not in ("google_sheets",):
+                errors.append("mirror.kind must be google_sheets (OneDrive/Office 365 later)")
+            if not isinstance(mirror_block.get("id"), str) or not mirror_block["id"].strip():
+                errors.append("mirror.id must be the spreadsheet's id (sheet_mirror.py setup writes it)")
     desk_block = data.get("desk")
     if desk_block is not None:
         if not isinstance(desk_block, dict):
