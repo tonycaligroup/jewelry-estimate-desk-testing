@@ -95,13 +95,17 @@ then runs the same reading contract.
 
 ### 2.3 Precedence and protection
 
-Newest customer row wins. A `photo` row fills only a field with no
-customer row and is replaced by any later customer row. A `jeweler` row is
-written by code when the customer leaves a field to the jeweler ("I don't
-know", "whatever is best") or when policy says the field is the jeweler's
-(technical fields; colored-stone grades if the owner so decides). An
-`owner` row (a rate, a price, a decision) outranks everything and is
-never asked.
+Newest customer row wins: the customer's written word takes precedence
+over everything but the owner. A `photo` row fills only a field with no
+customer row, is stated back to the customer to confirm ("from your
+photo, white gold; tell me if not"), stands unless they correct it, and
+is replaced by any later customer row. A `jeweler` row is written by code
+when the customer leaves a field to the jeweler ("I don't know",
+"whatever is best") or when policy says the field is the jeweler's:
+technical fields, colored-stone grades, and diamond color and clarity,
+all shown as assumptions on the price card and never asked (the owner's
+decisions, 9 September 2026). An `owner` row (a rate, a price, a
+decision) outranks everything and is never asked.
 
 ### 2.4 The gate on the ledger
 
@@ -111,16 +115,21 @@ The stall question to the owner survives only for an ask the customer
 replied to without answering and without leaving it to the jeweler.
 
 Required fields are per stone: the center stone's type, origin, shape,
-carat; the accent stones' type and origin; color and clarity per policy.
-Technical fields (dimensions except a length the customer can name,
-counts, weights) are never required.
+carat; the accent stones' type and origin. Color and clarity are never
+asked: the jeweler's choice, stated as an assumption on the card and in
+the estimate email, overridden by anything the customer wrote. Technical
+fields (dimensions except a length the customer can name, counts,
+weights) are never required.
 
 ### 2.5 The photo on the record
 
 Photo readings become `photo` rows at intake (piece type, metal color,
 stone shape, setting, design words), so they survive the claim's scratch
-folder and later messages see them. The gate fills from them; the
-follow-up says what was taken from the photo.
+folder and later messages see them. The gate fills from them, but a photo
+fact is never asked as an open question and never taken as stated: the
+next email to the customer says what was read from the photo and asks
+them to say if anything is off; the card marks it "from the photo"; the
+customer's written word replaces it the moment they give one.
 
 ### 2.6 Renders from the ledger
 
@@ -188,6 +197,12 @@ estimate is on the first tab under the customer's name.
   closed), columns sized to read without scrolling.
 - **"This week".** The next seven days of meetings with the same row
   beside each, so the day's visitors are one glance.
+- **"Price cards".** One row per price card, newest first: customer,
+  piece, quote, hard cost, profit and margin, the assumptions line as
+  the card shows it, approved or rejected or sent, the date, and the card
+  number, so an estimate can be read back at the counter without opening
+  Kolo. Cost and profit are owner-only figures: they live on this tab,
+  never on "Customers", so the first tab can be shown to staff.
 - **"Facts".** One row per fact in readable words ("Metal karat", "18K",
   "customer wrote: 18k white gold", "8 Sep 10:45 PM"), grouped by
   customer, with the source in words: what the customer said, what the
@@ -279,12 +294,16 @@ answers, one render card with green emerald halo studs. Five model calls
 fewer than today per such thread, roughly a third fewer tokens per call,
 and no question the customer cannot answer.
 
-## 7. Decisions needed from the owner
+## 7. Decisions from the owner (9 September 2026)
 
-1. Colored-stone grades: jeweler's choice unless stated? (2.3)
-2. Diamond color and clarity: ask as a preference, or jeweler's choice with
-   the assumption on the card? (2.4)
-3. Whether a photo alone may set metal color without asking. (2.5)
+1. Colored-stone grades: jeweler's choice unless the customer states one. Yes.
+2. Diamond color and clarity: jeweler's choice, shown as an assumption on
+   the card, never asked. Yes.
+3. A photo alone setting a fact such as metal color: no. The desk states
+   what it read and the customer confirms or corrects; the customer's
+   written word always takes precedence.
+4. The price card is mirrored to the sheet ("Price cards" tab) for
+   reference at the counter.
 4. The Sheets probes (2.8) all passed on the desk's pod on 9 September
    2026: read, addSheet, append, and create (POST `/v4/spreadsheets` with
    two tabs returned the id and URL). No platform question remains for the
