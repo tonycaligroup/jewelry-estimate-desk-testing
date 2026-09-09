@@ -32,7 +32,8 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 SPEC_KEYS = (
     "piece_type", "quantity", "metal", "metal_karat", "metal_color", "stone_type",
     "stone_origin", "stone_shape", "stone_carat", "stone_color", "stone_clarity",
-    "stone_cut", "stone_count", "center_stone", "accent_stones", "finger_size", "dimensions",
+    "stone_cut", "stone_count", "center_stone", "accent_stones", "accent_stone_type", "accent_stone_origin",
+    "accent_stone_color", "accent_stone_clarity", "finger_size", "dimensions",
     "setting_style", "finish", "engraving", "event_date", "budget",
     "customer_supplied_materials", "certificate", "reference_images",
     "scheduling_intent", "notes", "pieces",
@@ -383,6 +384,9 @@ def extract_specification(
         "dimensions is length or size for a chain, bracelet, or pendant. "
         "setting_style is the customer's own design wording (classic band, solitaire, bezel, channel-set, halo) or "
         "\"jeweler's choice\" when they explicitly leave it to you; never invent one. "
+        "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
+        "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
+        "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
         "When the customer explicitly leaves color, clarity, cut, finish, or the carat weight or stone size to the jeweler "
         "(\"whatever you think\", \"work it out from the logo\", \"your call\"), write \"jeweler's choice\" for that key. "
         "When the customer asks for more than one object (an engagement ring and a wedding band, two bands, "
@@ -450,6 +454,9 @@ def triage_and_extract(
         "dimensions is length or size for a chain, bracelet, or pendant. "
         "setting_style is the customer's own design wording (classic band, solitaire, bezel, channel-set, halo) or "
         "\"jeweler's choice\" when they explicitly leave it to you; never invent one. "
+        "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
+        "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
+        "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
         "When the customer explicitly leaves color, clarity, cut, finish, or the carat weight or stone size to the jeweler "
         "(\"whatever you think\", \"work it out from the logo\", \"your call\"), write \"jeweler's choice\" for that key. "
         "scheduling_intent is the customer's own words when the message being handled asks to meet, come in, "

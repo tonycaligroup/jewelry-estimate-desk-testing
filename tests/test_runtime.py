@@ -6990,6 +6990,32 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
 
 
+class GradesAreTheJewelersChoiceTests(unittest.TestCase):
+    """The owner, 9 Sep 2026: color and clarity are never asked; the jeweler chooses and the card and email say so."""
+
+    def test_grades_are_written_not_asked_and_shown(self) -> None:
+        import kolo_safe
+        profile = {"defaults": {"stone_origin": "customer_choice"}}
+        spec = {"piece_type": "stud earrings", "metal": "18k white gold", "stone_type": "emerald", "stone_origin": "lab-grown",
+                "stone_carat": 1.5, "stone_shape": "round", "setting_style": "halo", "center_stone": "yes",
+                "reference_images": "from the photo: cushion halos, stud backs"}
+        self.assertEqual(spec_gate.missing_required_fields(spec, profile), [])
+        settled = estimate_record.settle_grades(spec)
+        self.assertEqual((settled["stone_color"], settled["stone_clarity"]), ("jeweler's choice", "jeweler's choice"))
+        stated = estimate_record.settle_grades({**spec, "stone_color": "d"})
+        self.assertEqual(stated["stone_color"], "d", "a stated grade stands")
+        self.assertEqual(estimate_record.settle_grades({"piece_type": "band", "metal": "14k yellow gold"}).get("stone_color"), None, "no stones, no grades")
+        choices = kolo_safe._choices(settled)
+        self.assertIn("jeweler's choice: color, clarity", choices)
+        self.assertIn("from the photo: cushion halos", choices)
+        title = kolo_safe.approval_title({"specification": settled, "proposed_price": 5738.0, "route": {"recipient": "m@example.net"},
+                                          "owner_review": {"customer_price": 5738.0, "hard_cost_total": 2869.0, "estimated_gross_profit": 2869.0}}, "jed-1")
+        self.assertIn("jeweler's choice: color, clarity", title)
+        facts, _fixed = workflow_safe.estimate_email_facts({"proposed_price": 5738.0, "specification": settled, "revision": 0}, {"shop": {"name": "Lomelino Jewelry"}})
+        self.assertEqual(facts["chosen by the jeweler, say if you have a preference"], "clarity, color")
+        self.assertIn("read from their photo", facts)
+
+
 class LedgerTests(unittest.TestCase):
     """RELEASE-PLAN-4.15.md: every fact with its source; the customer's written word is never overwritten."""
 
@@ -7287,7 +7313,7 @@ class SpecGateTests(unittest.TestCase):
         self.assertEqual(spec_gate.missing_required_fields(full, self.profile()), [])
         self.assertEqual(
             spec_gate.missing_required_fields({"piece_type": "ring", "metal": "gold", "stone_type": "emerald"}, self.profile()),
-            ["finger_size", "metal_color", "metal_karat", "setting_style", "stone_carat", "stone_clarity", "stone_color", "stone_cut", "stone_origin"],
+            ["finger_size", "metal_color", "metal_karat", "setting_style", "stone_carat", "stone_cut", "stone_origin"],  # grades are never asked
         )
         # No stones: no stone fields and no setting style required; platinum needs no karat or color.
         self.assertEqual(spec_gate.missing_required_fields({"piece_type": "chain", "metal": "platinum", "dimensions": "18 inch"}, self.profile()), [])
@@ -7369,7 +7395,7 @@ class InlinePipelineTests(unittest.TestCase):
             ):
                 out = pipeline.process_claim(ws, ROOT, "inquiry-1", self.intake_result(estimate_id), judge_runner=runner, openclaw="openclaw")
             self.assertEqual(out["outcome"], "followup_sent")
-            self.assertEqual(sorted(out["missing_required_fields"]), ["finger_size", "setting_style", "stone_clarity", "stone_color", "stone_cut"])
+            self.assertEqual(sorted(out["missing_required_fields"]), ["finger_size", "setting_style", "stone_cut"])
             self.assertEqual(out["missing_required_fields"][0], "finger_size", "the fields that move the price are asked first")
             self.assertEqual(runner.call_count, 2)  # one call reads the inquiry, one writes back or prices
             record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))

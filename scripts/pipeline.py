@@ -807,6 +807,7 @@ def process_claim(
     # The ledger (RELEASE-PLAN-4.15.md): every fact with its source. The reading is absorbed row by row, a
     # customer's written word is never overwritten by a photo or a re-read, and what stands is what the
     # gate, the record, the card, and the emails see.
+    specification = estimate_record.settle_grades(specification)
     ledger.migrate(desk, record)
     ledger.absorb(desk, estimate_id, specification, message_id, handled_words, " ".join(photos),
                   changeable=ledger.changeable_fields(record))

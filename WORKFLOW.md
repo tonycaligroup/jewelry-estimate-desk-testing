@@ -438,6 +438,18 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (4.15, unpublished): the estimate ledger. Every
+  fact the desk holds carries its source (the customer's own words with the
+  span, the photo, the jeweler's choice, the owner, a quoted estimate, or a
+  bare reading), in `estimate-desk/ledger.sqlite`; the record's
+  specification is derived from the rows that stand. The customer's written
+  word is never overwritten by a photo or a re-read; a quoted fact moves
+  only for a change the customer named. A stone's color and clarity are
+  never asked: the jeweler chooses, the price card says "jeweler's choice:
+  color, clarity" and what came from the photo, and the estimate email says
+  the jeweler chose them and invites a preference; a grade the customer
+  gives for the halo or accent stones is kept apart from the center stone's
+  (6.2, 6.3).
 - Built 8 September 2026 (unpublished, after 4.14.7): when a customer asks
   to come in and for a price in one email, nothing reaches them before the
   owner's approval: the offer card carries the questions the estimate needs,

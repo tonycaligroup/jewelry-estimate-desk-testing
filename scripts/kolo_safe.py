@@ -145,7 +145,7 @@ def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     profit = review.get("estimated_gross_profit")
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (price, hard, profit)):
         pct = f" ({profit / price * 100:.0f}%)" if price else ""
-        tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}" + _assumptions(review)
+        tail = f", quote {money}, cost {_money(hard)}, profit {_money(profit)}{pct}" + _assumptions(review) + _choices(details.get("specification"))
     head = f"Price approval for {who}: "
     room = TITLE_LIMIT - len(head)
     if len(piece) + len(tail) > room:
@@ -172,6 +172,25 @@ def _fit(text: str, limit: int) -> str:
 
 
 TITLE_LIMIT = 700  # Kolo showed a 120-character title in full by SMS; longer is being tested
+
+
+def _choices(specification: Any) -> str:
+    """What the jeweler chose and what the photo gave, so the owner sees the assumptions behind the price."""
+    if not isinstance(specification, dict):
+        return ""
+    parts = []
+    pieces = specification.get("pieces") if isinstance(specification.get("pieces"), list) else [specification]
+    chosen: list[str] = []
+    for piece in pieces:
+        if isinstance(piece, dict):
+            chosen += [k.replace("stone_", "").replace("_", " ") for k, v in piece.items()
+                       if isinstance(v, str) and v.strip().lower() == "jeweler's choice" and k.replace("stone_", "").replace("_", " ") not in chosen]
+    if chosen:
+        parts.append("jeweler's choice: " + ", ".join(chosen))
+    reference = str(specification.get("reference_images") or "").strip()
+    if reference.lower().startswith("from the photo"):
+        parts.append(reference[:120])
+    return ("; " + "; ".join(parts)) if parts else ""
 
 
 def _assumptions(review: dict[str, Any]) -> str:

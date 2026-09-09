@@ -250,6 +250,11 @@ even when they also ask to come in: the appointment card carries the questions
 the estimate needs, and the one email your approval sends offers the times and
 asks them. Nothing reaches the customer before the approval.
 
+Every fact the desk holds carries its source (the customer's words, a photo,
+the jeweler's choice, the owner) in `estimate-desk/ledger.sqlite`; the
+customer's written word is never overwritten. A stone's color and clarity are
+never asked: the jeweler chooses, and the card and the estimate say so.
+
 The desk asks a customer only what they can answer about what they want (metal,
 karat, color, stone, origin, a ring size, a rough length) and interprets the
 reference and the description for the rest; it never asks a technical question

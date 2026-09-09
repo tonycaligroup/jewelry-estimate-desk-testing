@@ -2999,8 +2999,7 @@ class MultiPieceReadingTests(unittest.TestCase):
                             "setting_style": "solitaire"},
                            {"piece_type": "wedding band"}]}
         missing = spec_gate.missing_required_fields(spec, profile)
-        self.assertEqual(sorted(missing), ["pieces.0.finger_size", "pieces.0.stone_clarity", "pieces.0.stone_color",
-                                           "pieces.0.stone_origin", "pieces.1.finger_size"])
+        self.assertEqual(sorted(missing), ["pieces.0.finger_size", "pieces.0.stone_origin", "pieces.1.finger_size"])  # grades are never asked (9 Sep 2026)
         ordered = pipeline.prioritized(missing)
         self.assertEqual(ordered[0], "pieces.0.stone_origin")
         labels = pipeline.describe_missing(spec, ordered)

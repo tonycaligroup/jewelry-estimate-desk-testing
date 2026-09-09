@@ -746,8 +746,8 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         options = approval.get("calendar_availability") or []
         paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
         digest = _digest_from_work(paths, args.message_id, profile)
-        before = {"the visit": "the visit is to design their perfect piece together; never mention an estimate or a "
-                               "quote, and do not ask for design details (metal, setting, size, stone) now"} \
+        before = {"the visit": "the visit is to design your perfect piece together (write to the customer as you); "
+                               "never mention an estimate or a quote, and do not ask for design details now"} \
             if record.get("status") == "awaiting_specs" else {}
         before.update(_inventory_fact(record))
         if approval.get("action_type") == "appointment_booking" and options:
@@ -2384,7 +2384,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
             "piece": piece, "time_labels": [chosen["label"]], "shop name": shop,
             "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
-            **({"the visit": "the visit is to design their perfect piece together; never mention an estimate or a quote"}
+            **({"the visit": "the visit is to design your perfect piece together (write to the customer as you); never mention an estimate or a quote"}
                if record.get("status") == "awaiting_specs" else {}),
             **_inventory_fact(record),
         }, fixed, args)
@@ -2953,6 +2953,8 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
             f"- {key.replace('_', ' ').capitalize()}: {value}" for key, value in spec.items()
             if value not in (None, "", []) and key != "notes"
         )
+    chosen = sorted({k.replace("stone_", "").replace("_", " ") for piece in pieces if isinstance(piece, dict)
+                     for k, v in piece.items() if isinstance(v, str) and v.strip().lower() == "jeweler's choice"})
     revised = int(record.get("revision") or 0) > 0
     fixed = ESTIMATE_NOTE.format(
         piece=owner_questions.summary_of_piece(spec), spec_lines=spec_lines, price=f"{price:,.2f}",
@@ -2977,6 +2979,11 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
         **({"updated": "this is an updated estimate after the customer's change; say so, and that it replaces the earlier figure"}
            if revised else {}),
     }
+    if chosen:
+        facts["chosen by the jeweler, say if you have a preference"] = ", ".join(chosen)
+    reference = str(spec.get("reference_images") or "").strip()
+    if reference.lower().startswith("from the photo"):
+        facts["read from their photo"] = reference[:160]
     return facts, fixed
 
 

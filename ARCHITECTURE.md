@@ -381,6 +381,24 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.15 (unpublished, 9 September 2026): the estimate ledger, steps 1 and 3.**
+`scripts/ledger.py` keeps every fact with its source in
+`estimate-desk/ledger.sqlite` (see RELEASE-PLAN-4.15.md): `absorb` records
+a settled reading row by row with the source its value supports (the
+customer's own words, with the span; the photo reading; the jeweler's
+choice), `specification` derives the flat view every consumer expects,
+`quote` marks a sent estimate's facts, `migrate` imports a pre-ledger
+record once, and precedence is owner > quoted = customer > jeweler > photo
+> reading with the newest winning within a rank. `pipeline.process_claim`
+absorbs after the settle rules and reads the derived view, so a re-read
+cannot strip or flip a stated fact and the thin-change bug of 4.13.6 is
+impossible by construction. `estimate_record.settle_grades` writes the
+jeweler's choice for a stone's color and clarity (never asked, per the
+owner); `kolo_safe._choices` shows it and the photo's contribution on the
+price card; `estimate_email_facts` hands both to the estimate email; the
+extraction keeps accent-stone grades in `accent_stone_*` keys. The reset
+removes the ledger file.
+
 **Unpublished after 4.14.7 (8 September 2026): the questions ride on the offer card.**
 Live, "please provide an estimate... I can also come in person" produced
 the questions email at once and the times after the approval; the owner

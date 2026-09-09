@@ -1766,6 +1766,36 @@ LEAVES_TO_JEWELER_RE = re.compile(
 )
 
 
+GRADE_KEYS = ("stone_color", "stone_clarity")
+
+
+def settle_grades(specification: dict[str, Any]) -> dict[str, Any]:
+    """A stone's color and clarity are the jeweler's choice unless the customer stated them (the owner, 9 September 2026).
+
+    Never asked: the price card and the estimate email say what the jeweler
+    chose, and the customer's own words replace it the moment they give one.
+    """
+    if not isinstance(specification, dict):
+        return specification
+    import spec_gate  # local import: spec_gate imports this module
+
+    def fill(piece: dict[str, Any]) -> dict[str, Any]:
+        if not spec_gate.has_stones(piece) or customer_supplies_stone(piece):
+            return piece
+        out = dict(piece)
+        for key in GRADE_KEYS:
+            if not spec_gate.present(out.get(key)):
+                out[key] = "jeweler's choice"
+        return out
+
+    raw = specification.get("pieces")
+    if isinstance(raw, list) and len(raw) > 1:
+        pieces = [fill(dict(p)) if isinstance(p, dict) and spec_gate.has_stones({**{k: v for k, v in specification.items() if k != "pieces"}, **p}) else p
+                  for p in raw]
+        return {**specification, "pieces": pieces}
+    return fill(specification)
+
+
 def leaves_to_jeweler(own_words: str) -> bool:
     """The customer leaves an asked detail to the jeweler ("I don't know", "you decide", "just a reference")."""
     return bool(LEAVES_TO_JEWELER_RE.search(str(own_words or "")))

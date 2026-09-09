@@ -149,6 +149,8 @@ def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None
 
         center = cost_components.has_center_stone(spec)
         for key in STONE_KEYS:
+            if key in ("stone_color", "stone_clarity"):
+                continue  # grades are the jeweler's choice unless the customer states one (the owner's decision, 9 Sep 2026)
             if key == "stone_cut" and present(spec.get("stone_shape")):
                 continue
             if key in ("stone_carat", "stone_cut") and not center:
