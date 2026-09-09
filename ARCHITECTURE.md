@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.14.4 (8 September 2026): an estimate mentioned is pursued, meeting or not.**
+**4.14.5 (built 8 September 2026): an estimate mentioned is pursued, meeting or not.**
 The owner's rule: when estimates are mentioned the desk pursues them too.
 `estimate_record.asks_for_estimate` reads the handled message's own words
 (estimate, ballpark, quote, price, cost, how much); in the meeting-first

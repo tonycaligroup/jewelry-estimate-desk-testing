@@ -438,7 +438,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.14.4): when a customer
+- Built 8 September 2026 (4.14.5): when a customer
   mentions an estimate, a price, or a cost, the desk pursues it whether or
   not they also ask to come in: the appointment card offers the times and
   the questions for the estimate go out in the same tick (the follow-up
