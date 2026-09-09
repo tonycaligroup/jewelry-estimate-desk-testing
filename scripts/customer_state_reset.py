@@ -146,6 +146,10 @@ def reset(workspace: Path, now_ms: int | None = None) -> dict[str, Any]:
             shutil.rmtree(path)
         for path in questions + approvals + briefs + locks:
             path.unlink()
+        for name in ("ledger.sqlite", "ledger.sqlite-wal", "ledger.sqlite-shm"):
+            ledger_file = desk / name
+            if ledger_file.exists() and ledger_file.is_file() and not ledger_file.is_symlink():
+                ledger_file.unlink()
 
     return {
         "customer_state_cleared": True,

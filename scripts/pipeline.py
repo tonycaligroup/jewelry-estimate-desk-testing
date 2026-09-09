@@ -29,6 +29,7 @@ import estimate_record
 import gmail_text
 import inbox_monitor
 import judge
+import ledger
 import kolo_safe
 import owner_questions
 import rendering_materialize
@@ -803,6 +804,13 @@ def process_claim(
         specification = estimate_record.drop_carried_scheduling_intent(specification, record, handled_words)
         # "I don't know, you decide": the details of the last ask become the jeweler's choice, as the follow-up promised.
         specification = estimate_record.settle_left_to_jeweler(specification, record, handled_words)
+    # The ledger (RELEASE-PLAN-4.15.md): every fact with its source. The reading is absorbed row by row, a
+    # customer's written word is never overwritten by a photo or a re-read, and what stands is what the
+    # gate, the record, the card, and the emails see.
+    ledger.migrate(desk, record)
+    ledger.absorb(desk, estimate_id, specification, message_id, handled_words, " ".join(photos),
+                  changeable=ledger.changeable_fields(record))
+    specification = ledger.specification(desk, estimate_id, specification) or specification
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
     # customer's own words in code. A disagreement is never priced; it is

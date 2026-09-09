@@ -6990,6 +6990,72 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
 
 
+class LedgerTests(unittest.TestCase):
+    """RELEASE-PLAN-4.15.md: every fact with its source; the customer's written word is never overwritten."""
+
+    WORDS = ("I'd like it to look like these with 1.5 ct emeralds. Lab grown if that's a thing. 18k white gold please. "
+             "Halo stones should be lab grown d color, vvs1 or better.")
+    PHOTO = "A pair of stud earrings: round center stones with cushion-shaped halos of small white diamonds, white metal."
+    SPEC = {"piece_type": "stud earrings", "metal": "white gold", "metal_karat": 18, "metal_color": "white", "stone_type": "emerald",
+            "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_color": "d", "stone_clarity": "vvs1", "setting_style": "halo",
+            "center_stone": "yes", "reference_images": "from the photo: cushion halos", "scheduling_intent": "could I come by?"}
+
+    def test_each_fact_gets_the_source_its_words_support(self) -> None:
+        import ledger
+        with tempfile.TemporaryDirectory() as d:
+            desk = Path(d)
+            added = {r["field"]: r for r in ledger.absorb(desk, "jed-1", self.SPEC, "m1", self.WORDS, self.PHOTO)}
+            self.assertEqual(added["metal_karat"]["source"], "customer")
+            self.assertEqual(added["metal_karat"]["span"], "18")
+            self.assertEqual(added["stone_type"]["source"], "customer", "emerald in 'emeralds'")
+            self.assertEqual(added["stone_carat"]["source"], "customer")
+            self.assertEqual(added["stone_origin"]["source"], "customer")
+            self.assertEqual(added["piece_type"]["source"], "photo", "studs came from the picture")
+            self.assertEqual(added["center_stone"]["source"], "reading")
+            self.assertNotIn("reference_images", added, "loose keys are never rows")
+            self.assertNotIn("scheduling_intent", added)
+            view = ledger.specification(desk, "jed-1", self.SPEC)
+            self.assertEqual(view["stone_type"], "emerald")
+            self.assertEqual(view["scheduling_intent"], "could I come by?", "the message's own loose keys ride along")
+            self.assertEqual(ledger.specification(desk, "jed-1", {}).get("scheduling_intent"), None)
+
+    def test_the_written_word_is_never_overwritten_by_a_re_read_or_a_photo(self) -> None:
+        import ledger
+        with tempfile.TemporaryDirectory() as d:
+            desk = Path(d)
+            ledger.absorb(desk, "jed-1", self.SPEC, "m1", self.WORDS, self.PHOTO)
+            flipped = ledger.absorb(desk, "jed-1", {"metal_color": "yellow", "stone_type": "diamond", "piece_type": "drop earrings"},
+                                    "m2", "Thanks, when can we meet?", "yellow metal drop earrings with diamonds")
+            self.assertEqual([r["field"] for r in flipped], ["piece_type"], "only the photo-sourced piece could move, and only to a photo reading")
+            view = ledger.specification(desk, "jed-1")
+            self.assertEqual((view["metal_color"], view["stone_type"]), ("white", "emerald"))
+            changed = ledger.absorb(desk, "jed-1", {"metal_color": "rose"}, "m3", "Actually rose gold please.", "")
+            self.assertEqual([(r["field"], r["source"], r["span"]) for r in changed], [("metal_color", "customer", "rose")])
+            self.assertEqual(ledger.specification(desk, "jed-1")["metal_color"], "rose")
+            chosen = ledger.absorb(desk, "jed-1", {"stone_color": "jeweler's choice"}, "m4", "whatever you think", "")
+            self.assertEqual(chosen, [], "a jeweler's choice never replaces the customer's d")
+            self.assertEqual(ledger.specification(desk, "jed-1")["stone_color"], "d")
+
+    def test_pieces_migration_asks_and_reset(self) -> None:
+        import ledger
+        with tempfile.TemporaryDirectory() as d:
+            desk = Path(d)
+            record = {"estimate_id": "jed-2", "route": {"gmail_message_id": "m0"},
+                      "specification": {"metal": "14k yellow gold", "pieces": [{"piece_type": "signet ring", "finger_size": 10},
+                                                                              {"piece_type": "wedding band", "finger_size": 10}]}}
+            self.assertGreater(ledger.migrate(desk, record), 0)
+            self.assertEqual(ledger.migrate(desk, record), 0, "migrated once")
+            view = ledger.specification(desk, "jed-2")
+            self.assertEqual(view["metal"], "14k yellow gold")
+            self.assertEqual([p["piece_type"] for p in view["pieces"]], ["signet ring", "wedding band"])
+            ledger.mark_asked(desk, "jed-2", ["metal_karat", "stone_type"], "sent-1")
+            self.assertEqual(ledger.open_asks(desk, "jed-2"), ["metal_karat", "stone_type"])
+            ledger.absorb(desk, "jed-2", {"metal_karat": 14}, "m5", "14k please", "")
+            self.assertEqual(ledger.open_asks(desk, "jed-2"), ["stone_type"])
+            self.assertGreater(ledger.delete_estimate(desk, "jed-2"), 0)
+            self.assertEqual(ledger.specification(desk, "jed-2"), {})
+
+
 class ManifestTests(unittest.TestCase):
     """8 Sep: a pod ran 4.14.2 scripts under a 4.14.5 SKILL.md; the manifest proves the files, readiness checks it."""
 

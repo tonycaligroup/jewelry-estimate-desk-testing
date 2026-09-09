@@ -2274,6 +2274,12 @@ def record_estimate_sent(
         record["outbound_provider_message_id"] = provider_message_id
         record["status"] = "estimate_sent"
         write_object(path, record)
+        try:
+            import ledger  # local import: the ledger never imports the record helpers
+
+            ledger.quote(Path(root).parent, estimate_id, record.get("specification") or {}, record.get("route", {}).get("gmail_message_id"))
+        except Exception:  # noqa: BLE001 - the ledger is derived state; the send stands
+            pass
         return record
 
 

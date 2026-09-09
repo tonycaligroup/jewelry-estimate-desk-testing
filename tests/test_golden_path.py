@@ -3583,20 +3583,12 @@ class SameSenderTests(SideBranchTests):
             self.tick(ws, world)
             world.design_change = []
             self.assertEqual(self.answer(ws, "change")["decision"], "design_change")
-            # The 4.13.6 behaviour: the thin reading is reviewed as is and a follow-up asks for known facts.
+            # The 4.13.6 behaviour was a thin reading reviewed as is, and a follow-up asking for known facts. Since the
+            # ledger (4.15) the quoted facts stand as rows whatever a re-read drops, so even with the merge disabled
+            # nothing is asked again: the change is priced from the quoted facts plus the engraving.
+            sent_before = len(world.sent)
             with patch.object(estimate_record, "merge_known_facts", lambda record, spec: spec), patch.object(judge, "known_clause", lambda known: ""):
                 summary = self.tick(ws, world)
-            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
-            record = self.record(ws, estimate_id)
-            self.assertIn("pieces.0.finger_size", record["missing_required_fields"])
-            # The customer answers "everything as quoted"; the reading is thin again (and names no colour for the
-            # second band this time). Now the quoted facts are the base.
-            world.spec = {"pieces": [{"piece_type": "wedding band", "metal_color": "yellow", "engraving": "TL inside"},
-                                     {"piece_type": "wedding band"}]}
-            world.customer_message("n2", "thread-followup", "Everything as quoted before. Just the initials.\n\nPat\n\nOn Mon wrote:\n> could you tell me:\n> - What finger size for the first band?\n",
-                                   subject="Re: Following up on my bands")
-            sent_before = len(world.sent)
-            summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
             self.assertEqual(len(world.sent), sent_before, "nothing asked again")
             record = self.record(ws, estimate_id)
