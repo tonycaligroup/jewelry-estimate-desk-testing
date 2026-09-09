@@ -39,6 +39,30 @@ def is_ring_piece(piece: str) -> bool:
     return bool(_RING_WORD_RE.search(piece))
 
 
+# Earrings whose length a customer can name ("about an inch"); studs and anything with a stated stone never need one.
+LENGTH_EARRING_WORDS = ("hoop", "drop", "dangle", "dangling", "chandelier", "threader", "huggie", "linear")
+# Pieces whose size the jeweler works out from the design: never asked (the owner's rule, 8 September 2026).
+JEWELER_SIZED_PIECES = ("pendant", "charm", "locket", "stud")
+
+
+def needs_dimensions(spec: dict[str, Any], piece: str) -> bool:
+    """Whether the customer is asked for a size: only one they can answer (a length, a wrist), never a millimetre.
+
+    Live (8 September 2026): stud earrings with a stated 1.5 ct center stone
+    were asked for "the exact dimensions for the halo and overall size",
+    then for millimetre diameters and a drop length. A customer does not
+    know those; the jeweler works them out from the stone and the design.
+    """
+    piece = (piece or "").strip().lower()
+    if any(word in piece for word in JEWELER_SIZED_PIECES):
+        return False
+    if "earring" in piece or any(word in piece for word in LENGTH_EARRING_WORDS):
+        if present(spec.get("stone_carat")):
+            return False  # the stone sets the size
+        return any(word in piece for word in LENGTH_EARRING_WORDS)
+    return any(word in piece for word in DIMENSION_PIECES)
+
+
 def present(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -111,7 +135,7 @@ def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None
         if is_ring_piece(piece):
             if not present(spec.get("finger_size")):
                 missing.add("finger_size")
-        elif any(word in piece for word in DIMENSION_PIECES) and not present(spec.get("dimensions")):
+        elif needs_dimensions(spec, piece) and not present(spec.get("dimensions")):
             missing.add("dimensions")
     if has_stones(spec) and estimate_record.customer_supplies_stone(spec):
         # The customer's own stone: the bench needs its shape and size to

@@ -438,6 +438,18 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.14.6): the desk asks a
+  customer only what they can answer about what they want, and interprets
+  the reference and the description for the rest. A size is required only
+  where a customer can name one (a chain or bracelet length, a wrist, a
+  ring size, the length of hoops or drops); studs, pendants, and any
+  earring with a stated stone never need one. The follow-up never asks a
+  technical question (millimetres, diameters, drop lengths, weights, prong
+  or stone counts, band widths): the guard rejects such a draft and a plain
+  question goes instead. A reply that leaves an asked detail to the jeweler
+  ("I don't know", "you decide", "just a reference") makes it the jeweler's
+  choice in code and the desk prices, with no question to the owner. The
+  customer's words always outrank the photo (6.2).
 - Built 8 September 2026 (4.14.6): every script's
   checksum is recorded in `scripts/manifest.json` for the version in
   SKILL.md; readiness fails, naming the files, when the installed folder

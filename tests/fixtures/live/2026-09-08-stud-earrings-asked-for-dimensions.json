@@ -1,0 +1,40 @@
+{
+  "defect": "stud earrings with a stated 1.5 ct center emerald, 18k white gold, lab-grown, halo stones D VVS1 (with a reference photo) were asked for 'the exact dimensions for the halo and overall size', then for millimetre diameters and a drop length; a customer does not know those, the jeweler works them out; nothing was missing and the right outcome was a price card",
+  "seen_on": "4.14.6",
+  "fixed_in": "unpublished after 4.14.6",
+  "text_is": "verbatim",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "customer": {
+        "id": "s1",
+        "thread": "new",
+        "subject": "Earrings",
+        "text": "I\u2019d like it to look like these with 1.5 ct emeralds. Lab grown if that\u2019s a thing.\n\n18k white gold please.\n\nHalo stones should be lab grown d color, vvs1 or better."
+      },
+      "spec": {
+        "piece_type": "stud earrings",
+        "metal": "white gold",
+        "metal_karat": 18,
+        "metal_color": "white",
+        "stone_type": "emerald",
+        "stone_origin": "lab-grown",
+        "stone_carat": 1.5,
+        "stone_shape": "round",
+        "stone_color": "jeweler's choice",
+        "stone_clarity": "jeweler's choice",
+        "setting_style": "halo",
+        "center_stone": "yes",
+        "accent_stones": "lab-grown diamond halo, D color, VVS1 or better",
+        "reference_images": "from the photo: round center stones with cushion-shaped halos, stud backs"
+      },
+      "expect": {
+        "outcomes": [
+          "approval_requested"
+        ],
+        "sent": 0,
+        "missing_required_fields": []
+      }
+    }
+  ]
+}

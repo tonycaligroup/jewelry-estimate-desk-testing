@@ -91,8 +91,8 @@ FIELD_QUESTIONS = {
     "metal_karat": "which karat, 14K or 18K?",
     "metal_color": "yellow, white, or rose?",
     "finger_size": "what ring size?",
-    "dimensions": "what length or size should it be?",
-    "setting_style": "what setting style do you have in mind?",
+    "dimensions": "roughly what length or size would you like?",
+    "setting_style": "what look do you have in mind for the setting, or shall we suggest one?",
     "piece_type": "what kind of piece is this for?",
 }
 
@@ -786,6 +786,8 @@ def process_claim(
     if not initiating:
         # "Before I come in, can I get a ballpark?": the first email's meeting request does not ride along.
         specification = estimate_record.drop_carried_scheduling_intent(specification, record, handled_words)
+        # "I don't know, you decide": the details of the last ask become the jeweler's choice, as the follow-up promised.
+        specification = estimate_record.settle_left_to_jeweler(specification, record, handled_words)
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
     # customer's own words in code. A disagreement is never priced; it is

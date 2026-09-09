@@ -331,11 +331,12 @@ def photo_clause(photos: list[str] | None) -> str:
     return (
         "\nEXAMPLE PHOTOS the customer attached, as read by the desk's vision check (one line per photo):\n"
         f"{listed}\n"
-        "When the customer asks for something like a photo (\"these earrings\", \"something similar\"), the facts visible "
-        "in it (piece type, metal color, stone type and color, stone shape, setting style, stone count, design details) "
-        "fill the specification as if the customer had written them, and reference_images says what came from the "
-        "photo (\"from the photo: emerald drops in yellow gold\"). Never take a carat weight, a karat, a ring size, or a "
-        "length from a photo; those are asked.\n"
+        "The customer's words always come first: the photo is an example of the look, and a fact visible in it (piece "
+        "type, metal color, stone type and color, stone shape, setting style, stone count, design details) fills a key "
+        "only when the words say nothing about it; a stated fact is never replaced or contradicted by the photo "
+        "(\"look like these with 1.5 ct emeralds\" means emeralds, whatever the photo shows). reference_images says "
+        "what came from the photo alone (\"from the photo: cushion halos, stud backs\"). Never take a carat weight, a "
+        "karat, a ring size, or a length from a photo.\n"
     )
 
 
@@ -596,6 +597,22 @@ def uncovered_fields(body: str, missing_fields: list[str]) -> list[str]:
     return out
 
 
+# Questions a customer cannot answer: the jeweler works these out from the stone and the design (8 September 2026).
+BENCH_MEASUREMENT_RE = re.compile(
+    r"(?i)\b(?:millimet\w*|\bmm\b|diameters?|circumference|drop length|(?:length|size|width) (?:in|of) (?:mm|millimet)|"
+    r"gram(?:s|mage)?\b|gauge|ear ?wires?|post (?:length|type)|exact (?:dimensions?|measurements?|size)|"
+    r"precise (?:dimensions?|measurements?)|prong (?:count|number|style)|how many prongs|shank|gallery|melee|alloy|"
+    r"band (?:width|thickness)|(?:setting|bezel) height|stone count|how many (?:stones|diamonds) (?:in|for|around)|"
+    r"tolerance|purity|fineness|(?:depth|table) percentage)\b"
+)
+
+
+def bench_measurement_questions(body: str) -> list[str]:
+    """Lines of an email that ask the customer for a measurement only the bench can decide."""
+    return [line.strip() for line in str(body or "").splitlines()
+            if "?" in line and BENCH_MEASUREMENT_RE.search(line)]
+
+
 def check_body_covers(missing_fields: list[str]):
     def check(value: dict[str, Any]) -> dict[str, Any]:
         result = check_body(value)
@@ -603,6 +620,11 @@ def check_body_covers(missing_fields: list[str]):
         if left:
             raise ValueError("the email must ask about every missing detail; it never mentions: " + "; ".join(left)
                              + ". Ask for each of them, one bullet each")
+        bench = bench_measurement_questions(result["body"])
+        if bench:
+            raise ValueError("never ask the customer a technical question the jeweler works out (millimetres, diameters, drop "
+                             "lengths, weights, prong or stone counts, band widths, exact dimensions); ask for a rough preference "
+                             "or leave it to the jeweler. Remove: " + " | ".join(bench)[:300])
         return result
     return check
 
@@ -632,7 +654,11 @@ def draft_followup(
         "they described); never open with a summary of their request. Then ask for every one of the missing "
         "details listed below, in the order given (the first ones matter most to the price), as a short dash "
         "list with one bullet per detail, each bullet a plain question in the customer's words (\"- What ring "
-        "size?\", \"- Is the diamond natural or lab-grown?\"); ask for all of them in this one email so the "
+        "size?\", \"- Is the diamond natural or lab-grown?\"); ask only what a customer can answer about what they "
+        "want: never a technical question (a millimetre measurement, a stone diameter, a drop length, a weight, a prong "
+        "or stone count, a band width) which the jeweler works out from the reference and the description; a size is "
+        "asked as a rough preference (\"about how long would you like them?\", \"a delicate or a bold look?\"). Ask "
+        "for all of them in this one email so the "
         "customer is not asked twice, and tell them it is fine not to know and you will suggest what usually "
         "looks best. Never write a line that merely restates what they said (no \"I've noted\", no \"I have you "
         "down for\"); never add a timing or budget section unless it asks a question. " + closing + "Keep it "

@@ -381,6 +381,24 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.6 (8 September 2026): no technical questions to customers.**
+Live, stud earrings with a stated 1.5 ct emerald were asked for "the exact
+dimensions for the halo and overall size", then for millimetre diameters
+and a drop length; "I don't know, this is just a reference" then went to
+the owner as a stall. Three rules. `spec_gate.needs_dimensions` requires a
+size only where a customer can name one (chains, bracelets, hoops or drops
+without a stated stone); studs, pendants, charms, lockets, and any earring
+with a stated carat never need one. `judge.bench_measurement_questions`
+finds technical questions in a drafted follow-up and `check_body_covers`
+rejects the draft (the model retries once, then the plain follow-up goes),
+and the drafting prompt says so. `estimate_record.settle_left_to_jeweler`
+turns the last ask's open details into the jeweler's choice when the
+reply's own words leave it to the jeweler (`leaves_to_jeweler`), applied
+in `process_claim` on replies, so the record prices with no owner
+question. The photo clause now says the customer's words always come
+first. Fixture `2026-09-08-stud-earrings-asked-for-dimensions.json`
+(verbatim), golden `LeftToTheJewelerTests`, unit tests.
+
 **4.14.6 (built 8 September 2026): the scripts manifest.**
 Live, the pod ran the 4.14.2 `pipeline.py` and `estimate_record.py` under
 a SKILL.md that said 4.14.5; three releases of appointment and inventory

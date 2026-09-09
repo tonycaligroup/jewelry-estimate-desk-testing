@@ -249,6 +249,12 @@ When a customer mentions an estimate, a price, or a cost, the desk pursues it
 even when they also ask to come in: the appointment card offers times and the
 questions for the estimate go out in the same tick.
 
+The desk asks a customer only what they can answer about what they want (metal,
+karat, color, stone, origin, a ring size, a rough length) and interprets the
+reference and the description for the rest; it never asks a technical question
+(millimetres, diameters, drop lengths, weights, prong or stone counts), and a
+customer's "I don't know" makes that detail the jeweler's choice.
+
 Example photos a customer attaches are read at intake by the vision model: what
 is visible fills the reading, marked "from the photo"; a carat, karat, size, or
 length never comes from a photo, and the follow-up says what was taken from it.

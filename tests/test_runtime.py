@@ -7035,6 +7035,33 @@ class PhotoClauseTests(unittest.TestCase):
         self.assertIn("Never take a carat weight, a karat, a ring size, or a length from a photo", clause)
 
 
+class TechnicalQuestionGuardTests(unittest.TestCase):
+    """8 Sep: the desk asked a customer for millimetre diameters and a drop length; technical questions never go out."""
+
+    def test_technical_questions_are_caught_and_preferences_pass(self) -> None:
+        body = ("Hi Michael,\n\n- What is the millimeter diameter of the center emerald?\n- What is the total drop length from the ear wire?\n"
+                "- How many prongs would you like on each stone?\n- Which karat, 14K or 18K?\n- Yellow, white, or rose?\n\nLomelino Jewelry")
+        caught = judge.bench_measurement_questions(body)
+        self.assertEqual(len(caught), 3, caught)
+        self.assertEqual(judge.bench_measurement_questions("- Which karat, 14K or 18K?\n- Roughly how long would you like the hoops?\n- Natural or lab-grown?"), [])
+        with self.assertRaises(ValueError) as caught_error:
+            judge.check_body_covers(["metal_karat"])({"body": body})
+        self.assertIn("technical", str(caught_error.exception))
+
+    def test_i_dont_know_is_an_answer(self) -> None:
+        for words in ("I don't know. This is just a reference.", "Not sure, whatever you think looks best.", "Up to you!", "You decide."):
+            with self.subTest(words=words):
+                self.assertTrue(estimate_record.leaves_to_jeweler(words), words)
+        self.assertFalse(estimate_record.leaves_to_jeweler("Size 7, 14k yellow gold."))
+        record = {"missing_required_fields": ["dimensions", "stone_color", "confirm.stone_carat", "piece_type"]}
+        settled = estimate_record.settle_left_to_jeweler({"piece_type": "earrings", "stone_color": "g"}, record, "I don't know, you pick.")
+        self.assertEqual(settled["dimensions"], "jeweler's choice")
+        self.assertEqual(settled["stone_color"], "g", "a detail the customer gave is kept")
+        self.assertNotIn("confirm.stone_carat", settled)
+        self.assertEqual(settled["piece_type"], "earrings")
+        self.assertEqual(estimate_record.settle_left_to_jeweler({"piece_type": "ring"}, record, "Size 7 please."), {"piece_type": "ring"})
+
+
 class ReadsLikeAnOrderTests(unittest.TestCase):
     """Live 8 Sep: a ready-to-ship question carrying metal, stones, size, and a budget was filed as inventory."""
 
@@ -7166,6 +7193,19 @@ class SpecGateTests(unittest.TestCase):
         spec = dict(full); spec["stone_origin"] = "jeweler's choice"
         self.assertEqual(spec_gate.missing_required_fields(spec, self.profile("ask_always")), ["stone_origin"])
 
+    def test_a_size_is_asked_only_where_a_customer_can_answer_it(self) -> None:
+        """Live 8 Sep: studs with a 1.5 ct center stone were asked for exact dimensions, then millimetre diameters."""
+        studs = {"piece_type": "stud earrings", "metal": "18k white gold", "stone_type": "emerald", "stone_origin": "lab-grown",
+                 "stone_carat": 1.5, "stone_shape": "round", "stone_color": "jeweler's choice", "stone_clarity": "jeweler's choice",
+                 "setting_style": "halo", "center_stone": "yes"}
+        self.assertEqual(spec_gate.missing_required_fields(studs, self.profile()), [])
+        self.assertNotIn("dimensions", spec_gate.missing_required_fields({"piece_type": "earrings", "metal": "18k white gold"}, self.profile()))
+        self.assertNotIn("dimensions", spec_gate.missing_required_fields({"piece_type": "drop earrings", "metal": "18k white gold", "stone_type": "sapphire", "stone_carat": 1}, self.profile()))
+        self.assertNotIn("dimensions", spec_gate.missing_required_fields({"piece_type": "pendant", "metal": "18k white gold"}, self.profile()))
+        for piece in ("hoop earrings", "drop earrings", "bracelet", "chain", "necklace"):
+            with self.subTest(piece=piece):
+                self.assertIn("dimensions", spec_gate.missing_required_fields({"piece_type": piece, "metal": "18k white gold"}, self.profile()))
+
     def test_earrings_are_not_a_ring(self) -> None:
         """Live 8 Sep: 'earrings' contains 'ring'; the desk asked a customer wanting earrings for a finger size."""
         for piece in ("earrings", "earring", "hoop earrings", "diamond stud earrings", "keyring", "herringbone chain"):
@@ -7173,7 +7213,9 @@ class SpecGateTests(unittest.TestCase):
                 self.assertFalse(spec_gate.is_ring_piece(piece))
                 missing = spec_gate.missing_required_fields({"piece_type": piece, "metal": "14k yellow gold"}, self.profile())
                 self.assertNotIn("finger_size", missing, piece)
-        self.assertIn("dimensions", spec_gate.missing_required_fields({"piece_type": "earrings", "metal": "14k yellow gold"}, self.profile()))
+        # A size is asked only where a customer can name one: hoops yes, plain earrings no (the jeweler interprets).
+        self.assertIn("dimensions", spec_gate.missing_required_fields({"piece_type": "hoop earrings", "metal": "14k yellow gold"}, self.profile()))
+        self.assertNotIn("dimensions", spec_gate.missing_required_fields({"piece_type": "earrings", "metal": "14k yellow gold"}, self.profile()))
         for piece in ("ring", "signet ring", "men's ring", "cocktail ring", "wedding band", "wedding bands", "eternity band"):
             with self.subTest(piece=piece):
                 self.assertTrue(spec_gate.is_ring_piece(piece))

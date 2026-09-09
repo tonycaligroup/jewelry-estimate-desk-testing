@@ -2366,6 +2366,29 @@ class MeetingAndEstimateTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class LeftToTheJewelerTests(SideBranchTests):
+    """8 Sep: the follow-up promises 'say so and I will suggest'; 'I don't know' keeps that promise without asking the owner."""
+
+    def test_i_dont_know_on_an_asked_detail_becomes_the_jewelers_choice_and_prices(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-dunno"
+            world.spec = {"piece_type": "hoop earrings", "metal": "yellow gold", "metal_karat": "14k"}
+            world.customer_message("d1", thread, "Hi, I'd like a pair of 14k yellow gold hoops.\n\nSam", subject="Hoops")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["missing_required_fields"], ["dimensions"])
+            self.assertNotRegex(world.sent[0]["body"], r"(?i)millimet|diameter|\bmm\b")
+            # She leaves it to the jeweler; the reading brings nothing new.
+            notices_before = len(world.notices)
+            world.customer_message("d2", thread, "I don't know, whatever you think looks best.\n\nSam", subject="Re: Hoops")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(len(world.notices), notices_before, "no question to the owner")
+            self.assertEqual(self.record(ws, estimate_id)["specification"].get("dimensions"), "jeweler's choice")
+        self.run_branch(branch)
+
+
 class CombinedIntentTests(SideBranchTests):
     """A rendering and a meeting in one email: two cards, approved in either order, booked once."""
 

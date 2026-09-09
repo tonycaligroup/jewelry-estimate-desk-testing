@@ -1,5 +1,5 @@
 {
-  "defect": "a customer asking for earrings like the pair in their photo was asked 'What finger size is she?'; the gate treated any piece whose name contains 'ring' as a ring, and 'earrings' does",
+  "defect": "a customer asking for earrings like the pair in their photo was asked 'What finger size is she?'; the gate treated any piece whose name contains 'ring' as a ring, and 'earrings' does (since the no-technical-questions rule, plain earrings are not asked for a size either)",
   "seen_on": "4.14.1",
   "fixed_in": "4.14.2",
   "text_is": "paraphrase",
@@ -21,7 +21,6 @@
         ],
         "sent": 1,
         "missing_required_fields": [
-          "dimensions",
           "metal",
           "metal_color",
           "metal_karat"

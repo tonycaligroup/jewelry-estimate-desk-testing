@@ -1759,6 +1759,56 @@ def asks_for_estimate(own_words: str) -> bool:
     return bool(ASKS_FOR_ESTIMATE_RE.search(str(own_words or "")))
 
 
+LEAVES_TO_JEWELER_RE = re.compile(
+    r"(?i)\b(?:i (?:don'?t|do not) know|not sure|no idea|no preference|up to you|you (?:decide|choose|pick)|your call|"
+    r"whatever you (?:think|suggest|recommend)|what(?:ever)? (?:looks|works) best|i'?ll leave (?:it|that) to you|"
+    r"leave (?:it|that) to you|just a reference|use your judgment|surprise me)\b"
+)
+
+
+def leaves_to_jeweler(own_words: str) -> bool:
+    """The customer leaves an asked detail to the jeweler ("I don't know", "you decide", "just a reference")."""
+    return bool(LEAVES_TO_JEWELER_RE.search(str(own_words or "")))
+
+
+def settle_left_to_jeweler(specification: dict[str, Any], record: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """A reply that leaves the last ask to the jeweler fills those details as the jeweler's choice, in code.
+
+    Live (8 September 2026): the desk asked stud earrings' "dimensions", the
+    customer wrote "I don't know. This is just a reference." and the owner
+    was asked whether to skip. The follow-up itself promised "say so and I
+    will suggest what usually looks best", so the desk keeps that promise:
+    every detail of the last ask the reply still leaves open becomes the
+    jeweler's choice; reading checks and the piece itself are never chosen.
+    """
+    if not isinstance(specification, dict) or not leaves_to_jeweler(own_words):
+        return specification
+    asked = [str(f) for f in ((record or {}).get("missing_required_fields") or [])]
+    if not asked:
+        return specification
+    settled = dict(specification)
+    for field in asked:
+        if field.startswith("confirm."):
+            continue
+        index, bare = split_field_name(field)
+        if bare == "piece_type":
+            continue
+        if index is None:
+            if not _present(settled.get(bare)):
+                settled[bare] = "jeweler's choice"
+        else:
+            pieces = [dict(p) if isinstance(p, dict) else {} for p in settled.get("pieces") or []]
+            if index < len(pieces) and not _present(pieces[index].get(bare)):
+                pieces[index][bare] = "jeweler's choice"
+                settled["pieces"] = pieces
+    return settled
+
+
+def _present(value: Any) -> bool:
+    return value not in (None, "", [], {}) and not (isinstance(value, str) and value.strip().lower() in
+                                                     ("", "n/a", "unknown", "unspecified", "tbd", "none"))
+
+
 def accepts_a_time(own_words: str) -> bool:
     """The customer picks or accepts an offered time, in their own words."""
     return bool(ACCEPTS_TIME_RE.search(str(own_words or "")))
