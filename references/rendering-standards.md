@@ -55,3 +55,13 @@ Say every rendering is for guidance only: it shows the direction of the
 design, and a rendering that comes close is still not the finished piece, so
 small details may differ. State that the written specification and the
 approved final design are what the shop makes (the owner, 9 September 2026).
+
+## From an example photograph
+
+When the customer sent a photo of a piece they like, the render is an edit
+of that photograph, not a new picture: keep its design, construction,
+proportions and stone layout, name only what changes (the stone, the metal,
+a setting they asked for), keep the photograph's own view first, and ask
+the image provider for high input fidelity. Never restate the whole
+specification or force an archetype view onto an example render (9
+September 2026).

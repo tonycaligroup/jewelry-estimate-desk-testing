@@ -232,19 +232,30 @@ def build_prompts(plan: dict[str, Any], specification: dict[str, Any] | str, has
     exact = plan.get("must_be_exact") or []
     exact_clause = (" Must be exact: " + "; ".join(exact) + ".") if exact else ""
     if example:
+        # The photograph is the design (the owner, 9 September 2026: renders drifted from the reference). The
+        # prompt names only what changes, never the whole specification or an archetype's own views, so the
+        # model edits the picture instead of re-imagining the piece; the first view is the photograph's own.
+        changes = "; ".join(exact) if exact else f"the piece: {arch['label']}; specification: {spec_text(specification)}"
         base = (
-            f"{arch['photo']} Image one is the customer's example piece: make the same design, construction, and "
-            f"proportions as that photograph, changed only as follows.{exact_clause} "
-            f"The piece: {arch['label']}. Specification: {spec_text(specification)}. "
-            + " ".join(refs) + " Keep everything else as in the example, one design, no alternates, no text in the image."
+            f"{arch['photo']} Image one is the customer's example piece: this is an edit of that photograph. Keep the "
+            f"same design, construction, proportions, stone layout, and finish as the photograph, changed only as "
+            f"follows: {changes}. " + " ".join(refs) + " Change nothing else, one design, no alternates, no text in the image."
         )
-    else:
-        base = (
-            f"{arch['photo']}{exact_clause} The piece: {arch['label']}. {arch['construction']} "
-            f"Specification: {spec_text(specification)}. "
-            + " ".join(refs) + " Exactly as specified, one design, no alternates, no text in the image."
-        )
+        return [f"{base} View: {view}." for view in EXAMPLE_VIEWS]
+    base = (
+        f"{arch['photo']}{exact_clause} The piece: {arch['label']}. {arch['construction']} "
+        f"Specification: {spec_text(specification)}. "
+        + " ".join(refs) + " Exactly as specified, one design, no alternates, no text in the image."
+    )
     return [f"{base} View: {view}." for view in arch["views"][:2]]
+
+
+# An example photograph keeps its own view; the second view turns the same piece a little.
+EXAMPLE_VIEWS = ("the same view and framing as the photograph",
+                 "the same piece turned to a three-quarter view, everything else as in the photograph")
+# Edits keep the reference's own features (a reported gpt-image-1 option; a provider that does not know it gets the
+# edit again without it).
+EDIT_INPUT_FIDELITY = "high"
 
 
 def image_argv(prompt: str, refs: list[Path], output: Path, openclaw: str, model: str | None = None,
@@ -284,7 +295,8 @@ def render(prompt: str, refs: list[Path], output: Path, openclaw: str, runner: R
     if image_provider.available(PROVIDER_MODE):
         seconds = image_provider.timed(remaining_seconds(deadline), IMAGE_TIMEOUT_MS / 1000)
         return image_provider.generate(prompt, output, model=model, refs=refs or None, timeout=seconds,
-                                       size=IMAGE_SIZE, quality=IMAGE_QUALITY)
+                                       size=IMAGE_SIZE, quality=IMAGE_QUALITY,
+                                       input_fidelity=EDIT_INPUT_FIDELITY if refs else None)
     timeout_ms = IMAGE_TIMEOUT_MS
     left = remaining_seconds(deadline)
     if left is not None:
@@ -545,9 +557,12 @@ def plan_piece(
     refs: list[Path] = []
     if artwork:
         refs.append(Path(artwork))
-    if arch.get("exemplar"):
+    # An archetype's exemplar shows construction; beside the customer's example photograph it would compete
+    # with the design they sent, so an example render carries their photograph alone.
+    with_exemplar = bool(arch.get("exemplar")) and plan.get("reference_kind") != "example"
+    if with_exemplar:
         refs.append(Path(arch["exemplar"]))
-    prompts = build_prompts(plan, specification, artwork is not None, bool(arch.get("exemplar")))[:max(1, views)]
+    prompts = build_prompts(plan, specification, artwork is not None, with_exemplar)[:max(1, views)]
     return {
         "plan": plan, "prompts": prompts, "references": [str(r) for r in refs], "out_dir": str(out_dir),
         "views": [{"slot": slot, "prompt": prompt, "out_dir": str(out_dir)} for slot, prompt in enumerate(prompts, start=1)],

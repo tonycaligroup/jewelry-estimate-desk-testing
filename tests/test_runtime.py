@@ -7131,8 +7131,16 @@ class RenderFromTheLedgerTests(unittest.TestCase):
                 "reference_kind": "example"}
         prompts = rendering.build_prompts(plan, self.SPEC, has_artwork=True, has_exemplar=False)
         self.assertIn("Image one is the customer's example piece", prompts[0])
-        self.assertIn("green emerald center stone", prompts[0])
-        self.assertLess(prompts[0].index("the piece is stud earrings"), prompts[0].index("Specification:"))
+        self.assertIn("changed only as follows: the piece is stud earrings; green emerald center stone", prompts[0])
+        # The owner, 9 Sep: renders drifted from the reference. An edit names the changes, never the whole
+        # specification or an archetype view, and the first view is the photograph's own.
+        self.assertNotIn("Specification:", prompts[0])
+        self.assertNotIn("scheduling intent", prompts[0])
+        self.assertIn("View: the same view and framing as the photograph.", prompts[0])
+        self.assertIn("three-quarter view, everything else as in the photograph", prompts[1])
+        self.assertIn("Change nothing else", prompts[0])
+        bare = rendering.build_prompts({**plan, "must_be_exact": []}, {"piece_type": "stud earrings"}, has_artwork=True, has_exemplar=False)
+        self.assertIn("changed only as follows: the piece: ", bare[0], "no facts: the label and the specification stand in")
         mark = rendering.build_prompts({**plan, "reference_kind": "mark"}, self.SPEC, has_artwork=True, has_exemplar=False)
         self.assertIn("customer's mark", mark[0])
         self.assertNotIn("example piece", mark[0])
@@ -9735,6 +9743,57 @@ class ImageProviderTests(unittest.TestCase):
         self.assertIn(b'name="image[]"; filename="logo.png"', body)
         self.assertIn(b"LOGO", body)
         self.assertIn(b'name="prompt"\r\n\r\nwith the logo', body)
+
+    def test_an_edit_asks_for_high_input_fidelity_and_retries_without_it_when_unknown(self) -> None:
+        """The owner, 9 Sep: renders should stay closer to the reference photo."""
+        log: list = []
+        opener = self._opener([{"data": [{"b64_json": base64.b64encode(b"img").decode()}]}], log)
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = Path(tmp) / "example.png"; ref.write_bytes(b"PHOTO")
+            image_provider.generate("rubies instead", Path(tmp) / "v.png", refs=[ref], env=self.ENV, opener=opener, input_fidelity="high")
+        self.assertIn(b'name="input_fidelity"\r\n\r\nhigh', log[0]["body"])
+        plain: list = []
+        opener = self._opener([{"data": [{"b64_json": base64.b64encode(b"img").decode()}]}], plain)
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = Path(tmp) / "example.png"; ref.write_bytes(b"PHOTO")
+            image_provider.generate("rubies instead", Path(tmp) / "v.png", refs=[ref], env=self.ENV, opener=opener)
+        self.assertNotIn(b"input_fidelity", plain[0]["body"])
+        # A provider that does not know the field answers 400 naming it: the edit goes once more without it.
+        retried: list = []
+        def opener(request, timeout=None):
+            retried.append(request.data)
+            if len(retried) == 1:
+                raise HTTPError(request.full_url, 400, "bad", {}, io.BytesIO(b'{"error":{"message":"Unknown parameter: input_fidelity"}}'))
+            class Resp:
+                def read(self): return json.dumps({"data": [{"b64_json": base64.b64encode(b"img").decode()}]}).encode()
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            return Resp()
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = Path(tmp) / "example.png"; ref.write_bytes(b"PHOTO")
+            out = image_provider.generate("rubies instead", Path(tmp) / "v.png", refs=[ref], env=self.ENV, opener=opener, input_fidelity="high")
+            self.assertEqual(out.read_bytes(), b"img")
+        self.assertEqual(len(retried), 2)
+        self.assertIn(b"input_fidelity", retried[0]); self.assertNotIn(b"input_fidelity", retried[1])
+        # Any other 400 is the failure it is.
+        opener = self._opener([400], [])
+        with tempfile.TemporaryDirectory() as tmp:
+            ref = Path(tmp) / "example.png"; ref.write_bytes(b"PHOTO")
+            with self.assertRaisesRegex(OSError, "answered 400"):
+                image_provider.generate("x", Path(tmp) / "v.png", refs=[ref], env=self.ENV, opener=opener, input_fidelity="high")
+
+    def test_the_renderer_asks_for_high_fidelity_on_edits_only(self) -> None:
+        import rendering
+        calls: list = []
+        def fake_generate(prompt, output, **kw):
+            calls.append(kw); output.parent.mkdir(parents=True, exist_ok=True); output.write_bytes(b"png"); return output
+        with tempfile.TemporaryDirectory() as tmp, patch.object(rendering.image_provider, "available", return_value=True), \
+                patch.object(rendering.image_provider, "generate", fake_generate):
+            ref = Path(tmp) / "example.png"; ref.write_bytes(b"PHOTO")
+            rendering.render("edit", [ref], Path(tmp) / "a.png", "openclaw")
+            rendering.render("fresh", [], Path(tmp) / "b.png", "openclaw")
+        self.assertEqual(calls[0]["input_fidelity"], "high")
+        self.assertIsNone(calls[1]["input_fidelity"])
 
     def test_failures_are_transient_errors_that_never_carry_the_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

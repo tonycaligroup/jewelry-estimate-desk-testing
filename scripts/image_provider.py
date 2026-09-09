@@ -117,10 +117,31 @@ def _first_image(value: dict[str, Any], what: str) -> bytes:
 QUALITIES = ("auto", "low", "medium", "high")
 
 
+def _edit_body(name: str, prompt: str, size: str, quality: str, refs: list[Path], input_fidelity: str | None) -> tuple[bytes, str]:
+    boundary = "jed" + secrets.token_hex(12)
+    fields = [("model", name), ("prompt", prompt), ("size", size), ("quality", quality), ("n", "1")]
+    if input_fidelity:
+        fields.append(("input_fidelity", input_fidelity))
+    parts: list[bytes] = []
+    for field, value in fields:
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n".encode())
+    for ref in refs:
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"image[]\"; filename=\"{Path(ref).name}\"\r\n"
+                     "Content-Type: image/png\r\n\r\n".encode() + Path(ref).read_bytes() + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
 def generate(prompt: str, output: Path, model: str | None = None, refs: list[Path] | None = None,
              timeout: float | None = None, size: str = "1024x1024", quality: str = "auto",
-             env: dict[str, str] | None = None, opener: Opener = urlopen) -> Path:
-    """One image, written to `output`. With reference images it is an edit; without, a generation."""
+             env: dict[str, str] | None = None, opener: Opener = urlopen, input_fidelity: str | None = None) -> Path:
+    """One image, written to `output`. With reference images it is an edit; without, a generation.
+
+    `input_fidelity` ("high") asks the edit to keep the reference's own
+    features (the customer's example piece, a logo); a provider that does
+    not know the field answers 400 naming it, and the edit is sent once
+    more without it.
+    """
     found = credentials(env)
     if found is None:
         raise OSError("the image provider is not configured in this environment")
@@ -128,16 +149,14 @@ def generate(prompt: str, output: Path, model: str | None = None, refs: list[Pat
     seconds = float(timeout or GENERATE_TIMEOUT_SECONDS)
     name = model_name(model, DEFAULT_IMAGE_MODEL)
     if refs:
-        boundary = "jed" + secrets.token_hex(12)
-        parts: list[bytes] = []
-        for field, value in (("model", name), ("prompt", prompt), ("size", size), ("quality", quality), ("n", "1")):
-            parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n".encode())
-        for ref in refs:
-            parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"image[]\"; filename=\"{Path(ref).name}\"\r\n"
-                         "Content-Type: image/png\r\n\r\n".encode() + Path(ref).read_bytes() + b"\r\n")
-        parts.append(f"--{boundary}--\r\n".encode())
-        value = _post(f"{base}/v1/images/edits", key, b"".join(parts), f"multipart/form-data; boundary={boundary}",
-                      seconds, "image edit", opener)
+        body, content_type = _edit_body(name, prompt, size, quality, refs, input_fidelity)
+        try:
+            value = _post(f"{base}/v1/images/edits", key, body, content_type, seconds, "image edit", opener)
+        except OSError as exc:
+            if not (input_fidelity and "answered 400" in str(exc) and "input_fidelity" in str(exc)):
+                raise
+            body, content_type = _edit_body(name, prompt, size, quality, refs, None)
+            value = _post(f"{base}/v1/images/edits", key, body, content_type, seconds, "image edit", opener)
     else:
         body = json.dumps({"model": name, "prompt": prompt, "size": size, "quality": quality, "n": 1}).encode()
         value = _post(f"{base}/v1/images/generations", key, body, "application/json", seconds, "image generation", opener)

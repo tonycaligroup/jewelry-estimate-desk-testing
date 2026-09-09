@@ -448,7 +448,11 @@ closed by follow-up changes:
   one question (which metal: yellow, white, or rose gold, 14K or 18K), not
   three bullets. A pair's stones are named in the plural with the carat
   basis ("lab-grown rubies, 2.5 ct each"). The rendering email says the
-  pictures are for guidance only (6.6).
+  pictures are for guidance only, and a render from the customer's example
+  photograph is an edit of that photograph: the prompt names only what
+  changes (rubies instead of diamonds, the metal), the first view is the
+  photograph's own, the edit asks the provider to keep the reference's
+  features, and no archetype exemplar rides beside their photo (6.6).
 - Built 9 September 2026 (4.15.0): an optional spreadsheet
   mirror built for the counter: "Customers" first (one row per customer,
   status in plain words, next meeting, what is still open, a link to the
