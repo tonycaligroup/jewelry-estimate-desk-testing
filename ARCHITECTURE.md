@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.14.5 (8 September 2026): the scripts manifest.**
+**4.14.6 (built 8 September 2026): the scripts manifest.**
 Live, the pod ran the 4.14.2 `pipeline.py` and `estimate_record.py` under
 a SKILL.md that said 4.14.5; three releases of appointment and inventory
 fixes never ran and every retest "recurred". `scripts/manifest.py` records
