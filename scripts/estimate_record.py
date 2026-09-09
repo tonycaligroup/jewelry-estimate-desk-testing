@@ -2101,14 +2101,25 @@ def accepts_a_time(own_words: str) -> bool:
 _SENTENCE_RE = re.compile(r"(?<=[.?!])\s+|\n+")
 
 
+# A day and a clock time stated flat: "Monday the 21st at 11am please", "Monday at 11am."
+_DAY_AND_TIME_RE = re.compile(r"(?i)\b(?:" + _DAY + r"|the \d{1,2}(?:st|nd|rd|th)|(?:january|february|march|april|may|june|july|august|"
+                              r"september|october|november|december) \d{1,2})\b[^.?!\n]{0,30}\b(?:at|@|around)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b")
+
+
 def scheduling_sentences(own_words: str) -> list[str]:
-    """The customer's sentences that ask for a meeting or propose a day and time; deadlines are not visits."""
+    """The customer's sentences that ask for a meeting, propose a day and time, or state one; deadlines are not visits.
+
+    Live (9 September 2026): "Monday the 21st at 11am please." with the
+    details was priced with no meeting card, because the day and time were
+    stated, not asked. A day with a clock time in one sentence is a time to
+    meet unless the sentence is about a deadline or a delivery.
+    """
     found: list[str] = []
     for sentence in _SENTENCE_RE.split(str(own_words or "")):
         sentence = sentence.strip()
         if not sentence or NOT_A_VISIT_RE.search(sentence):
             continue
-        if MEETING_RE.search(sentence) or PROPOSAL_RE.search(sentence):
+        if MEETING_RE.search(sentence) or PROPOSAL_RE.search(sentence) or _DAY_AND_TIME_RE.search(sentence):
             found.append(sentence)
     return found
 

@@ -7517,6 +7517,18 @@ class SchedulingWordsTests(unittest.TestCase):
             with self.subTest(words=words):
                 self.assertNotIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, record, words), words)
 
+    def test_a_day_and_time_stated_flat_is_a_meeting(self) -> None:
+        """Live 9 Sep: 'Monday the 21st at 11am please.' plus the details was priced with no meeting card."""
+        for words in ("Monday the 21st at 11am please. 14k white gold, lab grown.", "Monday at 11am. I'd like 14k white gold.",
+                      "September 21 at 11:00 then.", "The 21st around 2pm.", "Tomorrow at 10 am, and 18k please."):
+            with self.subTest(words=words):
+                self.assertTrue(estimate_record.scheduling_sentences(words), words)
+                self.assertIn("scheduling_intent", estimate_record.settle_scheduling_intent({"piece_type": "earrings"}, words))
+        for words in ("Can you have it ready by Monday at 5pm?", "I can pick it up Friday at 4pm.", "It needs to ship before Tuesday at noon.",
+                      "I'd like 14k white gold, 2 ct.", "Monday works but the 2.5 ct stone is a must."):
+            with self.subTest(words=words):
+                self.assertEqual(estimate_record.scheduling_sentences(words), [], words)
+
     def test_a_day_named_after_an_offer_answers_the_offer(self) -> None:
         """Live 9 Sep: after the offer, 'Monday the 14th would be best' plus the details was priced with no meeting card."""
         offered = {"times_offered": [{"options": [{"start": "2026-09-09T11:00:00-07:00", "label": "Wednesday, September 9 at 11:00 AM PDT"}]}]}
