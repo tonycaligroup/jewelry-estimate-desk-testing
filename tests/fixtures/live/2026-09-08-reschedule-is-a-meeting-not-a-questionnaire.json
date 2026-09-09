@@ -1,0 +1,26 @@
+{
+  "defect": "a customer wrote 'Something came up for Saturday... Any chance we can do Friday at 4pm?' on an old thread; the desk read it as an estimate request and sent the questionnaire (length or size, metal, karat, color) instead of handling the meeting",
+  "seen_on": "4.14.2",
+  "fixed_in": "unpublished after 4.14.2",
+  "text_is": "verbatim",
+  "kind": "golden_path",
+  "steps": [
+    {
+      "customer": {
+        "id": "r1",
+        "thread": "new",
+        "subject": "Re: Looking for an Engagement Ring",
+        "text": "Hello Tony,\n\nSomething came up for Saturday...\n\nAny chance we can do Friday at 4pm?"
+      },
+      "spec": {
+        "piece_type": "engagement ring"
+      },
+      "expect": {
+        "outcomes": [
+          "appointment_approval_requested"
+        ],
+        "sent": 0
+      }
+    }
+  ]
+}

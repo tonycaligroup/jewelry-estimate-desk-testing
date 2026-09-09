@@ -2093,6 +2093,16 @@ class MeetingFirstTests(SideBranchTests):
             self.assertTrue(record["appointment_booked"].get("before_estimate"))
             self.assertEqual(len(world.sent), 2)
             self.assertIn(pick["label"], world.sent[1]["body"])
+            # Live 8 Sep: he moves the meeting in his own words and the reading misses it. A reschedule of a
+            # meeting booked before the estimate is a meeting card, never the questionnaire.
+            world.spec = {"piece_type": "engagement ring", "stone_type": "diamond", "customer_supplied_materials": "his own stone"}
+            world.requested = ([], [])
+            world.customer_message("p2b", thread, "Hello Tony,\n\nSomething came up for Saturday...\n\nAny chance we can do Friday at 4pm?\n\nDavid")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertEqual(len(world.sent), 2, "no questionnaire for a reschedule")
+            self.assertIn(world.cards[-1]["kind"], ("appointment_offer", "appointment_booking"), world.cards[-1]["payload"])
+            self.assertEqual(self.record(ws, estimate_id)["status"], "awaiting_specs")
             # After the visit he emails the details: the desk prices, no more meeting cards.
             world.spec = {
                 "piece_type": "engagement ring", "stone_type": "diamond", "customer_supplied_materials": "his own stone",
@@ -2107,6 +2117,39 @@ class MeetingFirstTests(SideBranchTests):
             self.assertIn("send-approved-estimate-brief", world.cards[-1]["payload"]["execute"])
             self.assertEqual(self.record(ws, estimate_id)["status"], "pending_approval")
             self.assertEqual(len([n for n in world.notices if not n["file"]]), 0, "no questions needed along the way")
+        self.run_branch(branch)
+
+
+class ProposedTimeTests(SideBranchTests):
+    """Live 8 Sep: after an offer, 'would Friday at 3pm work for you?' is a booking card when Friday 3pm is free."""
+
+    def test_a_free_proposed_time_is_a_booking_card_even_when_the_reading_did_not_resolve_it(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            from zoneinfo import ZoneInfo
+            thread = "thread-friday"
+            world.spec = {"piece_type": "earrings", "scheduling_intent": "can I come by next week?"}
+            world.requested = (["next week"], [])
+            world.customer_message("f1", thread, "Hi Tony, I'd love to see some earrings in person. Can I come by next week?\n\nDavid",
+                                   subject="A pair of earrings")
+            self.tick(ws, world)
+            offer = world.cards[-1]
+            self.assertEqual(offer["kind"], "appointment_offer", offer["payload"])
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            self.assertEqual(len(world.sent), 1)
+            # He proposes his own day and time; the model copies the words but resolves nothing.
+            world.requested = (["Friday at 3pm"], [])
+            world.customer_message("f2", thread, "Thank you for getting back to me Tony, would Friday at 3pm work for you?\n\nDavid",
+                                   subject="Re: A pair of earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking", book["payload"])
+            now = datetime.now(ZoneInfo(ZONE_NAME))
+            friday = now.replace(hour=15, minute=0, second=0, microsecond=0)
+            while friday.weekday() != 4 or friday <= now:
+                friday += timedelta(days=1)
+            self.assertEqual(book["payload"]["calendar_availability"][0]["start"][:16], friday.strftime("%Y-%m-%dT%H:%M"))
+            self.assertEqual(len(world.sent), 1, "no offer email; the booking waits for the owner's yes")
         self.run_branch(branch)
 
 

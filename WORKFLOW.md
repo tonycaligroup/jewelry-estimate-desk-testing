@@ -437,6 +437,19 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 8 September 2026 (unpublished, after 4.14.2): a day and clock
+  time in the customer's own words ("would Friday at 3pm work for you?")
+  is resolved to a date in code, whatever the reading resolved; a free
+  time inside the windows is a booking card, never an offer of other days
+  (6.6).
+- Built 8 September 2026 (unpublished, after 4.14.2): whether a message
+  asks for a meeting is decided in code from the customer's own words: a
+  named meeting (appointment, come by the shop, in person) or a proposed
+  day and time ("any chance we can do Friday at 4pm?") is handled as a
+  meeting request even when the reading missed it, and a reschedule of a
+  meeting booked before the estimate goes to the appointment card, never
+  to the questionnaire; a deadline ("ready by Friday at 5pm") is not a
+  visit (6.6).
 - Built 8 September 2026 (4.14.2): a piece is a ring
   only when "ring" or "band" is a whole word of its name; earrings are
   asked for their size, never for a finger size (6.2).

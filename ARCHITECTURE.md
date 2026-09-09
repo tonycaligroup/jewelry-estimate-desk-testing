@@ -381,6 +381,33 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.2 (8 September 2026): a proposed day and time is resolved in code.**
+Live, after the desk offered times, "would Friday at 3pm work for you?"
+produced a card offering Wednesday and Thursday although Friday at 3pm
+was free: the phrase reached the calendar unresolved (the reading copies
+the words; resolving them to a date with thinking off is unreliable).
+`slots.resolve_phrase` reads an explicit day and clock time (weekday,
+tomorrow, today, a month and day, "the 11th"; a bare hour only after
+"at") as the next such local date-time, and `slots.resolve_requested`
+prefers that to the model's resolution, keeping the model's only for
+phrases code cannot read ("the second one"). `pipeline.appointment_intent`
+applies it before the calendar is read.
+
+**Unpublished after 4.14.2 (8 September 2026): a reschedule is a meeting, not a questionnaire.**
+Live, "Something came up for Saturday... Any chance we can do Friday at
+4pm?" on an old thread was read as an estimate request and answered with
+the questionnaire. The reading is the model's, but whether the message
+asks to meet is now a rule: `estimate_record.scheduling_sentences` finds
+the sentences that name a meeting or propose a day and time (deadlines
+and deliveries excluded), `settle_scheduling_intent` fills
+`scheduling_intent` from them when the reading left it out, and
+`pipeline.process_claim` applies it to the message being handled. A
+reschedule (`asks_to_reschedule`) passes the booked-appointment guard so
+a meeting booked before the estimate is moved by a card, and the
+extraction and classification prompts name reschedules and proposed
+times as meeting requests. Fixture
+`2026-09-08-reschedule-is-a-meeting-not-a-questionnaire.json`.
+
 **4.14.2 (built 8 September 2026): earrings are not a ring.**
 Live, a customer asking for earrings like the pair in their photo was
 asked "What finger size is she?". `spec_gate._missing_for_piece` treated

@@ -557,6 +557,12 @@ def appointment_intent(
         asked, resolved = judged["requested_times"], judged.get("resolved_times", [])
     except judge.JudgmentError:
         asked, resolved = [], []
+    try:
+        from zoneinfo import ZoneInfo as _Zone
+
+        resolved = slots.resolve_requested(asked, resolved, datetime.now(_Zone(zone_name)))
+    except (KeyError, ValueError, OSError):
+        pass
     intent: dict[str, Any] = {"requested_times": asked, "resolved_times": resolved, "calendar_availability": []}
     if not scheduling.get("calendar") or not slots.parse_windows(scheduling):
         intent["availability_note"] = "no calendar or declared windows configured"
@@ -696,6 +702,11 @@ def process_claim(
     specification = estimate_record.settle_center_stone(
         specification, " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
                                 if m.get("sent_by") == "customer"))
+    # The message being handled decides a meeting request in code: a
+    # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
+    handled_words = " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
+                             if m.get("sent_by") == "customer" and m.get("claimed"))
+    specification = estimate_record.settle_scheduling_intent(specification, handled_words)
     missing = spec_gate.missing_required_fields(specification, profile)
     # ARCHITECTURE-OPTIONS.md E': the reading is checked against the
     # customer's own words in code. A disagreement is never priced; it is
@@ -711,7 +722,9 @@ def process_claim(
         return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
     if nxt == "send_spec_followup":
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-        if specification.get("scheduling_intent") and not record.get("appointment_booked"):
+        if specification.get("scheduling_intent") and (
+            not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words)
+        ):
             # Meeting first: a customer who asks to come in gets the meeting,
             # not a questionnaire. The details are settled at the meeting or
             # in a later email, and pricing picks up from there.

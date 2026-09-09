@@ -1657,6 +1657,69 @@ BAND_STONE_WORDS = ("eternity", "channel set", "channel-set", "channel", "pave",
 CENTER_STONE_WORDS = ("center stone", "centre stone", "main stone", "solitaire", "halo", "feature stone")
 
 
+_DAY = r"(?:mon|tues?|wed(?:nes)?|thurs?|fri|sat(?:ur)?|sun)(?:day)?|tomorrow|tonight|today|this (?:afternoon|evening|week|weekend)|next week|the weekend"
+_TIME = r"\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)|noon|(?:in the )?(?:morning|afternoon|evening)"
+# A meeting named outright: an appointment, coming by the shop, meeting in person.
+MEETING_RE = re.compile(
+    r"(?i)\b(?:reschedul\w*|appointment|(?:our|the|a|that|my) meeting|in person|stop by|drop by|swing by|"
+    r"come (?:in|by|over)(?: to)? (?:the|your) (?:shop|store)|come (?:in|by|over)\b[^.?!\n]{0,20}\b(?:" + _DAY + r")|"
+    r"meet (?:you|up|with you|in person)|(?:can|could|shall|should) we meet\b|meet\b[^.?!\n]{0,25}\b(?:" + _DAY + r"))\b"
+)
+# A day and a time proposed as a question: "any chance we can do Friday at 4pm?".
+PROPOSAL_RE = re.compile(
+    r"(?i)\b(?:can|could|would|does|do|how about|what about|any chance)\b[^.?!\n]{0,40}\b(?:" + _DAY + r")\b"
+    r"[^.?!\n]{0,30}\b(?:" + _TIME + r")\b"
+)
+# A deadline or a delivery, not a visit: "can you have it ready by Friday at 5pm?".
+NOT_A_VISIT_RE = re.compile(
+    r"(?i)\b(?:(?<!come )(?<!stop )(?<!drop )(?<!swing )by|before|until|ready|done|finished|deliver\w*|ship\w*|"
+    r"pick(?: it)? up|arrive\w*|mail\w*)\b"
+)
+RESCHEDULE_RE = re.compile(
+    r"(?i)\b(?:reschedul\w*|something came up|can(?:no|')t make|(?:move|push|change) (?:it|our|the|my|that)\b|"
+    r"(?:a )?different (?:day|time)|another (?:day|time)|instead)\b"
+)
+_SENTENCE_RE = re.compile(r"(?<=[.?!])\s+|\n+")
+
+
+def scheduling_sentences(own_words: str) -> list[str]:
+    """The customer's sentences that ask for a meeting or propose a day and time; deadlines are not visits."""
+    found: list[str] = []
+    for sentence in _SENTENCE_RE.split(str(own_words or "")):
+        sentence = sentence.strip()
+        if not sentence or NOT_A_VISIT_RE.search(sentence):
+            continue
+        if MEETING_RE.search(sentence) or PROPOSAL_RE.search(sentence):
+            found.append(sentence)
+    return found
+
+
+def asks_to_reschedule(own_words: str) -> bool:
+    """The customer is moving a meeting they already have ("something came up... can we do Friday at 4pm?")."""
+    text = str(own_words or "")
+    return bool(RESCHEDULE_RE.search(text)) and bool(scheduling_sentences(text))
+
+
+def settle_scheduling_intent(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """The customer's own words decide a meeting request when the reading missed it.
+
+    Live (8 September 2026): "Something came up for Saturday... Any chance
+    we can do Friday at 4pm?" was read as an estimate request and answered
+    with the questionnaire. The reading is the model's; whether the message
+    asks to meet is a rule, so the sentences that ask are the intent.
+    """
+    if not isinstance(specification, dict) or present_value(specification.get("scheduling_intent")):
+        return specification
+    sentences = scheduling_sentences(own_words)
+    if not sentences:
+        return specification
+    return {**specification, "scheduling_intent": " ".join(sentences)[:300]}
+
+
+def present_value(value: Any) -> bool:
+    return bool(value) and not (isinstance(value, str) and not value.strip())
+
+
 def settle_center_stone(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
     """The customer's own words decide whether there is a center stone; the reading does not get to guess.
 

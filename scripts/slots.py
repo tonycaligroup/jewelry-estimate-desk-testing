@@ -15,6 +15,8 @@ with one name also works). Times are local to `scheduling.timezone`.
 
 from __future__ import annotations
 
+import re
+
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -266,6 +268,109 @@ def spread_slots(slots_in_order: list[dict[str, str]], is_free: Callable[[dict[s
         found.append(slot)
     found.sort(key=lambda s: s["start"])
     return found[:MAX_OPTIONS]
+
+
+_WEEKDAYS = {"monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1, "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3,
+             "thur": 3, "thurs": 3, "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6}
+_MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
+                                        "september", "october", "november", "december"), 1)}
+_CLOCK = r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm|a\.m\.|p\.m\.)?"
+_DAY_WORD = r"(?P<day>monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thur?s?|fri|sat|sun|tomorrow|today)"
+_MONTH_DAY = r"(?P<month>january|february|march|april|may|june|july|august|september|october|november|december)\s+(?P<mday>\d{1,2})(?:st|nd|rd|th)?"
+_ORDINAL_DAY = r"the\s+(?P<mday2>\d{1,2})(?:st|nd|rd|th)"
+_PHRASE_RE = re.compile(
+    r"(?i)(?:(?:next\s+)?" + _DAY_WORD + r"|" + _MONTH_DAY + r"|" + _ORDINAL_DAY + r")"
+    r"(?:\s+(?:morning|afternoon|evening))?[\s,]*(?P<prep>at|@|around|about)?\s*" + _CLOCK + r"\b"
+)
+_CLOCK_FIRST_RE = re.compile(
+    r"(?i)\b" + _CLOCK + r"\s+(?:on\s+)?(?:(?:next\s+)?" + _DAY_WORD + r"|" + _MONTH_DAY + r"|" + _ORDINAL_DAY + r")"
+)
+
+
+def resolve_phrase(text: str, now: datetime) -> str | None:
+    """A named day and clock time in the customer's words as YYYY-MM-DDTHH:MM, else None.
+
+    "Friday at 3pm", "tomorrow at 1pm", "Tuesday 10:30", "September 11 at
+    3pm", "3pm on Friday", "the 11th at 3". A weekday means its next
+    occurrence after now (a Tuesday said on a Tuesday afternoon is next
+    week's). A clock time with no am or pm from 1 to 7 is read as the
+    afternoon (shops keep daytime hours); anything vague resolves to nothing.
+    """
+    match = _PHRASE_RE.search(str(text or "")) or _CLOCK_FIRST_RE.search(str(text or ""))
+    if not match:
+        return None
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute") or 0)
+    ampm = (match.group("ampm") or "").replace(".", "").lower()
+    if hour > 23 or minute > 59 or (ampm and hour > 12):
+        return None
+    if not ampm and match.group("minute") is None and not (match.groupdict().get("prep") or "").strip():
+        return None  # "Friday 2" could be a carat or a count; "Friday at 2" is a time
+    if ampm == "pm" and hour < 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    elif not ampm and 1 <= hour <= 7:
+        hour += 12
+    day_word = (match.group("day") or "").lower()
+    local = now
+    try:
+        if day_word == "today":
+            date = local.date()
+        elif day_word == "tomorrow":
+            date = local.date() + timedelta(days=1)
+        elif day_word:
+            weekday = _WEEKDAYS[day_word]
+            ahead = (weekday - local.weekday()) % 7
+            date = local.date() + timedelta(days=ahead)
+            if ahead == 0 and local.replace(hour=hour, minute=minute, second=0, microsecond=0) <= local:
+                date += timedelta(days=7)
+        elif match.group("month"):
+            date = local.date().replace(month=_MONTHS[match.group("month").lower()], day=int(match.group("mday")))
+            if date < local.date():
+                date = date.replace(year=date.year + 1)
+        else:
+            date = local.date().replace(day=int(match.group("mday2")))
+            if date < local.date():
+                date = (date.replace(day=1) + timedelta(days=32)).replace(day=int(match.group("mday2")))
+    except (ValueError, KeyError):
+        return None
+    return f"{date.isoformat()}T{hour:02d}:{minute:02d}"
+
+
+def resolve_requested(phrases: list[str], model_resolved: list[str], now: datetime) -> list[str]:
+    """The customer's phrases as local date-times: code resolves an explicit day and clock time, the model the rest.
+
+    Live (8 September 2026): "would Friday at 3pm work for you?" reached the
+    calendar unresolved and the card offered other days although Friday at
+    3pm was free. A phrase code can read is resolved here whatever the model
+    said; phrases it cannot ("the second one", "next week") keep the model's
+    resolution.
+    """
+    zone = now.tzinfo
+    model_values: list[str] = [str(v) for v in (model_resolved or []) if v]
+
+    def agrees(model_value: str, code_value: str) -> bool:
+        # The model's date is kept when it is ahead of now and names the same weekday and clock time
+        # ("Wednesday at 2" said on a Tuesday may mean next week's; the model saw the whole thread).
+        try:
+            m = datetime.strptime(model_value, "%Y-%m-%dT%H:%M").replace(tzinfo=zone)
+            c = datetime.strptime(code_value, "%Y-%m-%dT%H:%M").replace(tzinfo=zone)
+        except (TypeError, ValueError):
+            return False
+        return m >= now and m.weekday() == c.weekday() and (m.hour, m.minute) == (c.hour, c.minute)
+
+    resolved: list[str] = []
+    for phrase in phrases or []:
+        value = resolve_phrase(phrase, now)
+        if not value:
+            continue
+        value = next((m for m in model_values if agrees(m, value)), value)
+        if value not in resolved:
+            resolved.append(value)
+    if resolved:
+        return resolved[:3]
+    return model_values[:3]
 
 
 def query_horizon_days(scheduling: dict[str, Any], requested: list[str], now: datetime) -> int:

@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -6986,6 +6987,63 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3, "fees": ["plating"]}, ["casting"], [], False)
         with self.assertRaises(ValueError):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
+
+
+class RequestedTimeResolutionTests(unittest.TestCase):
+    """Live 8 Sep: 'would Friday at 3pm work for you?' reached the calendar unresolved; other days were offered."""
+
+    NOW = datetime(2026, 9, 8, 18, 45, tzinfo=ZoneInfo("America/Los_Angeles"))  # a Tuesday evening
+
+    def test_an_explicit_day_and_clock_time_resolves_in_code(self) -> None:
+        cases = {
+            "would Friday at 3pm work for you?": "2026-09-11T15:00", "3pm on Friday": "2026-09-11T15:00",
+            "September 11 at 3pm": "2026-09-11T15:00", "the 11th at 3": "2026-09-11T15:00", "next Friday 3:30 pm": "2026-09-11T15:30",
+            "tomorrow at 1pm": "2026-09-09T13:00", "Wednesday at 11": "2026-09-09T11:00", "Tuesday at 10:30": "2026-09-15T10:30",
+            "Tuesday 2pm": "2026-09-15T14:00", "Sat 9am": "2026-09-12T09:00",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(slots.resolve_phrase(text, self.NOW), expected)
+        for text in ("next week", "Friday afternoon", "the second one", "Monday works", "Friday at 25pm", "Friday 2 ct", "1.5 ct on the 9th"):
+            with self.subTest(text=text):
+                self.assertIsNone(slots.resolve_phrase(text, self.NOW), text)
+
+    def test_code_resolution_wins_and_the_model_fills_the_rest(self) -> None:
+        self.assertEqual(slots.resolve_requested(["Friday at 3pm"], [], self.NOW), ["2026-09-11T15:00"])
+        self.assertEqual(slots.resolve_requested(["Friday at 3pm"], ["2026-09-04T15:00"], self.NOW), ["2026-09-11T15:00"],
+                         "the model's past Friday never reaches the calendar")
+        self.assertEqual(slots.resolve_requested(["the second one"], ["2026-09-09T14:00"], self.NOW), ["2026-09-09T14:00"])
+        self.assertEqual(slots.resolve_requested(["Wednesday at 2"], ["2026-09-16T14:00"], self.NOW), ["2026-09-16T14:00"],
+                         "the model's later Wednesday at the same clock time is kept; it saw the whole thread")
+        self.assertEqual(slots.resolve_requested(["Friday at 3pm"], ["2026-09-11T14:00"], self.NOW), ["2026-09-11T15:00"],
+                         "a model date at the wrong clock time gives way to the words")
+        self.assertEqual(slots.resolve_requested([], [], self.NOW), [])
+
+
+class SchedulingWordsTests(unittest.TestCase):
+    """Live 8 Sep: a reschedule ('can we do Friday at 4pm?') was answered with the questionnaire."""
+
+    DAVID = "Hello Tony,\n\nSomething came up for Saturday...\n\nAny chance we can do Friday at 4pm?"
+
+    def test_a_proposed_day_and_time_or_a_named_meeting_is_a_meeting_request(self) -> None:
+        for text in (self.DAVID, "Can we meet Tuesday?", "I can come by Friday afternoon.", "Would Thursday at 2 pm work for you?",
+                     "Could I stop by the shop next week?", "I need to reschedule our appointment.", "I'd like to see them in person."):
+            with self.subTest(text=text):
+                self.assertTrue(estimate_record.scheduling_sentences(text), text)
+        spec = estimate_record.settle_scheduling_intent({"piece_type": "engagement ring"}, self.DAVID)
+        self.assertEqual(spec["scheduling_intent"], "Any chance we can do Friday at 4pm?")
+        self.assertTrue(estimate_record.asks_to_reschedule(self.DAVID))
+
+    def test_deadlines_products_and_the_website_are_not_meetings(self) -> None:
+        for text in ("Does it come in rose gold?", "Can you have it ready by Friday at 5pm?", "I visited your website. Could you do a 1 ct stone?",
+                     "Could you ship it by Tuesday?", "Can I pick it up Friday at 4pm?", "I want a 2 ct stone, whatever you think works."):
+            with self.subTest(text=text):
+                self.assertEqual(estimate_record.scheduling_sentences(text), [], text)
+                self.assertFalse(estimate_record.asks_to_reschedule(text))
+        # The model's own reading is kept as it is.
+        spec = {"piece_type": "ring", "scheduling_intent": "can we meet next week"}
+        self.assertIs(estimate_record.settle_scheduling_intent(spec, self.DAVID), spec)
+        self.assertNotIn("scheduling_intent", estimate_record.settle_scheduling_intent({"piece_type": "ring"}, "Does it come in rose gold?"))
 
 
 class SpecGateTests(unittest.TestCase):
