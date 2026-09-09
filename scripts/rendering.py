@@ -153,6 +153,9 @@ def archetype_for(specification: dict[str, Any]) -> str | None:
         return None
     # The piece's name and setting only: notes are prose ("not hoops, please") and never settle an archetype.
     words = " ".join(str(specification.get(k) or "") for k in ("piece_type", "setting_style")).lower()
+    style = str(specification.get("earring_style") or "").lower().strip()
+    if style:
+        words = f"{style} earring {words}"
     known = archetypes()
     for word, archetype in ARCHETYPE_WORDS:
         if word in words and archetype in known:
@@ -172,6 +175,9 @@ def exact_facts(specification: dict[str, Any] | str) -> list[str]:
     spec = specification
     facts: list[str] = []
     piece = str(spec.get("piece_type") or "").strip()
+    style = str(spec.get("earring_style") or "").strip().lower()
+    if piece and style and style not in piece.lower():
+        piece = f"{style} {piece}" if piece.lower().startswith("earring") else piece.replace("earrings", f"{style} earrings")
     if piece:
         facts.append(f"the piece is {piece}")
     stone = str(spec.get("stone_type") or "").strip().lower()

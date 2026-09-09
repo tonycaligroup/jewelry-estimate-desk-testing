@@ -32,7 +32,7 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 SPEC_KEYS = (
     "piece_type", "quantity", "metal", "metal_karat", "metal_color", "stone_type",
     "stone_origin", "stone_shape", "stone_carat", "stone_color", "stone_clarity",
-    "stone_cut", "stone_count", "stone_carat_basis", "center_stone", "accent_stones", "accent_stone_type", "accent_stone_origin",
+    "stone_cut", "stone_count", "stone_carat_basis", "earring_style", "center_stone", "accent_stones", "accent_stone_type", "accent_stone_origin",
     "accent_stone_color", "accent_stone_clarity", "finger_size", "dimensions",
     "setting_style", "finish", "engraving", "event_date", "budget",
     "customer_supplied_materials", "certificate", "reference_images",
@@ -387,6 +387,8 @@ def extract_specification(
         "For a pair (earrings, cufflinks, studs, hoops) stone_carat_basis is \"each\" when the carat weight is per stone or "
         "per earring (\"1.5 ct each\", \"per earring\") and \"total\" when it is the pair's total (\"2 ct total\", \"tcw\"); "
         "omit it when the customer did not say. "
+        "earring_style is \"stud\", \"hoop\", or \"drop\" when the customer's words say which kind of earrings "
+        "(studs, hoops, huggies, drops, dangles); omit it otherwise. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
@@ -460,6 +462,8 @@ def triage_and_extract(
         "For a pair (earrings, cufflinks, studs, hoops) stone_carat_basis is \"each\" when the carat weight is per stone or "
         "per earring (\"1.5 ct each\", \"per earring\") and \"total\" when it is the pair's total (\"2 ct total\", \"tcw\"); "
         "omit it when the customer did not say. "
+        "earring_style is \"stud\", \"hoop\", or \"drop\" when the customer's words say which kind of earrings "
+        "(studs, hoops, huggies, drops, dangles); omit it otherwise. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
@@ -590,6 +594,7 @@ FIELD_WORDS = {
     "stone_origin": ("natural", "lab"), "stone_carat": ("carat", "size", "mm", "big"), "stone_color": ("color", "colour", "grade"),
     "stone_clarity": ("clarity", "grade"), "stone_cut": ("cut", "shape"), "stone_shape": ("shape", "cut"),
     "setting_style": ("set", "style", "solitaire", "halo", "bezel", "prong"), "piece_type": ("piece", "kind", "type"),
+    "earring_style": ("stud", "hoop", "drop", "style"),
 }
 
 

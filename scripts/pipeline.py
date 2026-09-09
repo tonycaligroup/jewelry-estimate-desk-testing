@@ -96,11 +96,12 @@ FIELD_QUESTIONS = {
     "dimensions": "roughly what length or size would you like?",
     "setting_style": "what look do you have in mind for the setting, or shall we suggest one?",
     "piece_type": "what kind of piece is this for?",
+    "earring_style": "what style of earrings: studs, hoops, or drops?",
 }
 
 
 FIELD_PRIORITY = (
-    "stone_origin", "stone_type", "stone_carat", "finger_size", "dimensions", "metal", "metal_karat", "metal_color",
+    "stone_origin", "stone_type", "stone_carat", "earring_style", "finger_size", "dimensions", "metal", "metal_karat", "metal_color",
     "stone_shape", "stone_cut", "setting_style", "stone_color", "stone_clarity",
 )
 
@@ -832,6 +833,8 @@ def process_claim(
     # theirs, never the jeweler's choice (live, 9 September 2026: the card and the estimate said the setting
     # style was the jeweler's while the customer had written "halo").
     specification = estimate_record.settle_setting_style(specification, handled_words)
+    # "Earrings" alone: studs, hoops, or drops is settled from their words or asked plainly (the owner, 9 September 2026).
+    specification = estimate_record.settle_earring_style(specification, handled_words)
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
     specification = estimate_record.settle_scheduling_intent(specification, handled_words, record)

@@ -10263,3 +10263,39 @@ class EstimateEmailVisitTests(unittest.TestCase):
         self.assertNotIn("set up a time", fixed)
         self.assertIn("If the facts say their visit is being confirmed separately", customer_mail.KIND_BRIEFS["estimate"])
         self.assertIn("never write that they need anything", customer_mail.KIND_BRIEFS["offer"])
+
+
+class EarringStyleTests(unittest.TestCase):
+    """The owner, 9 Sep: 'earrings' with no photo rendered as drops; studs, hoops, or drops is a plain question."""
+
+    PROFILE = {"defaults": {}}
+    BASE = {"metal": "18k white gold", "stone_type": "ruby", "stone_origin": "lab-grown", "stone_carat": 2.5, "stone_carat_basis": "each",
+            "stone_shape": "round", "setting_style": "halo"}
+
+    def test_bare_earrings_are_asked_the_style_and_named_ones_are_not(self) -> None:
+        self.assertEqual(spec_gate.missing_required_fields({"piece_type": "pair of earrings", **self.BASE}, self.PROFILE), ["earring_style"])
+        for piece in ("stud earrings", "hoop earrings", "huggies", "drop earrings", "dangle earrings"):
+            with self.subTest(piece=piece):
+                self.assertEqual(spec_gate.missing_required_fields({"piece_type": piece, **self.BASE}, self.PROFILE), [])
+        self.assertEqual(spec_gate.missing_required_fields({"piece_type": "earrings", "earring_style": "hoop", **self.BASE}, self.PROFILE), [])
+        # A photo that shows studs is read and stated, never asked again.
+        self.assertEqual(spec_gate.missing_required_fields({"piece_type": "earrings", "reference_images": "from the photo: halo studs", **self.BASE}, self.PROFILE), [])
+        self.assertEqual(spec_gate.missing_required_fields({"piece_type": "ring", "finger_size": "7", **self.BASE}, self.PROFILE), [])
+        self.assertEqual(pipeline.question_lines(["earring_style"]), ["What style of earrings: studs, hoops, or drops?"])
+        self.assertIn("earring_style", judge.SPEC_KEYS)
+
+    def test_the_style_comes_from_their_words_and_shapes_the_card_and_the_render(self) -> None:
+        self.assertEqual(estimate_record.settle_earring_style({"piece_type": "earrings"}, "Studs please, 18k white gold.")["earring_style"], "stud")
+        self.assertEqual(estimate_record.settle_earring_style({"piece_type": "hoop earrings"}, "")["earring_style"], "hoop")
+        self.assertEqual(estimate_record.settle_earring_style({"piece_type": "earrings"}, "something dangly")["earring_style"], "drop")
+        self.assertNotIn("earring_style", estimate_record.settle_earring_style({"piece_type": "earrings"}, "18k white gold please"))
+        self.assertNotIn("earring_style", estimate_record.settle_earring_style({"piece_type": "ring"}, "studs"))
+        kept = {"piece_type": "earrings", "earring_style": "hoop"}
+        self.assertEqual(estimate_record.settle_earring_style(kept, "studs"), kept, "a settled style stands")
+        spec = {"piece_type": "pair of earrings", "earring_style": "stud", "metal": "18K white gold", "setting_style": "halo"}
+        self.assertEqual(owner_questions.summary_of_piece(spec), "a pair of stud earrings in 18K white gold")
+        import rendering
+        self.assertEqual(rendering.archetype_for(spec), "stud_earrings")
+        self.assertEqual(rendering.archetype_for({**spec, "earring_style": "drop"}), "drop_earrings")
+        self.assertEqual(rendering.exact_facts(spec)[0], "the piece is pair of stud earrings")
+        self.assertEqual(rendering.exact_facts({"piece_type": "stud earrings", "earring_style": "stud"})[0], "the piece is stud earrings")

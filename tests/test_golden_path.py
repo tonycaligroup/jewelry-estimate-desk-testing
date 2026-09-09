@@ -2470,7 +2470,7 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
             profile_path.write_text(json.dumps(profile), encoding="utf-8")
             thread = "thread-both-at-once"
-            world.spec = {"piece_type": "halo earrings", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
+            world.spec = {"piece_type": "halo earrings", "earring_style": "stud", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
                           "stone_shape": "round", "setting_style": "halo", "center_stone": "yes",
                           "scheduling_intent": "I can also come in person if easier"}
             world.requested = ([], [])
@@ -2507,7 +2507,7 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             thread = "thread-ruby"
             world.spec = {"piece_type": "pair of earrings", "stone_type": "ruby", "stone_carat": 2.5, "stone_carat_basis": "each",
                           "stone_shape": "round", "center_stone": "yes", "scheduling_intent": "I can also come in person",
-                          "reference_images": "from the photo: halo earrings"}
+                          "reference_images": "from the photo: halo stud earrings"}
             world.requested = ([], [])
             world.customer_message("rb1", thread, "I'm looking to create earrings like these but with round rubies in the center "
                                    "instead of diamonds. These earrings are 2.50ct rounds so looking to match the look as well. I'm not "
@@ -2573,7 +2573,7 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
             profile_path.write_text(json.dumps(profile), encoding="utf-8")
             thread = "thread-bare-day"
-            world.spec = {"piece_type": "halo earrings", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
+            world.spec = {"piece_type": "halo earrings", "earring_style": "stud", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
                           "stone_shape": "round", "setting_style": "halo", "center_stone": "yes",
                           "scheduling_intent": "could I come in next week?"}
             world.requested = (["next week"], [])
@@ -2604,6 +2604,31 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.assertEqual(len(world.sent), 1, "nothing goes out before the cards are approved")
         self.run_branch(branch)
 
+    def test_bare_earrings_without_a_photo_are_asked_studs_hoops_or_drops(self) -> None:
+        """The owner, 9 Sep: 'a pair of earrings' with no photo rendered as drops for a customer who meant studs."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_sapphire"] = 300.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            thread = "thread-which-earrings"
+            world.spec = {"piece_type": "pair of earrings", "stone_type": "sapphire", "stone_carat": 2.5, "stone_carat_basis": "each",
+                          "stone_shape": "round", "setting_style": "halo", "center_stone": "yes", "metal": "white gold", "metal_karat": "14k",
+                          "metal_color": "white", "stone_origin": "lab-grown"}
+            world.customer_message("es1", thread, "A pair of halo earrings with round lab-grown sapphires, 2.5 ct each, 14k white gold. "
+                                   "Can you give me an estimate?\n\nAnthony", subject="Sapphire earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertIn("studs, hoops, or drops", world.sent[-1]["body"].lower())
+            self.assertEqual(self.record(ws, self.only_estimate(ws))["missing_required_fields"], ["earring_style"])
+            world.spec = {**world.spec, "earring_style": "stud"}
+            world.customer_message("es2", thread, "Studs please.\n\nAnthony", subject="Re: Sapphire earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertIn("a pair of stud earrings", world.cards[-1]["title"])
+        self.run_branch(branch)
+
     def test_a_pending_booking_card_keeps_the_estimate_from_asking_for_a_time(self) -> None:
         """The price card is approved before the booking card: the estimate says the visit is being confirmed separately."""
         def branch(ws: Path, world: World) -> None:
@@ -2613,7 +2638,7 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
             profile_path.write_text(json.dumps(profile), encoding="utf-8")
             thread = "thread-pending-visit"
-            world.spec = {"piece_type": "halo earrings", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
+            world.spec = {"piece_type": "halo earrings", "earring_style": "stud", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
                           "stone_shape": "round", "setting_style": "halo", "center_stone": "yes",
                           "scheduling_intent": "I can also come in person if easier"}
             world.requested = ([], [])

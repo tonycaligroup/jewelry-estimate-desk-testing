@@ -309,6 +309,9 @@ def summary_of_piece(specification: Any) -> str:
     if len(pieces) > 1:
         return " and ".join(summary_of_piece(piece) for piece in pieces)
     piece = str(spec.get("piece_type") or "").strip().lower()
+    style = str(spec.get("earring_style") or "").strip().lower()
+    if piece and style and "earring" in piece and style not in piece:
+        piece = piece.replace("earrings", f"{style} earrings") if "earrings" in piece else f"{style} {piece}"
     metal = cost_components.extract_metal(spec)
     stone = cost_components.extract_center_stone(spec)
     parts = [("a " + piece if piece.startswith("pair of ") else _with_article(piece)) if piece else "a piece"]

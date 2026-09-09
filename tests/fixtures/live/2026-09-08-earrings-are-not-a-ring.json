@@ -21,6 +21,7 @@
         ],
         "sent": 1,
         "missing_required_fields": [
+          "earring_style",
           "metal",
           "metal_color",
           "metal_karat"

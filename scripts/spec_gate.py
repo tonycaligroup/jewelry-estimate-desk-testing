@@ -161,5 +161,10 @@ def _missing_for_piece(spec: dict[str, Any], shop_profile: dict[str, Any] | None
                 missing.add(key)
     if has_stones(spec) and not present(spec.get("setting_style")):
         missing.add("setting_style")
+    if "earring" in piece and not present(spec.get("earring_style")) and not estimate_record.earring_style_in_words(piece) \
+            and not estimate_record.earring_style_in_words(str(spec.get("reference_images") or "")):
+        # Studs, hoops, or drops: a preference the customer can give (the owner, 9 September 2026); a photo that
+        # shows which is read and stated, never asked again.
+        missing.add("earring_style")
     # Profile policies: setting style when there are stones, ask-always origin.
     return estimate_record.enforce_specification_policies(spec, sorted(missing), shop_profile)

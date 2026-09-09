@@ -438,6 +438,13 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): "earrings" alone are studs,
+  hoops, or drops. The customer's words settle it ("studs please", "hoops");
+  a photo that shows which is read and stated; otherwise the desk asks the
+  one plain question ("what style of earrings: studs, hoops, or drops?")
+  with the other details. The style names the piece on the card and in the
+  emails and settles the render's construction (6.2, 6.6). Live: "a pair
+  of earrings" with a halo and no photo rendered as leverback drops.
 - Built 9 September 2026 (unpublished): a stretch of days the customer
   names without a clock time ("next week", "early next week", "Friday
   afternoon", "tomorrow morning", "the 15th") is where the offered times

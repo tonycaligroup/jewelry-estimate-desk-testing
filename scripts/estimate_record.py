@@ -1848,6 +1848,41 @@ def setting_in_words(own_words: str) -> str | None:
     return None
 
 
+EARRING_STYLE_WORDS = (("stud", "stud"), ("hoop", "hoop"), ("huggie", "hoop"), ("drop", "drop"), ("dangl", "drop"),
+                       ("chandelier", "drop"), ("threader", "drop"))
+_EARRING_STYLE_RE = re.compile(r"(?i)\b(stud|hoop|huggie|drop|dangl|chandelier|threader)\w*")
+
+
+def earring_style_in_words(words: str) -> str | None:
+    """'stud', 'hoop', or 'drop' when the words name a kind of earring, else None."""
+    match = _EARRING_STYLE_RE.search(str(words or ""))
+    if not match:
+        return None
+    stem = match.group(1).lower()
+    return next((style for word, style in EARRING_STYLE_WORDS if stem.startswith(word)), None)
+
+
+def settle_earring_style(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """Earrings are studs, hoops, or drops: the piece's own name or the customer's words say which (the owner, 9 September 2026).
+
+    Live: "a pair of earrings" with a halo and no photo rendered as leverback
+    drops, a fair guess from those words and a wrong one for the halo studs
+    the customer had in mind. The kind is a preference a customer can give,
+    so it is settled from their words here and asked, plainly, when they
+    have not said (spec_gate).
+    """
+    if not isinstance(specification, dict):
+        return specification
+    raw = specification.get("pieces")
+    if isinstance(raw, list) and len(raw) > 1:
+        return specification
+    piece = str(specification.get("piece_type") or "").lower()
+    if "earring" not in piece or _present(specification.get("earring_style")):
+        return specification
+    style = earring_style_in_words(piece) or earring_style_in_words(own_words)
+    return {**specification, "earring_style": style} if style else specification
+
+
 def settle_setting_style(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
     """A setting the customer names in their own words is theirs, never the jeweler's choice.
 
