@@ -458,7 +458,10 @@ class World:
         stone = re.search(r"\b[a-z0-9_]*lab_grown[a-z0-9_]*\b", prompt)
         if stone:
             accents.append({"key": stone.group(0), "carats": 0.2})
-        return {"finished_grams": 9.5, "bench_hours": 3.5, "fees": fees, "accents": accents}
+        out = {"finished_grams": 9.5, "bench_hours": 3.5, "fees": fees, "accents": accents}
+        if "center_carat: the center stone carat weight is not stated" in prompt:
+            out["center_carat"] = 8.0  # a stone sized in millimetres: the weight is estimated from the description
+        return out
 
     def customer_email(self, prompt: str) -> str:
         facts: dict[str, str] = {}
@@ -2696,6 +2699,114 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
                                                                 json.loads(profile_path.read_text(encoding="utf-8")))
             self.assertIn("confirmed separately", fixed)
             self.assertNotIn("set up a time", fixed)
+        self.run_branch(branch)
+
+
+class PriorPieceTests(SideBranchTests):
+    """The jeweler, 9 Sep (Blue Topaz): 'an exact replica of the pendant you made for me' means the shop knows the piece."""
+
+    REPLICA = ("Hello Tony,\n\nI'm looking to create an exact replica of this pendant you made for me but now for my sister Verónica. "
+               "Verónica would like it a bit smaller, the one you made me is 20mm x 17mm and she would like 15mm x 12mm oval blue "
+               "topaz. Same style for everything else in 14kyg\n\nThank you!")
+
+    def _topaz_profile(self, ws: Path) -> None:
+        self._profile_with_rates(ws)
+        profile_path = ws / "estimate-desk" / "shop-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile["pricing"]["stones_per_carat"]["natural_topaz"] = 60.0
+        profile["pricing"]["stones_per_carat"]["lab_grown_topaz"] = 40.0
+        profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+    def test_a_piece_on_file_is_carried_and_nobody_is_asked(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._topaz_profile(ws)
+            original = {"piece_type": "pendant", "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "stone_type": "topaz",
+                        "stone_origin": "lab-grown", "stone_shape": "oval", "stone_carat": 12, "setting_style": "bezel with four prongs",
+                        "center_stone": "yes", "dimensions": "20mm x 17mm"}
+            _thread, first_id = self._estimate_sent(ws, world, spec=original, text="Please quote a 14k yellow gold pendant with a lab-grown "
+                                                    "oval blue topaz, 20mm x 17mm, bezel with four prongs.\n\nDavid")
+            # The reading of the new email knows only what it says: a pendant, a smaller topaz, 14k yellow gold.
+            world.spec = {"piece_type": "pendant", "stone_type": "blue topaz", "stone_dimensions": "15mm x 12mm", "stone_shape": "oval",
+                          "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "center_stone": "yes"}
+            world.customer_message("pp1", "thread-replica", self.REPLICA, subject="Blue Topaz Pendant")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" in n["text"]], [], "the owner is not asked")
+            self.assertEqual(len(world.sent), 1, "no questions to the customer")
+            new_id = next(i for i in (path.stem for path in (ws / "estimate-desk" / "records").glob("jed-*.json")) if i != first_id)
+            record = self.record(ws, new_id)
+            spec = record["specification"]
+            self.assertEqual(spec["stone_origin"], "lab-grown", "carried from the piece on file")
+            self.assertEqual(spec["setting_style"], "bezel with four prongs")
+            self.assertEqual(spec["stone_dimensions"], "15mm x 12mm", "the new size stands")
+            self.assertNotEqual(spec.get("stone_carat"), 12, "the old stone's carat does not ride along")
+            self.assertEqual(record["prior_piece"]["estimate_id"], first_id)
+            self.assertIn("stone_origin", record["prior_piece"]["carried"])
+            self.assertTrue(str(world.cards[-1]["title"]).startswith("Price approval"), world.cards[-1]["title"])
+            self.assertIn("lab-grown", world.cards[-1]["title"].lower())
+            world.approve(world.cards[-1])
+            self.tick(ws, world)
+            estimate_prompt = [q for q in world.prompts if "Send the customer their estimate" in q][-1]
+            self.assertIn("on file: this follows the piece the shop made for them before", estimate_prompt)
+        self.run_branch(branch)
+
+    def test_nothing_on_file_asks_the_owner_whose_details_price_it(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._topaz_profile(ws)
+            world.spec = {"piece_type": "pendant", "stone_type": "blue topaz", "stone_dimensions": "15mm x 12mm", "stone_shape": "oval",
+                          "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "center_stone": "yes"}
+            world.customer_message("pp2", "thread-replica-2", self.REPLICA, subject="Blue Topaz Pendant", sender="David Trujillo <david@example.net>")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
+            self.assertEqual(world.sent, [], "nothing to the customer before the owner's word")
+            question = [n for n in world.notices if not n["file"]][-1]["text"]
+            self.assertIn("David Trujillo says you made a pendant", question)
+            self.assertIn("not on file", question)
+            self.assertEqual(self.claim(ws, "pp2")["status"], "awaiting_owner")
+            answered = self.answer(ws, "lab grown blue topaz, oval, 14k yellow gold, bezel")
+            self.assertEqual(answered["decision"], "details_given", answered)
+            self.assertEqual(answered["facts"]["stone_origin"], "lab-grown")
+            self.assertEqual(answered["facts"]["setting_style"], "bezel")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["specification"]["stone_origin"], "lab-grown")
+            self.assertEqual(record["specification"]["setting_style"], "bezel")
+            self.assertTrue(record["prior_piece"]["on_file"])
+            self.assertEqual(len(world.sent), 0, "the price card comes before any email")
+            self.assertIn("lab-grown", world.cards[-1]["title"].lower())
+        self.run_branch(branch)
+
+    def test_not_on_file_falls_back_to_the_plain_questions(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._topaz_profile(ws)
+            world.spec = {"piece_type": "pendant", "stone_type": "blue topaz", "stone_dimensions": "15mm x 12mm", "stone_shape": "oval",
+                          "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "center_stone": "yes"}
+            world.customer_message("pp3", "thread-replica-3", self.REPLICA, subject="Blue Topaz Pendant", sender="David Trujillo <david@example.net>")
+            self.tick(ws, world)
+            answered = self.answer(ws, "not on file")
+            self.assertEqual(answered["decision"], "not_on_file", answered)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            body = world.sent[-1]["body"]
+            self.assertRegex(body, r"(?i)natural or lab-grown")
+            self.assertNotRegex(body, r"(?i)carat weight", "sized in millimetres: the carat is never asked")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertFalse(record["prior_piece"]["on_file"])
+            self.assertEqual(record["missing_required_fields"], ["setting_style", "stone_origin"], "no photo, nothing on file: asked plainly")
+        self.run_branch(branch)
+
+    def test_handle_myself_leaves_the_repeat_customer_to_the_owner(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._topaz_profile(ws)
+            world.spec = {"piece_type": "pendant", "stone_type": "blue topaz", "center_stone": "yes"}
+            world.customer_message("pp4", "thread-replica-4", self.REPLICA, subject="Blue Topaz Pendant")
+            self.tick(ws, world)
+            answered = self.answer(ws, "handle myself")
+            self.assertEqual(answered["decision"], "handle_myself", answered)
+            self.assertEqual(self.claim(ws, "pp4")["status"], "manual_review")
+            self.assertEqual(self.record(ws, self.only_estimate(ws))["status"], "dormant")
+            self.assertEqual(world.sent, [])
         self.run_branch(branch)
 
 

@@ -280,6 +280,11 @@ the jeweler's choice, the owner) in `estimate-desk/ledger.sqlite`; the
 customer's written word is never overwritten. A stone's color and clarity are
 never asked: the jeweler chooses, and the card and the estimate say so.
 
+A customer who says the shop made the piece ("the pendant you made for me") is
+never asked about it: the desk carries the piece from its own records when it
+finds one, and otherwise asks the owner once (the details, "not on file", or
+"handle myself") before anything is sent.
+
 The desk asks a customer only what they can answer about what they want (metal,
 karat, color, stone, origin, a ring size, a rough length, studs, hoops, or drops
 for earrings) and interprets the

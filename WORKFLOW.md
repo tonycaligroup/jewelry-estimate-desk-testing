@@ -438,6 +438,19 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished), the jeweler's rule from the Blue
+  Topaz thread: a customer who says the shop made the piece ("an exact
+  replica of the pendant you made for me") is never asked about it. The
+  desk looks for the piece in its own records (the same customer, the same
+  kind of piece, quoted before): found, its facts ride beneath the new
+  words (a new size replaces the old stone), nothing on it is asked, and
+  the estimate says it follows the piece made before; not found, the owner
+  is asked once before anything is sent: the original's details (which
+  price the new piece as owner facts), "not on file" (the desk asks the
+  customer what it still needs, with or without a photo), or "handle
+  myself". A repeat customer with an open estimate elsewhere is not asked
+  "same piece or new?" when their words say it is a piece made before (6.1,
+  6.2, 6.10).
 - Built 9 September 2026 (unpublished), from the Blue Topaz thread: the
   address line says who is writing, so a gift-giver is greeted by their own
   name, never by the person the piece is for (a draft that greets someone

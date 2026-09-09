@@ -28,9 +28,9 @@ from typing import Any, Callable
 
 SCHEMA_VERSION = 1
 QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed",
-                  "stuck_claim", "price_next", "rendering_next", "out_of_scope"}
+                  "stuck_claim", "price_next", "rendering_next", "out_of_scope", "prior_piece"}
 DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim",
-                  "price_next", "rendering_next", "out_of_scope"}
+                  "price_next", "rendering_next", "out_of_scope", "prior_piece"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -70,6 +70,12 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "price_next": {
         "spec_change": ("total", "each", "carat", "karat", "instead"),
         "price_given": ("file at", "file it at", "quote", "price it at", "make it", "go with", "send it at", "at"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
+    },
+    "prior_piece": {
+        "details_given": ("carat", "ct", "karat", "gold", "platinum", "silver", "natural", "lab", "oval", "round", "grams"),
+        "not_on_file": ("not on file", "nothing on file", "no record", "no file", "don't have", "do not have", "can't find", "cannot find",
+                        "not found", "no idea", "ask them"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },
     "out_of_scope": {
@@ -466,6 +472,11 @@ def match_option(question: dict[str, Any], answer: str) -> str:
     if question.get("kind") == "rendering_next" and "handle_myself" not in hits and (answer or "").strip():
         # Any other words are the change the owner wants rendered.
         return "change_given"
+    if question.get("kind") == "prior_piece" and "handle_myself" not in hits and "not_on_file" not in hits:
+        import estimate_record  # local import: estimate_record imports this module
+
+        if estimate_record.owner_facts_in_words(answer):
+            return "details_given"  # the owner typed the piece's details
     if question.get("kind") == "price_next" and "handle_myself" not in hits and parse_owner_price(answer) is not None:
         # The owner typed a price: "$2,300" or "file it at 2300".
         return "price_given"

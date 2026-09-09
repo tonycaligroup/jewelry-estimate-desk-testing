@@ -789,7 +789,8 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
                            getattr(args, "runner", subprocess.run))
         elif options:
             labels = [o.get("label") or o["start"] for o in options]
-            facts, fixed = _offer_facts(approval, piece, labels, shop, estimate_record.vision_in_words(record.get("specification")))
+            facts, fixed = _offer_facts(approval, piece, labels, shop, estimate_record.vision_in_words(
+                record.get("specification"), on_file=bool((record.get("prior_piece") or {}).get("on_file"))))
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
                            "offer", {**facts, **before}, fixed, prepared_email_path(store), digest,
                            getattr(args, "runner", subprocess.run))
@@ -1155,6 +1156,16 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
         "reason_code": decision.get("reason_code"),
         "thread_message_count": len(messages),
     })
+    if (
+        decision["decision"] == "manual_review"
+        and decision.get("reason_code") == "identity_has_active_estimate_on_another_thread"
+        and not getattr(args, "force_new_inquiry", False)
+        and len(messages) == 1
+        and estimate_record.refers_to_a_prior_piece(gmail_text.body_text(message, limit=4000))
+    ):
+        # "The pendant you made for me, but smaller": a new piece after one on file, not the same piece continued
+        # (the jeweler, 9 September 2026); the owner is not asked which.
+        args.force_new_inquiry = True
     if (
         decision["decision"] == "manual_review"
         and decision.get("reason_code") == "identity_has_active_estimate_on_another_thread"
@@ -1662,6 +1673,83 @@ def ask_out_of_scope(args: argparse.Namespace, note: str) -> dict[str, Any]:
     return question
 
 
+def ask_prior_piece(args: argparse.Namespace, record: dict[str, Any], specification: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The customer says the shop made the piece and the desk has nothing on file: the owner's books decide.
+
+    The jeweler's rule (9 September 2026): a piece on file is never asked
+    about; one the desk cannot find goes to the owner before anything is
+    sent. "Details" price the new piece from the owner's words; "not on
+    file" makes the desk ask the customer what it still needs (with or
+    without a photo); "handle myself" leaves the thread to the owner.
+    """
+    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
+    who = _customer_name(args.monitor_root, args.claim_root, args.message_id)
+    spec = specification or record.get("specification") or {}
+    piece = owner_questions.summary_of_piece(spec) if spec else "a piece"
+    snippet = _reply_snippet(args)
+    text = (
+        f"{who} says you made {piece} for them before"
+        + (f' ("{snippet}")' if snippet else "")
+        + ", and the desk has nothing on file for it. Reply with the original's details (stone and origin, its shape and size or "
+        "carat, the metal and karat) and I will price the new one from them; or \"not on file\" and I will ask them what I still "
+        "need; or \"handle myself\"."
+    )
+    root = owner_questions.questions_root(args.monitor_root)
+    _created, question = owner_questions.create_decision(
+        root, "prior_piece", args.estimate_id, args.message_id, text, {"piece": piece[:160]},
+    )
+    question = _attach_answer_command(root, args.monitor_root, question)
+    if _created:
+        question = owner_questions.deliver(
+            root, question, runner=getattr(args, "runner", subprocess.run),
+            extra_args=kolo_safe.owner_channel_args(args.monitor_root),
+        )
+    inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "prior_piece_question")
+    return question
+
+
+def _answer_prior_piece(args: argparse.Namespace, p: dict[str, Path], root: Path, question: dict[str, Any],
+                        outcome: str) -> dict[str, Any]:
+    """The owner's word on a piece the desk could not find: details, not on file, or handle myself."""
+    message_id = _question_message_id(question)
+    estimate_id = question["estimate_id"]
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "prior_piece", "decision": outcome}
+    if outcome == "handle_myself":
+        if _claim_parked(p, message_id):
+            _close_parked_claim(p, message_id, "owner_decided_handle_myself")
+        try:
+            estimate_record.retire(p["record_root"], estimate_id, "owner_handles_thread", "the owner handles this repeat customer's thread")
+        except ValueError:
+            pass
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        result["note"] = "the desk leaves this thread to the owner"
+        return result
+    if outcome == "details_given":
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        facts = estimate_record.owner_facts_in_words(args.answer, record.get("specification") or {})
+        if not facts:
+            raise ValueError("no details found in the answer; give the stone, its size or carat, and the metal, or say \"not on file\"")
+        estimate_record.owner_supplies_facts(p["record_root"], estimate_id, facts)
+        try:
+            import ledger  # local import: the ledger never imports this module
+
+            ledger.add_facts(workspace_of(p["monitor_root"]) / "estimate-desk", estimate_id, [
+                {"field": k, "piece": None, "stone": ledger.stone_of(k), "value": v, "source": "owner", "gmail_message_id": message_id,
+                 "span": str(args.answer)[:200]} for k, v in facts.items()])
+        except Exception:  # noqa: BLE001 - the record carries the facts; the ledger catches up on the re-read
+            pass
+        estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"on_file": True, "owner": "details", "facts": sorted(facts)})
+        result["facts"] = facts
+    else:
+        estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"on_file": False, "owner": "not_on_file"})
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    _resume_parked_claim(p, message_id)
+    result.update(_hand_to_tick(p, message_id))
+    return result
+
+
 def ask_followup_stalled(args: argparse.Namespace, record: dict[str, Any], repeated: list[str]) -> dict[str, Any]:
     """The customer was asked for these details once and did not give them: the owner decides.
 
@@ -2080,6 +2168,8 @@ def answer_decision(
         write_private(work_dir / OWNER_SAYS_ESTIMATE_FILE, {"question_id": question["question_id"], "answer": str(args.answer)[:200]})
         result.update(_hand_to_tick(p, message_id))
         return result
+    if question["kind"] == "prior_piece":
+        return _answer_prior_piece(args, p, root, question, outcome)
     if question["kind"] == "unclear_reply" and outcome in {"design_change", "second_piece"}:
         return _answer_design_change(args, workspace, p, root, question, outcome)
     if question["kind"] == "appointment_next":
@@ -2526,7 +2616,8 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     labels = [o.get("label") or o["start"] for o in options]
     store = approval_store_path(p["monitor_root"], record["estimate_id"], message_id)
     approval_now = read_object(store) if store.exists() else {}
-    understanding = estimate_record.vision_in_words(record.get("specification")) if approval_now.get("ask_for") else None
+    understanding = estimate_record.vision_in_words(record.get("specification"), on_file=bool((record.get("prior_piece") or {}).get("on_file"))) \
+        if approval_now.get("ask_for") else None
     facts, fixed = _offer_facts(approval_now, piece, labels, shop, understanding)
     prepared = prepared_email_path(store)
     if prepared.exists() and all(l in prepared.read_text(encoding="utf-8") for l in labels):
@@ -3055,6 +3146,8 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
     }
     if chosen:
         facts["chosen by the jeweler, say if you have a preference"] = ", ".join(chosen)
+    if (record.get("prior_piece") or {}).get("on_file"):
+        facts["on file"] = "this follows the piece the shop made for them before, with the changes they named; say so in a sentence"
     booked = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else None
     if booked and booked.get("confirmed_start"):
         facts["meeting booked"] = str(booked["confirmed_start"])[:16].replace("T", " ")

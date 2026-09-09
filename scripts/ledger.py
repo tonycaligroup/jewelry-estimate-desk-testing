@@ -26,12 +26,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 DB_NAME = "ledger.sqlite"
-SOURCES = ("owner", "quoted", "customer", "jeweler", "photo", "reading")
+SOURCES = ("owner", "quoted", "customer", "prior", "jeweler", "photo", "reading")
 # quoted: a fact the customer saw on a sent estimate; only a change they name (the classifier's changed
 # fields, or the owner's "change" answer) may move it, never a re-read that happens to find the word.
 # quoted and customer share a rank: absorb() only writes a customer row over a quoted one for a change the
 # customer named, and then the newer row wins.
-RANK = {"owner": 5, "quoted": 4, "customer": 4, "jeweler": 2, "photo": 1, "reading": 0}
+RANK = {"owner": 5, "quoted": 4, "customer": 4, "prior": 3, "jeweler": 2, "photo": 1, "reading": 0}  # prior: the piece on file
 METAL_FAMILY = {"metal", "metal_karat", "metal_color"}
 JEWELERS_CHOICE = "jeweler's choice"
 # Keys that describe the piece, not a fact about it: kept as readings, never protected or asked.
@@ -460,4 +460,4 @@ def describe_source(row: dict[str, Any]) -> str:
     if source == "customer":
         return f"customer wrote: {row.get('span')}" if row.get("span") else "customer"
     return {"photo": "from the photo", "jeweler": "jeweler's choice", "owner": "owner's decision",
-            "quoted": "quoted in the estimate"}.get(str(source), "read from the thread")
+            "quoted": "quoted in the estimate", "prior": "from the piece we made before"}.get(str(source), "read from the thread")

@@ -1862,13 +1862,110 @@ def earring_style_in_words(words: str) -> str | None:
     return next((style for word, style in EARRING_STYLE_WORDS if stem.startswith(word)), None)
 
 
+# "the pendant you made for me", "the ring I bought from you", "same as the one you made": a piece the shop made before.
+PRIOR_PIECE_RE = re.compile(
+    r"(?i)\b(?:(?:you|you guys|you all|your shop|your team)\s+(?:made|created|built|designed|did|crafted)\s+(?:for\s+)?(?:me|us|my|our|her|him)\b|"
+    r"(?:made|created|built|designed|crafted)\s+by\s+you\b|(?:bought|purchased|ordered|got|had made)\s+(?:it\s+|this\s+|that\s+|these\s+)?"
+    r"(?:from|through|with|at)\s+(?:you|your shop|your store)\b|(?:the|this|that)\s+(?:one|piece|ring|pendant|necklace|bracelet|earrings)\s+you\s+made\b|"
+    r"you\s+made\s+(?:this|that|the|these|those|it)\b)"
+)
+PRIOR_PIECE_STATUSES = ("estimate_sent", "appointment_booked", "approved")
+
+
+def refers_to_a_prior_piece(own_words: str) -> bool:
+    """The customer says the shop made (or sold them) the piece they are describing."""
+    return bool(PRIOR_PIECE_RE.search(str(own_words or "")))
+
+
+def find_prior_piece(root: Path, recipient: str, piece_type: str | None) -> dict[str, Any] | None:
+    """The desk's most recent quoted estimate for this customer that names the same kind of piece, else None.
+
+    "On file" means the desk's own records (the jeweler, 9 September 2026:
+    when the piece is on file and can be found, the owner is not asked).
+    The quoted specification (the archived binding if there is one, else the
+    record's) is what the customer had; a piece of another kind is not it.
+    """
+    email = str(recipient or "").strip().lower()
+    if not email or not root.exists():
+        return None
+    wanted = {w for w in re.findall(r"[a-z]+", str(piece_type or "").lower()) if w not in ("a", "an", "the", "of", "pair", "custom", "piece")}
+    found: list[tuple[str, dict[str, Any]]] = []
+    for path in sorted(root.glob("jed-*.json")):
+        try:
+            record = read_object(path)
+        except (OSError, ValueError):
+            continue
+        route = record.get("route") if isinstance(record.get("route"), dict) else {}
+        if str(route.get("recipient") or "").strip().lower() != email:
+            continue
+        history = record.get("estimate_history") or []
+        quoted = history[-1].get("specification") if history and isinstance(history[-1], dict) else None
+        if not isinstance(quoted, dict) or not quoted:
+            quoted = record.get("specification") if record.get("status") in PRIOR_PIECE_STATUSES else None
+        if not isinstance(quoted, dict) or not quoted:
+            continue
+        had = set(re.findall(r"[a-z]+", str(quoted.get("piece_type") or "").lower()))
+        if wanted and not (wanted & had):
+            continue
+        found.append((str(record.get("created_at") or record.get("estimate_id") or ""), {"estimate_id": record.get("estimate_id"), "specification": quoted}))
+    if not found:
+        return None
+    found.sort(key=lambda item: item[0])
+    return found[-1][1]
+
+
+PRIOR_LOOSE_KEYS = ("notes", "reference_images", "scheduling_intent", "pieces", "quantity", "event_date", "budget", "engraving")
+
+
+def prior_piece_facts(prior_spec: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """The facts of the piece on file the new words do not replace (a smaller stone replaces the carat and the size)."""
+    if not isinstance(prior_spec, dict):
+        return {}
+    carried: dict[str, Any] = {}
+    for key, value in prior_spec.items():
+        if key in PRIOR_LOOSE_KEYS or not _present(value) or _present((current or {}).get(key)):
+            continue
+        carried[key] = value
+    if _present((current or {}).get("stone_dimensions")) or _present((current or {}).get("stone_carat")):
+        # A new size: the old carat and size do not ride along.
+        carried.pop("stone_carat", None)
+        carried.pop("stone_dimensions", None)
+        carried.pop("stone_carat_basis", None)
+    return carried
+
+
+def mark_prior_piece(root: Path, estimate_id: str, info: dict[str, Any]) -> dict[str, Any]:
+    """Remember what the desk found (or the owner said) about the piece the customer says the shop made."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        record["prior_piece"] = {"on_file": bool(info.get("on_file")), **{k: v for k, v in info.items() if k != "on_file"}}
+        write_object(path, record)
+        return record
+
+
+def owner_supplies_facts(root: Path, estimate_id: str, facts: dict[str, Any]) -> dict[str, Any]:
+    """The owner's details of a piece on file (in their books, not the desk's) join the specification, as owner facts."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") != "awaiting_specs":
+            raise ValueError("only an estimate still awaiting specifications can take the owner's details")
+        specification = dict(record.get("specification") or {})
+        specification.update({k: v for k, v in facts.items() if _present(v)})
+        record["specification"] = specification
+        write_object(path, record)
+        return record
+
+
 def photo_reading(specification: dict[str, Any] | None) -> str:
     """The desk's reading of the customer's example photo ("from the photo: ..."), else ''."""
     text = str((specification or {}).get("reference_images") or "").strip()
     return text if text.lower().startswith("from the photo") else ""
 
 
-def vision_in_words(specification: dict[str, Any] | None) -> str | None:
+def vision_in_words(specification: dict[str, Any] | None, on_file: bool = False) -> str | None:
     """The customer's vision as a jeweler would say it back, when a photo came with the words (the owner, 9 September 2026).
 
     "I want the attached but with sapphires" plus a photo of halo studs is
@@ -1878,7 +1975,7 @@ def vision_in_words(specification: dict[str, Any] | None) -> str | None:
     None when there was no photo or the reading has nothing to say.
     """
     spec = specification if isinstance(specification, dict) else {}
-    if not photo_reading(spec):
+    if not photo_reading(spec) and not on_file:
         return None
     raw = spec.get("pieces")
     if isinstance(raw, list) and len(raw) > 1:
@@ -1928,7 +2025,10 @@ def vision_in_words(specification: dict[str, Any] | None) -> str | None:
     metal = cost_components.extract_metal(spec).get("description")
     if metal:
         parts.append(f"in {metal}")
-    return ", ".join(parts)
+    size = clean(spec.get("stone_dimensions"))
+    if size and not spec.get("stone_carat"):
+        parts.append(f"the stone {size}")
+    return ", ".join(parts) + (", after the piece we made for you, with the changes you named" if on_file else "")
 
 
 _MM_SIZE_RE = re.compile(r"(?i)\b(\d{1,2}(?:\.\d)?)\s*(?:mm)?\s*(?:x|×|by)\s*(\d{1,2}(?:\.\d)?)\s*mm\b")
@@ -2092,6 +2192,15 @@ def owner_facts_in_words(text: str, specification: dict[str, Any] | None = None)
         found["stone_origin"] = "lab-grown"
     elif re.search(r"\bnatural\b", lowered):
         found["stone_origin"] = "natural"
+    shape = re.search(r"\b(oval|round|cushion|pear|emerald[- ]cut|princess|marquise|radiant|asscher|heart|baguette|trillion)\b", lowered)
+    if shape:
+        found["stone_shape"] = shape.group(1)
+    size = stone_size_in_words(words)
+    if size:
+        found["stone_dimensions"] = size
+    setting = setting_in_words(words)
+    if setting:
+        found["setting_style"] = setting
     m = _OWNER_SIZE_RE.search(words)
     if m:
         found["finger_size"] = m.group(1)
