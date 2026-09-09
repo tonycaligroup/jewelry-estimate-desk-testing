@@ -32,7 +32,7 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 SPEC_KEYS = (
     "piece_type", "quantity", "metal", "metal_karat", "metal_color", "stone_type",
     "stone_origin", "stone_shape", "stone_carat", "stone_color", "stone_clarity",
-    "stone_cut", "stone_count", "center_stone", "accent_stones", "accent_stone_type", "accent_stone_origin",
+    "stone_cut", "stone_count", "stone_carat_basis", "center_stone", "accent_stones", "accent_stone_type", "accent_stone_origin",
     "accent_stone_color", "accent_stone_clarity", "finger_size", "dimensions",
     "setting_style", "finish", "engraving", "event_date", "budget",
     "customer_supplied_materials", "certificate", "reference_images",
@@ -384,6 +384,9 @@ def extract_specification(
         "dimensions is length or size for a chain, bracelet, or pendant. "
         "setting_style is the customer's own design wording (classic band, solitaire, bezel, channel-set, halo) or "
         "\"jeweler's choice\" when they explicitly leave it to you; never invent one. "
+        "For a pair (earrings, cufflinks, studs, hoops) stone_carat_basis is \"each\" when the carat weight is per stone or "
+        "per earring (\"1.5 ct each\", \"per earring\") and \"total\" when it is the pair's total (\"2 ct total\", \"tcw\"); "
+        "omit it when the customer did not say. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
@@ -454,6 +457,9 @@ def triage_and_extract(
         "dimensions is length or size for a chain, bracelet, or pendant. "
         "setting_style is the customer's own design wording (classic band, solitaire, bezel, channel-set, halo) or "
         "\"jeweler's choice\" when they explicitly leave it to you; never invent one. "
+        "For a pair (earrings, cufflinks, studs, hoops) stone_carat_basis is \"each\" when the carat weight is per stone or "
+        "per earring (\"1.5 ct each\", \"per earring\") and \"total\" when it is the pair's total (\"2 ct total\", \"tcw\"); "
+        "omit it when the customer did not say. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "

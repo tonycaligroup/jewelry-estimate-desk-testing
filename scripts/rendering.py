@@ -183,7 +183,10 @@ def exact_facts(specification: dict[str, Any] | str) -> list[str]:
         shape = str(spec.get("stone_shape") or spec.get("stone_cut") or "").strip()
         carat = spec.get("stone_carat")
         parts = [w for w in (colour_words, stone) if w]
-        desc = " ".join(parts) + " center stone" + (f", {shape}" if shape else "") + (f", {carat} ct each" if carat else "")
+        basis = str(spec.get("stone_carat_basis") or "").lower()
+        carat_words = "" if not carat else (f", {carat} ct each" if basis == "each" else f", {carat} ct total for the pair" if basis == "total"
+                                            else f", {carat} ct")
+        desc = " ".join(parts) + " center stone" + (f", {shape}" if shape else "") + carat_words
         origin = str(spec.get("stone_origin") or "").strip()
         facts.append(desc + (f" ({origin})" if origin else ""))
     accents = str(spec.get("accent_stones") or "").strip()

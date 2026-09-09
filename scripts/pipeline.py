@@ -810,6 +810,9 @@ def process_claim(
     # customer's written word is never overwritten by a photo or a re-read, and what stands is what the
     # gate, the record, the card, and the emails see.
     specification = estimate_record.settle_grades(specification)
+    specification = estimate_record.settle_carat_basis(
+        specification, " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
+                                if m.get("sent_by") == "customer"))
     ledger.migrate(desk, record)
     ledger.absorb(desk, estimate_id, specification, message_id, handled_words, " ".join(photos),
                   changeable=ledger.changeable_fields(record))

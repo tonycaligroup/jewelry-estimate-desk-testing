@@ -1,5 +1,5 @@
 {
-  "defect": "stud earrings with a stated 1.5 ct center emerald, 18k white gold, lab-grown, halo stones D VVS1 (with a reference photo) were asked for 'the exact dimensions for the halo and overall size', then for millimetre diameters and a drop length; a customer does not know those, the jeweler works them out; nothing was missing and the right outcome was a price card",
+  "defect": "stud earrings with a stated 1.5 ct center emerald, 18k white gold, lab-grown, halo stones D VVS1 (with a reference photo) were asked for 'the exact dimensions for the halo and overall size', then for millimetre diameters and a drop length; a customer does not know those, the jeweler works them out; nothing was missing and the right outcome was a price card (since the pair rule of 9 September, the one question left is whether 1.5 ct is each stone or the pair's total)",
   "seen_on": "4.14.6",
   "fixed_in": "4.14.7",
   "text_is": "verbatim",
@@ -30,9 +30,41 @@
       },
       "expect": {
         "outcomes": [
+          "followup_sent"
+        ],
+        "sent": 1,
+        "missing_required_fields": [
+          "confirm.stone_carat_basis"
+        ]
+      }
+    },
+    {
+      "customer": {
+        "id": "s2",
+        "text": "1.5 ct each, per earring."
+      },
+      "spec": {
+        "piece_type": "stud earrings",
+        "metal": "white gold",
+        "metal_karat": 18,
+        "metal_color": "white",
+        "stone_type": "emerald",
+        "stone_origin": "lab-grown",
+        "stone_carat": 1.5,
+        "stone_shape": "round",
+        "stone_color": "jeweler's choice",
+        "stone_clarity": "jeweler's choice",
+        "setting_style": "halo",
+        "center_stone": "yes",
+        "accent_stones": "lab-grown diamond halo, D color, VVS1 or better",
+        "reference_images": "from the photo: round center stones with cushion-shaped halos, stud backs",
+        "stone_carat_basis": "each"
+      },
+      "expect": {
+        "outcomes": [
           "approval_requested"
         ],
-        "sent": 0,
+        "sent": 1,
         "missing_required_fields": []
       }
     }

@@ -187,6 +187,9 @@ def _choices(specification: Any) -> str:
                        if isinstance(v, str) and v.strip().lower() == "jeweler's choice" and k.replace("stone_", "").replace("_", " ") not in chosen]
     if chosen:
         parts.append("jeweler's choice: " + ", ".join(chosen))
+    basis = str(specification.get("stone_carat_basis") or "").lower()
+    if basis in ("each", "total") and specification.get("stone_carat"):
+        parts.append(f"{specification['stone_carat']} ct {'each stone' if basis == 'each' else 'total for the pair'}")
     reference = str(specification.get("reference_images") or "").strip()
     if reference.lower().startswith("from the photo"):
         parts.append(reference[:120])

@@ -215,6 +215,7 @@ def _ask_price_next(p: dict[str, Path], estimate_id: str, message_id: str, runne
     qid_message = message_id if round_no == 1 else f"{message_id}#round{round_no}"
     text = (
         f"You passed on the price for {customer} ({piece}): ${price:,.2f}; nothing was sent. "
+        "Reply with a price to file, a changed fact to re-price (\"5 ct total\", \"18k rose gold\"), or \"handle myself\". "
         "Reply with the price you want and I will file a fresh card at it (same cost sheet, new margin shown), "
         "or \"handle myself\" and I will leave the thread to you."
     )
@@ -471,9 +472,30 @@ def _answer_price_next(args: argparse.Namespace, p: dict[str, Path], root: Path,
             owner_questions.record_decision(root, question, args.answer, outcome)
         result["note"] = "the desk leaves this thread to the owner; the estimate is dormant"
         return result
+    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    changes = estimate_record.owner_facts_in_words(args.answer, record.get("specification") or {})
+    if changes and "$" not in str(args.answer):
+        # The owner changed a fact ("5 ct total", "18k rose gold"): the owner's word goes on the record and the
+        # ledger, and the tick re-prices from the record; nothing stands down (9 September 2026).
+        import ledger  # local import: the ledger never imports this module
+
+        estimate_record.owner_changes_specification(p["record_root"], estimate_id, changes, question["question_id"])
+        try:
+            ledger.add_facts(workspace_of(p["monitor_root"]) / "estimate-desk", estimate_id, [
+                {"field": k, "piece": None, "stone": ledger.stone_of(k), "value": v, "source": "owner", "gmail_message_id": message_id,
+                 "span": str(args.answer)[:120]} for k, v in changes.items()])
+        except Exception:  # noqa: BLE001 - the record carries the change; the ledger catches up on the re-read
+            pass
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, "spec_change")
+        # The claim finished with the first card; it is reopened on purpose and the next tick re-prices the record,
+        # where the owner's facts now stand. A model call never runs in this session's command.
+        inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], 1, allow_processed=True)
+        result.update({"decision": "spec_change", "changes": changes, **_hand_to_tick(p, message_id, "price_from_record", estimate_id)})
+        return result
     price = owner_questions.parse_owner_price(args.answer)
     if price is None:
-        raise ValueError("could not read a price from that reply; give a dollar figure, for example 2,300")
+        raise ValueError("could not read a price from that reply; give a dollar figure, for example 2,300, or a changed fact such as 5 ct total")
     estimate_record.record_owner_price(p["record_root"], estimate_id, price, question["question_id"], read_object(p["shop_profile"]))
     filed = _refile_price_card(p, estimate_id, message_id, int(context.get("round") or 1) + 0, runner, args)
     if question["status"] == "open":
@@ -546,6 +568,15 @@ def send_spec_followup(args: argparse.Namespace) -> dict[str, Any]:
     return record
 
 
+def _revision_suffix(record_root: Path, estimate_id: str) -> str:
+    """A re-priced record (the owner changed a fact, or a design change) journals its card under its revision."""
+    try:
+        revision = int(estimate_record.read_object(estimate_record.record_path(record_root, estimate_id)).get("revision") or 0)
+    except (OSError, ValueError):
+        revision = 0
+    return f":rev{revision}" if revision else ""
+
+
 def request_approval(args: argparse.Namespace) -> dict[str, Any]:
     candidate = read_object(args.current_state)
     current = estimate_record.prepare_approval_state(
@@ -579,7 +610,7 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
         args.claim_root,
         args.message_id,
         None,
-        f"approval_request:{args.estimate_id}:{args.message_id}",
+        f"approval_request:{args.estimate_id}:{args.message_id}" + _revision_suffix(args.record_root, args.estimate_id),
         args.estimate_id,
         args.approval_request,
         approver["session_key"],

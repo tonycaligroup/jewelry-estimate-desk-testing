@@ -1830,6 +1830,129 @@ LEAVES_TO_JEWELER_RE = re.compile(
 GRADE_KEYS = ("stone_color", "stone_clarity")
 
 
+PAIR_WORDS = ("earring", "cufflink", "cuff link", "stud", "hoop", "huggie")
+_BASIS_EACH_RE = re.compile(r"(?i)\b(?:each|apiece|a ?piece|per (?:earring|ear|stone|side|piece)|every (?:earring|stone))\b")
+_BASIS_TOTAL_RE = re.compile(r"(?i)\b(?:total|tcw|ctw|t\.?c\.?w\.?|combined|for (?:the|both) (?:pair|earrings)|the pair|pair total|between (?:the )?two|altogether|in all)\b")
+
+
+def is_pair(specification: dict[str, Any]) -> bool:
+    """Earrings, cufflinks, studs, hoops: two of the piece, so a carat may be each or the pair's total."""
+    piece = str((specification or {}).get("piece_type") or "").lower()
+    return any(w in piece for w in PAIR_WORDS)
+
+
+def carat_basis_in_words(own_words: str) -> str | None:
+    """'each' or 'total' when the customer's words say which, else None."""
+    text = str(own_words or "")
+    each, total = bool(_BASIS_EACH_RE.search(text)), bool(_BASIS_TOTAL_RE.search(text))
+    if each and not total:
+        return "each"
+    if total and not each:
+        return "total"
+    return None
+
+
+def settle_carat_basis(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """For a pair with a stated carat, the customer's words decide whether it is each stone or the pair's total.
+
+    The owner's rule (9 September 2026): "2.5 ct rounds" for earrings is
+    either 2.5 ct per stone or 2.5 ct for the pair, and the price differs
+    by half, so the desk settles it from the words or asks; it applies to
+    pairs only.
+    """
+    if not isinstance(specification, dict) or not is_pair(specification):
+        return specification
+    if specification.get("stone_carat") in (None, "", 0) or str(specification.get("stone_carat")).lower() == "jeweler's choice":
+        return specification
+    current = str(specification.get("stone_carat_basis") or "").lower()
+    if current in ("each", "total"):
+        return specification
+    found = carat_basis_in_words(own_words)
+    if found:
+        return {**specification, "stone_carat_basis": found}
+    return specification
+
+
+_OWNER_CARAT_RE = re.compile(r"(?i)(?<![\d.])(\d+(?:\.\d+)?)\s*(?:ct|cts|carat|carats)\b")
+_OWNER_KARAT_RE = re.compile(r"(?i)\b(\d{1,2})\s*(?:k|kt|karat)\b")
+_OWNER_SIZE_RE = re.compile(r"(?i)\bsize\s*(\d{1,2}(?:\.\d)?)\b")
+_OWNER_STONES = ("emerald", "sapphire", "ruby", "diamond", "moissanite", "aquamarine", "morganite", "tanzanite", "amethyst", "opal", "pearl", "garnet", "topaz")
+
+
+def owner_facts_in_words(text: str, specification: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The facts an owner states in a reply ("5 ct total", "18k rose gold", "size 7", "natural"), as specification keys.
+
+    Deterministic and narrow: the owner's word is the last word on a fact, so
+    only what is plainly written is taken. For a pair, a carat with no
+    "each" is the pair's total (owners price in totals).
+    """
+    words = str(text or "")
+    found: dict[str, Any] = {}
+    m = _OWNER_CARAT_RE.search(words)
+    if m:
+        found["stone_carat"] = float(m.group(1)) if "." in m.group(1) else int(m.group(1))
+        basis = carat_basis_in_words(words)
+        if is_pair(specification or {}):
+            found["stone_carat_basis"] = basis or "total"
+        elif basis:
+            found["stone_carat_basis"] = basis
+    m = _OWNER_KARAT_RE.search(words)
+    if m:
+        found["metal_karat"] = int(m.group(1))
+    lowered = words.lower()
+    for colour in ("yellow", "white", "rose"):
+        if re.search(r"\b" + colour + r"\b", lowered):
+            found["metal_color"] = colour
+            if "gold" in lowered:
+                found["metal"] = f"{colour} gold"
+            break
+    if "platinum" in lowered:
+        found["metal"] = "platinum"
+    if re.search(r"\blab[- ]?grown\b|\blab\b", lowered):
+        found["stone_origin"] = "lab-grown"
+    elif re.search(r"\bnatural\b", lowered):
+        found["stone_origin"] = "natural"
+    m = _OWNER_SIZE_RE.search(words)
+    if m:
+        found["finger_size"] = m.group(1)
+    for stone in _OWNER_STONES:
+        if re.search(r"\b" + stone + r"s?\b", lowered):
+            found["stone_type"] = stone
+            break
+    return found
+
+
+def owner_changes_specification(root: Path, estimate_id: str, changes: dict[str, Any], question_id: str) -> dict[str, Any]:
+    """The owner changed a fact after passing on the price: the record reopens for pricing with the owner's facts.
+
+    The rejected binding becomes history, the specification takes the owner's
+    words, and the record goes back to awaiting_specs so the tick re-prices
+    it from the record (the 9 September 2026 rule: an owner's "5 ct" re-prices,
+    it never stands the desk down).
+    """
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        route_ownership.validate_record(record)
+        if record.get("status") not in ("pending_approval", "awaiting_specs"):
+            raise ValueError(f"estimate is {record.get('status')}; a rejected price card is needed to change the facts")
+        rejected = record.setdefault("rejected_approval_bindings", [])
+        old_binding = record.get("approval_binding_hash")
+        if isinstance(old_binding, str) and old_binding not in rejected:
+            rejected.append(old_binding)
+        specification = dict(record.get("specification") or {})
+        specification.update(changes)
+        record["specification"] = specification
+        record["owner_spec_changes"] = [*(record.get("owner_spec_changes") or []),
+                                         {"changes": changes, "question_id": question_id, "at": datetime.now(timezone.utc).isoformat()}]
+        record["status"] = "awaiting_specs"
+        record["missing_required_fields"] = []
+        record["revision"] = int(record.get("revision") or 0) + 1
+        record.pop("approval_binding_hash", None)
+        write_object(path, record)
+        return record
+
+
 def settle_grades(specification: dict[str, Any]) -> dict[str, Any]:
     """A stone's color and clarity are the jeweler's choice unless the customer stated them (the owner, 9 September 2026).
 
@@ -2698,11 +2821,12 @@ def require_processed_evidence(
         if approval is None:
             raise ValueError("complete customer reply lacks durable approval evidence")
         action_key = f"approval_request:{record['estimate_id']}:{message_id}"
-        action = claim_state.get("external_actions", {}).get(action_key)
-        if (
-            not isinstance(action, dict)
-            or action.get("category") != "approval_request"
-            or action.get("status") != "sent"
+        actions = claim_state.get("external_actions", {}) or {}
+        # A re-priced record (a design change, an owner's changed fact) journals its card under ":rev<n>".
+        candidates = [v for k, v in actions.items() if k == action_key or k.startswith(action_key + ":rev")]
+        if not any(
+            isinstance(action, dict) and action.get("category") == "approval_request" and action.get("status") == "sent"
+            for action in candidates
         ):
             raise ValueError(
                 "complete customer reply lacks a sent claimed approval request"

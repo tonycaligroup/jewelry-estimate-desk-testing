@@ -7107,7 +7107,7 @@ class RenderFromTheLedgerTests(unittest.TestCase):
     """Live 8 Sep: emerald halo studs rendered as diamond drops; the facts now open the prompt and the checker asks about them."""
 
     SPEC = {"piece_type": "stud earrings", "metal": "white gold", "metal_karat": 18, "metal_color": "white", "stone_type": "emerald",
-            "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_shape": "round", "stone_color": "jeweler's choice",
+            "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_carat_basis": "each", "stone_shape": "round", "stone_color": "jeweler's choice",
             "stone_clarity": "jeweler's choice", "setting_style": "halo", "center_stone": "yes",
             "accent_stones": "lab-grown diamond halo, D color, VVS1", "reference_images": "from the photo: cushion halos, stud backs"}
 
@@ -7136,6 +7136,48 @@ class RenderFromTheLedgerTests(unittest.TestCase):
         mark = rendering.build_prompts({**plan, "reference_kind": "mark"}, self.SPEC, has_artwork=True, has_exemplar=False)
         self.assertIn("customer's mark", mark[0])
         self.assertNotIn("example piece", mark[0])
+
+
+class OwnerChangesAFactTests(unittest.TestCase):
+    """Live 9 Sep: the owner answered a rejected price card with '5 ct' and the desk stood down; it re-prices now."""
+
+    def test_the_owners_words_become_facts(self) -> None:
+        pair = {"piece_type": "stud earrings", "stone_type": "emerald", "stone_carat": 2.5}
+        self.assertEqual(estimate_record.owner_facts_in_words("you need 5 ct", pair), {"stone_carat": 5, "stone_carat_basis": "total"})
+        self.assertEqual(estimate_record.owner_facts_in_words("2.5 ct each", pair), {"stone_carat": 2.5, "stone_carat_basis": "each"})
+        self.assertEqual(estimate_record.owner_facts_in_words("make it 18k rose gold, natural", {"piece_type": "ring"}),
+                         {"metal_karat": 18, "metal_color": "rose", "metal": "rose gold", "stone_origin": "natural"})
+        self.assertEqual(estimate_record.owner_facts_in_words("file it at 2,300", {"piece_type": "ring"}), {})
+        self.assertEqual(estimate_record.owner_facts_in_words("handle myself", {"piece_type": "ring"}), {})
+
+
+class PairCaratBasisTests(unittest.TestCase):
+    """The owner, 9 Sep 2026: for earrings, '2.5 ct' is each stone or the pair's total; the desk settles it or asks."""
+
+    def test_the_words_settle_it_and_a_bare_carat_is_confirmed(self) -> None:
+        self.assertEqual(estimate_record.carat_basis_in_words("1.5 ct emeralds round cut per earring"), "each")
+        self.assertEqual(estimate_record.carat_basis_in_words("2 ct total for the pair"), "total")
+        self.assertIsNone(estimate_record.carat_basis_in_words("These earrings are 2.50ct rounds so looking to match the look"))
+        pair = {"piece_type": "stud earrings", "stone_type": "emerald", "stone_carat": 2.5}
+        self.assertEqual(estimate_record.settle_carat_basis(pair, "1.5 ct each please")["stone_carat_basis"], "each")
+        self.assertNotIn("stone_carat_basis", estimate_record.settle_carat_basis(pair, "2.50ct rounds"))
+        self.assertNotIn("stone_carat_basis", estimate_record.settle_carat_basis({"piece_type": "ring", "stone_carat": 2.5}, "2.5 ct each"), "rings are not pairs")
+        digest = {"messages": [{"body": "Earrings like these but with a round emerald. These earrings are 2.50ct rounds.", "sent_by": "customer", "claimed": True}]}
+        found = reading_check.compare(digest, pair)
+        self.assertEqual([d["topic"] for d in found], ["stone_carat_basis"])
+        self.assertIn("each stone, or the total", found[0]["question"])
+        self.assertEqual(reading_check.compare(digest, {**pair, "stone_carat_basis": "each"}), [])
+        self.assertEqual(reading_check.compare({"messages": [{"body": "2.5 ct each, emerald studs", "sent_by": "customer", "claimed": True}]}, pair), [])
+
+    def test_the_card_and_the_render_say_which(self) -> None:
+        import kolo_safe
+        import rendering
+        each = {"piece_type": "stud earrings", "stone_type": "emerald", "stone_origin": "lab-grown", "stone_carat": 2.5, "stone_carat_basis": "each",
+                "metal": "18k white gold", "center_stone": "yes"}
+        self.assertIn("2.5 ct each stone", kolo_safe._choices(each))
+        self.assertIn("2.5 ct each", rendering.exact_facts(each)[1])
+        self.assertIn("2.5 ct total for the pair", rendering.exact_facts({**each, "stone_carat_basis": "total"})[1])
+        self.assertNotIn("each", rendering.exact_facts({k: v for k, v in each.items() if k != "stone_carat_basis"})[1])
 
 
 class OwnStoneWholeWordTests(unittest.TestCase):

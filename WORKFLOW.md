@@ -453,6 +453,13 @@ closed by follow-up changes:
   earrings" is never drops), and when the customer sent an example piece
   the render is that photograph changed only as specified, not a logo to
   reproduce (6.6).
+- Built 9 September 2026 (unpublished, after 4.15.0): for a pair (earrings,
+  cufflinks, studs, hoops) a stated carat is either each stone's or the
+  pair's total, and the price differs by half. The customer's words settle
+  it ("per earring", "each", "total", "tcw"); with no such word the desk
+  asks the one question a customer can answer ("is the carat weight you
+  gave the weight of each stone, or the total for both?"); "each" prices
+  two stones and the card and the render say which. Pairs only (6.2, 6.3).
 - Built 9 September 2026 (unpublished, after 4.15.0), from two simulation
   runs of the desk against the fake world: a reply after the estimate that
   needs no card (thanks, an acceptance, a cancellation) now completes its

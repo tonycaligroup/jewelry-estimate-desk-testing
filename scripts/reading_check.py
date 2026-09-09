@@ -28,6 +28,7 @@ QUESTIONS = {
     "stone_carat": "could you confirm the carat weight of the stones?",
     "stone_origin": "could you confirm whether you would like a lab-grown or a natural stone?",
     "customer_stone": "you mentioned a stone of your own; could you confirm you would like us to set that stone rather than supply one?",
+    "stone_carat_basis": "for the pair, is the carat weight you gave the weight of each stone, or the total for both?",
 }
 
 _SIZE_RE = re.compile(r"\bsize\s*(?:of\s*)?(\d{1,2}(?:\.\d)?|\d{1,2}\s*[½¼¾]|\d{1,2}\s*1/2)\b", re.I)
@@ -144,6 +145,12 @@ def compare(digest: dict[str, Any], specification: dict[str, Any]) -> list[dict[
     # a claim.
     if _says_own_stone(text) and not estimate_record.customer_supplies_stone(specification or {}):
         add("customer_stone", "a stone of their own", "a stone the shop supplies")
+    # A pair with a stated carat and no word for each or total: the price differs by half (the owner, 9 Sep 2026).
+    for piece in pieces:
+        if estimate_record.is_pair(piece) and _number(piece.get("stone_carat")) and str(piece.get("stone_carat_basis") or "").lower() not in ("each", "total"):
+            if not estimate_record.carat_basis_in_words(text):
+                add("stone_carat_basis", f"{_number(piece.get('stone_carat')):g} ct", "unclear whether each stone or the pair's total")
+            break
     return out
 
 

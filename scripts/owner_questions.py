@@ -68,6 +68,7 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },
     "price_next": {
+        "spec_change": ("total", "each", "carat", "karat", "instead"),
         "price_given": ("file at", "file it at", "quote", "price it at", "make it", "go with", "send it at", "at"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },

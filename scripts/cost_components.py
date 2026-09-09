@@ -618,10 +618,14 @@ def prepare(
         stone = extract_center_stone(piece)
         center_index = None
         if stone["stone_type"] is not None:
+            carats = stone["carat"]
+            basis = str(piece.get("stone_carat_basis") or "").lower()
+            if carats and estimate_record.is_pair(piece) and basis == "each":
+                carats = round(float(carats) * 2, 3)  # two stones, the carat given for each
             stone_line: dict[str, Any] = {
-                "stone": (stone["description"] or stone["stone_type"]) + tag,
+                "stone": (stone["description"] or stone["stone_type"]) + (" (two stones)" if carats != stone["carat"] else "") + tag,
                 "rate_key": None,
-                "quantity": stone["carat"],
+                "quantity": carats,
                 "unit_cost": None,
             }
             preferred = set(stone["origin"] or ())

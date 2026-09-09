@@ -2404,8 +2404,8 @@ class RenderFromExampleTests(SideBranchTests):
             profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
             profile_path.write_text(json.dumps(profile), encoding="utf-8")
             spec = {"piece_type": "stud earrings", "metal": "white gold", "metal_karat": "18k", "metal_color": "white", "stone_type": "emerald",
-                    "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_shape": "round", "setting_style": "halo", "center_stone": "yes",
-                    "reference_images": "from the photo: round center stones with cushion halos, stud backs"}
+                    "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_carat_basis": "each", "stone_shape": "round", "setting_style": "halo",
+                    "center_stone": "yes", "reference_images": "from the photo: round center stones with cushion halos, stud backs"}
             thread, _estimate_id = self._estimate_sent(ws, world, spec=spec, text="Earrings like these with 1.5 ct round emeralds, 18k white gold.\n\nMichael")
             world.intents = ["rendering_request"]
             world.customer_message("r2", thread, "Can I see what this would look like?\n\nMichael", attachments=("earrings.png",))
@@ -2418,6 +2418,77 @@ class RenderFromExampleTests(SideBranchTests):
             self.assertTrue(all("the piece is stud earrings" in pr for pr in prompts), prompts[0])
             checks = [flag(argv, "--prompt") or "" for argv in world.describe_argv]
             self.assertTrue(checks and all("exact_the_piece_is_stud_earrings" in c for c in checks), checks[:1])
+        self.run_branch(branch)
+
+
+class OwnerChangesAFactAfterRejectingTests(SideBranchTests):
+    """Live 9 Sep: the owner passed on a price card and replied '5 ct'; the desk stood down instead of re-pricing."""
+
+    def test_a_changed_fact_after_a_rejected_price_card_re_prices(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            world.spec = {"piece_type": "stud earrings", "metal": "white gold", "metal_karat": "18k", "metal_color": "white",
+                          "stone_type": "emerald", "stone_origin": "lab-grown", "stone_carat": 2.5, "stone_carat_basis": "total",
+                          "stone_shape": "round", "setting_style": "halo", "center_stone": "yes"}
+            world.customer_message("oc1", "thread-owner-change", "Emerald halo studs, 2.5 ct total, 18k white gold, lab grown.\n\nAnthony", subject="Earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            first = world.cards[-1]
+            self.assertIn("2.5ct", first["title"].replace(" ", ""))
+            world.reject(first, "wrong carats")
+            self.tick(ws, world)
+            question = [n for n in world.notices if not n["file"]][-1]["text"]
+            self.assertIn("changed fact", question)
+            answered = self.answer(ws, "you need 5 ct total, 2.5 each")
+            self.assertEqual(answered["decision"], "spec_change", answered)
+            self.assertEqual(answered["changes"]["stone_carat"], 5)
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            card = world.cards[-1]
+            self.assertNotEqual(card["brief_id"], first["brief_id"])
+            self.assertIn("5ct", card["title"].replace(" ", ""))
+            self.assertEqual(world.sent, [], "nothing to the customer until the new card is approved")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["specification"]["stone_carat"], 5)
+            self.assertEqual(record["status"], "pending_approval")
+        self.run_branch(branch)
+
+
+class PairCaratTests(SideBranchTests):
+    """The owner, 9 Sep: a pair's carat is each stone or the total; the price sheet counts two stones when it is each."""
+
+    def _emerald_profile(self, ws: Path) -> None:
+        self._profile_with_rates(ws)
+        profile_path = ws / "estimate-desk" / "shop-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
+        profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+    def test_a_bare_carat_on_earrings_is_asked_and_each_prices_two_stones(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._emerald_profile(ws)
+            world.spec = {"piece_type": "stud earrings", "metal": "white gold", "metal_karat": "18k", "metal_color": "white",
+                          "stone_type": "emerald", "stone_origin": "lab-grown", "stone_carat": 2.5, "stone_shape": "round",
+                          "setting_style": "halo", "center_stone": "yes"}
+            world.customer_message("pc1", "thread-pair", "Earrings like these but with a round emerald in the center. These earrings are 2.50ct rounds. "
+                                   "18k white gold, lab grown please.\n\nAnthony", subject="Earring for my mom")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["missing_required_fields"], ["confirm.stone_carat_basis"])
+            self.assertIn("each stone, or the total", world.sent[0]["body"])
+            # "Each": the sheet prices two stones.
+            world.spec = {**world.spec, "stone_carat_basis": "each"}
+            world.customer_message("pc2", "thread-pair", "2.5 ct each.\n\nAnthony", subject="Re: Earring for my mom")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            title = world.cards[-1]["title"]
+            self.assertIn("5ct", title.replace(" ", ""))
+            self.assertIn("2.5 ct each stone", title)
         self.run_branch(branch)
 
 

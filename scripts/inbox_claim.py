@@ -467,8 +467,13 @@ def reopen(
     lease_seconds: int,
     allow_manual_review: bool = False,
     now: datetime | None = None,
+    allow_processed: bool = False,
 ) -> dict[str, Any]:
     """Return a parked (awaiting_owner) claim to processing under a new token.
+
+    `allow_processed` reopens a finished claim on purpose: the owner changed a
+    fact after passing on the price card, and the tick re-prices the same
+    message (9 September 2026).
 
     The owner has answered, so the inquiry resumes from where it stopped: the
     phase journal is kept, the claim gets a fresh token and a worker lease, and
@@ -483,6 +488,8 @@ def reopen(
     with state_lock(path):
         state = read_state(path)
         allowed = {"awaiting_owner", "manual_review"} if allow_manual_review else {"awaiting_owner"}
+        if allow_processed:
+            allowed = allowed | {"processed"}
         if state.get("status") not in allowed:
             raise ValueError(f"claim is {state.get('status')}, not awaiting_owner; nothing to reopen")
         state["status"] = "processing"

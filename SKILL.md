@@ -267,6 +267,10 @@ python3 {baseDir}/scripts/sheet_mirror.py setup --workspace '<absolute-workspace
 Add `--url '<the owner's sheet URL>'` to use a sheet they already have. The
 sheet's URL lands in the profile and readiness reports it.
 
+For a pair (earrings, cufflinks), a stated carat is each stone's or the pair's
+total: the customer's words settle it, otherwise the desk asks; "each" prices
+two stones.
+
 A rendering starts from the customer's example photo when they sent one and
 names the piece, each stone's colour, and the metal first; the checker asks
 about each of those by name.

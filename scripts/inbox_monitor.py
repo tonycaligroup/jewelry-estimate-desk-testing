@@ -1100,9 +1100,10 @@ def reopen_item(
     message_id: str,
     claim_root: Path,
     lease_seconds: int,
+    allow_processed: bool = False,
 ) -> dict[str, Any]:
     """Resume a parked claim: processing again, leased to the worker about to start."""
-    state = inbox_claim.reopen(claim_root, message_id, lease_seconds)
+    state = inbox_claim.reopen(claim_root, message_id, lease_seconds, allow_processed=allow_processed)
     queue_item = sync_claim(root, message_id, {"acquired": True, **state})
     return {
         "queue_item": queue_item,
