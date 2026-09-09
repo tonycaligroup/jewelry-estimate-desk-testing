@@ -7074,6 +7074,19 @@ class SchedulingWordsTests(unittest.TestCase):
         self.assertEqual(spec["scheduling_intent"], "Any chance we can do Friday at 4pm?")
         self.assertTrue(estimate_record.asks_to_reschedule(self.DAVID))
 
+    def test_a_reply_keeps_a_meeting_only_on_its_own_words(self) -> None:
+        record = {"specification": {"scheduling_intent": "could I come by to talk it through?"}}
+        carried = {"piece_type": "earrings", "scheduling_intent": "he would like to come by and talk it through"}
+        dropped = estimate_record.drop_carried_scheduling_intent(carried, record, "Before I come in, is there any way I can get a ballpark estimate for this?")
+        self.assertNotIn("scheduling_intent", dropped)
+        for words in ("The second one works for me.", "Wednesday is fine.", "2pm works.", "Could I come by Friday?", "I'd like to come in sometime next week.",
+                      "Can we do Friday at 4pm?", "See you then!"):
+            with self.subTest(words=words):
+                self.assertIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, record, words), words)
+        for words in ("Before I come in, can I get a ballpark?", "Does it come in rose gold?", "What would 14k run me?"):
+            with self.subTest(words=words):
+                self.assertNotIn("scheduling_intent", estimate_record.drop_carried_scheduling_intent(carried, record, words), words)
+
     def test_deadlines_products_and_the_website_are_not_meetings(self) -> None:
         for text in ("Does it come in rose gold?", "Can you have it ready by Friday at 5pm?", "I visited your website. Could you do a 1 ct stone?",
                      "Could you ship it by Tuesday?", "Can I pick it up Friday at 4pm?", "I want a 2 ct stone, whatever you think works."):

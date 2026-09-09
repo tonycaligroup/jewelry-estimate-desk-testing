@@ -1720,7 +1720,9 @@ _TIME = r"\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)|noon|(?:in the )?(?:morning|af
 MEETING_RE = re.compile(
     r"(?i)\b(?:reschedul\w*|appointment|(?:our|the|a|that|my) meeting|in person|stop by|drop by|swing by|"
     r"come (?:in|by|over)(?: to)? (?:the|your) (?:shop|store)|come (?:in|by|over)\b[^.?!\n]{0,20}\b(?:" + _DAY + r")|"
-    r"meet (?:you|up|with you|in person)|(?:can|could|shall|should) we meet\b|meet\b[^.?!\n]{0,25}\b(?:" + _DAY + r"))\b"
+    r"meet (?:you|up|with you|in person)|(?:can|could|shall|should) we meet\b|meet\b[^.?!\n]{0,25}\b(?:" + _DAY + r")|"
+    r"(?:can|could|may) (?:i|we) (?:come|stop|drop|swing) (?:in|by|over)|(?:would|'d|i'd|we'd) (?:like|love) to (?:come|stop|drop|swing) (?:in|by|over)|"
+    r"(?:want|happy|glad) to (?:come|stop|drop|swing) (?:in|by|over))\b"
 )
 # A day and a time proposed as a question: "any chance we can do Friday at 4pm?".
 PROPOSAL_RE = re.compile(
@@ -1736,6 +1738,21 @@ RESCHEDULE_RE = re.compile(
     r"(?i)\b(?:reschedul\w*|something came up|can(?:no|')t make|(?:move|push|change) (?:it|our|the|my|that)\b|"
     r"(?:a )?different (?:day|time)|another (?:day|time)|instead)\b"
 )
+# Picking or accepting a time the shop offered: "the second one works", "Wednesday is fine", "2pm works".
+ACCEPTS_TIME_RE = re.compile(
+    r"(?i)\b(?:the (?:first|second|third|last|earlier|later) (?:one|time|slot)|either (?:one|works|is fine)|any of (?:those|them)|"
+    r"that (?:time|one|slot) (?:works|is fine|is good)|(?:works|is fine|is good|is perfect|sounds good|sounds great|sounds perfect) for (?:me|us)|"
+    r"see you (?:then|there|on|at)|book (?:it|me|that)|(?:let'?s|lets) do (?:it|that|the)|i'?ll (?:take|be there|come (?:then|at|on))|"
+    r"(?:" + _DAY + r")\b[^.?!\n]{0,30}\b(?:works|is fine|is good|is perfect|would be (?:great|fine|good|perfect))|"
+    r"(?:" + _TIME + r")\b[^.?!\n]{0,20}\b(?:works|is fine|is good|is perfect))\b"
+)
+
+
+def accepts_a_time(own_words: str) -> bool:
+    """The customer picks or accepts an offered time, in their own words."""
+    return bool(ACCEPTS_TIME_RE.search(str(own_words or "")))
+
+
 _SENTENCE_RE = re.compile(r"(?<=[.?!])\s+|\n+")
 
 
@@ -1776,18 +1793,19 @@ def settle_scheduling_intent(specification: dict[str, Any], own_words: str) -> d
 def drop_carried_scheduling_intent(specification: dict[str, Any], record: dict[str, Any], own_words: str) -> dict[str, Any]:
     """A meeting asked for in an earlier email is not asked for again by a reply about something else.
 
-    Live (8 September 2026): the desk offered times; the customer replied
-    "Before I come in, is there any way I can get a ballpark estimate?" and
-    the desk offered times again. The reading merges the thread, so the first
-    email's request rode along. A reply keeps a scheduling intent only when it
-    differs from the one already on the record (the reading found it in the
-    new words) or the new words themselves ask for a meeting.
+    Live (8 September 2026, twice): the desk offered times; the customer
+    replied "Before I come in, is there any way I can get a ballpark
+    estimate?" and the desk offered times again. The reading merges the
+    thread, so the first email's request rode along, re-worded. A reply keeps
+    a scheduling intent only when its own words ask for a meeting, propose a
+    day and time, or pick or accept an offered time.
     """
     if not isinstance(specification, dict) or not present_value(specification.get("scheduling_intent")):
         return specification
-    prior = ((record or {}).get("specification") or {}).get("scheduling_intent")
-    if specification["scheduling_intent"] != prior or scheduling_sentences(own_words):
+    if scheduling_sentences(own_words) or accepts_a_time(own_words):
         return specification
+    # The reading of the thread can re-word the earlier request, so its text is
+    # never compared: on a reply, only the reply's own words carry a meeting.
     return {k: v for k, v in specification.items() if k != "scheduling_intent"}
 
 

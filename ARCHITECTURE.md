@@ -403,9 +403,12 @@ can get a ballpark estimate?" produced a second offer card. The reading
 merges the thread, so the first email's `scheduling_intent` came back on
 the reply and `pipeline.process_claim` took the meeting-first branch again.
 `estimate_record.drop_carried_scheduling_intent` removes a reply's
-scheduling intent when it equals the one already on the record and the
-reply's own words do not ask for a meeting; a differing intent (the reading
-found it in the new words) or a proposed time keeps the appointment path.
+scheduling intent unless the reply's own words ask for a meeting
+(`scheduling_sentences`), propose a day and time, or pick or accept an
+offered time (`accepts_a_time`: "the second one works", "Wednesday is
+fine"). The first version compared the intent's text to the record's and
+kept a differing one; live the reading re-worded the carried request and
+#71 offered times again, so the text is never compared now.
 Golden `BallparkBeforeTheVisitTests`; fixture
 `2026-09-08-ballpark-before-the-visit.json` (verbatim).
 

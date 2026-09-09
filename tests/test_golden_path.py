@@ -2289,8 +2289,9 @@ class BallparkBeforeTheVisitTests(SideBranchTests):
             self.execute(ws, world, offer["payload"]["execute"], offer)
             self.assertEqual(len(world.sent), 1)
             cards_before = len(world.cards)
-            # The reading merges the thread, so the same scheduling words come back; the reply asks for a price.
-            world.customer_message("k2", thread, "Thank you Tony,\n\nBefore I come in, is there any way I can get a ballpark estimate?\n\nDavid",
+            # The reading merges the thread, so the scheduling words come back, re-worded; the reply asks for a price.
+            world.spec["scheduling_intent"] = "he would like to come by and talk it through"
+            world.customer_message("k2", thread, "Thank you Tony,\n\nBefore I come in, is there any way I can get a ballpark estimate for this?\n\nDavid",
                                    subject="Re: Looking for something similar")
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
@@ -2299,9 +2300,9 @@ class BallparkBeforeTheVisitTests(SideBranchTests):
             self.assertRegex(world.sent[1]["body"], r"(?i)metal")
             # He picks one of the offered times later: that is a meeting again.
             pick = offer["payload"]["calendar_availability"][1]
-            world.spec["scheduling_intent"] = f"{pick['label']} works"
+            world.spec["scheduling_intent"] = "he would like to come by and talk it through"  # still the merged reading
             world.requested = ([pick["label"]], [pick["start"][:16]])
-            world.customer_message("k3", thread, f"{pick['label']} works for me, we can go over the rest then.\n\nDavid",
+            world.customer_message("k3", thread, "The second one works for me, we can go over the rest then.\n\nDavid",
                                    subject="Re: Looking for something similar")
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)

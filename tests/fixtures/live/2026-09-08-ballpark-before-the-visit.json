@@ -1,5 +1,5 @@
 {
-  "defect": "the desk offered times for a pair of emerald earrings; the customer replied 'Before I come in, is there any way I can get a ballpark estimate?' and the desk offered times again (card #69) instead of asking for the details an estimate needs; the first email's meeting request rode along on the reading of the thread",
+  "defect": "the desk offered times for a pair of emerald earrings; the customer replied 'Before I come in, is there any way I can get a ballpark estimate?' and the desk offered times again (card #69) instead of asking for the details an estimate needs; the first email's meeting request rode along on the reading of the thread. Seen again on 4.14.4's first fix (#71): the reading re-words the carried request, so comparing its text to the record's was no protection",
   "seen_on": "4.14.2",
   "fixed_in": "4.14.4",
   "text_is": "verbatim",
@@ -28,13 +28,13 @@
     {
       "customer": {
         "id": "k2",
-        "text": "Thank you Tony,\n\nBefore I come in, is there any way I can get a ballpark estimate?"
+        "text": "Thank you Tony,\n\nBefore I come in, is there any way I can get a ballpark estimate for this?"
       },
       "spec": {
         "piece_type": "earrings",
         "stone_type": "emerald",
         "stone_carat": 1.5,
-        "scheduling_intent": "Could I come by to talk it through?"
+        "scheduling_intent": "he would like to come by and talk it through"
       },
       "expect": {
         "outcomes": [
