@@ -43,6 +43,25 @@ _OWN_STONE_WORDS = estimate_record.SUPPLIED_STONE_WORDS
 _QUOTE_START_RE = re.compile(r"^\s*(on .{0,200}wrote:|-{2,}\s*original message\s*-{2,}|from:\s.*)$", re.I)
 
 
+def strip_shop_lines(text: str, shop_bodies: list[str]) -> str:
+    """The customer's words with any line that is one of the shop's own earlier lines removed.
+
+    A reply pasted on a phone often carries the shop's email underneath with
+    no ">" and no "On ... wrote:" line; the shop's "stop by the shop" then
+    read as the customer asking to meet (simulation, 9 September 2026).
+    """
+    known: set[str] = set()
+    for body in shop_bodies or []:
+        for line in str(body or "").splitlines():
+            key = " ".join(line.split()).lower()
+            if len(key) >= 20:
+                known.add(key)
+    if not known:
+        return text
+    kept = [line for line in str(text or "").splitlines() if " ".join(line.split()).lower() not in known]
+    return "\n".join(kept)
+
+
 def own_words(body: str) -> str:
     """The customer's own lines: nothing quoted from an earlier email counts."""
     kept: list[str] = []

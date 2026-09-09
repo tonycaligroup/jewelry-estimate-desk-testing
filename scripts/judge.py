@@ -43,7 +43,7 @@ TRIAGE_KINDS = {
     "personal_or_internal", "unrelated", "not_an_estimate_request", "escalation", "inventory_request",
 }
 ASSESSMENTS = {"unchanged", "changed", "uncertain"}
-INTENTS = {"estimate_acceptance", "rendering_request", "appointment_request"}
+INTENTS = {"estimate_acceptance", "rendering_request", "appointment_request", "cancellation"}
 
 
 class JudgmentError(RuntimeError):
@@ -524,7 +524,7 @@ def classify_reply(
         "clearly alters a field of it (then list those field keys in changed_fields); \"uncertain\" if it might "
         "alter the design, asks for a second or different piece, or cannot be mapped confidently.\n"
         "intents: every explicit intent, chosen only from estimate_acceptance (they accept or say go ahead), "
-        "rendering_request (they ask to see a picture, drawing, or rendering), appointment_request (they ask to meet, or to move or reschedule a meeting, or propose a day and time, "
+        "rendering_request (they ask to see a picture, drawing, or rendering), cancellation (they cancel a meeting they had, or say they no longer want the piece), appointment_request (they ask to meet, or to move or reschedule a meeting, or propose a day and time, "
         "call, or come in). Clear rendering or appointment wording is not uncertain merely because both appear. "
         "changed_fields is an empty list unless the assessment is changed.\n"
         "If the message is price pushback, a discount request, anger, or any escalation, answer "

@@ -115,6 +115,7 @@ def thread_digest(
             "from": sender,
             "sent_by": "shop" if shop and _address(sender) == shop else "customer",
             "date": header(message, "Date"),
+            "internal_ms": _internal_date(message),
             "subject": header(message, "Subject"),
             "claimed": message.get("id") == claimed_id,
             "body": body_text(message),

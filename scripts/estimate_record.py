@@ -27,6 +27,7 @@ POST_ESTIMATE_INTENTS = {
     "estimate_acceptance",
     "rendering_request",
     "appointment_request",
+    "cancellation",
 }
 
 
@@ -399,7 +400,46 @@ def record_followup_sent(
         return record
 
 
-def followup_stalled(record: dict[str, Any], source_message_id: str, missing: list[str]) -> list[str]:
+def last_ask(record: dict[str, Any]) -> tuple[set[str], str]:
+    """The fields the desk last asked the customer for, and when that email went (ISO), or (set(), "")."""
+    revision = int(record.get("revision") or 0)
+    reviews = [r for r in record.get("thread_reviews", []) if isinstance(r, dict) and r.get("outcome") == "awaiting_specs"
+               and isinstance(r.get("missing_required_fields"), list) and int(r.get("revision") or 0) >= revision]
+    sent = [record.get("spec_gate_reply")] + [item for item in record.get("followup_replies") or [] if isinstance(item, dict)]
+    stamps = [str(item.get("sent_at") or "") for item in sent if isinstance(item, dict) and item.get("status") == "sent"]
+    if not reviews or not stamps:
+        return set(), ""
+    return {str(f) for f in reviews[-1]["missing_required_fields"]}, max(stamps)
+
+
+def predates_last_ask(record: dict[str, Any], message_date: str | int | None) -> bool:
+    """True when the message was sent before the desk's last question went out (two emails before the first tick).
+
+    `message_date` is Gmail's internalDate in milliseconds when known, else the Date header.
+    """
+    _fields, sent_at = last_ask(record)
+    if not sent_at or not message_date:
+        return False
+    try:
+        from email.utils import parsedate_to_datetime
+
+        if isinstance(message_date, (int, float)) or str(message_date).isdigit():
+            when = datetime.fromtimestamp(int(message_date) / 1000.0, tz=timezone.utc)
+        elif str(message_date)[:4].isdigit():
+            when = datetime.fromisoformat(str(message_date).replace("Z", "+00:00"))
+        else:
+            when = parsedate_to_datetime(str(message_date))
+        sent = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    if sent.tzinfo is None:
+        sent = sent.replace(tzinfo=timezone.utc)
+    return when < sent
+
+
+def followup_stalled(record: dict[str, Any], source_message_id: str, missing: list[str], predates_ask: bool = False) -> list[str]:
     """The fields an earlier follow-up already asked for that this reply still leaves open.
 
     Empty when this is the first ask or the customer gave something new. The
@@ -407,6 +447,8 @@ def followup_stalled(record: dict[str, Any], source_message_id: str, missing: li
     """
     if not missing or record.get("status") != "awaiting_specs":
         return []
+    if predates_ask:
+        return []  # written before the question went out: not a non-answer
     source_hash = sha256_text(source_message_id)
     revision = int(record.get("revision") or 0)
     earlier_reviews = [
@@ -1072,6 +1114,25 @@ def _require_aware_timestamp(value: Any, field: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"{field} must include a timezone")
     return parsed
+
+
+def record_appointment_cancelled(root: Path, estimate_id: str, source_message_id: str, note: str = "") -> dict[str, Any]:
+    """The customer cancelled the booked meeting: the booking moves to history and the status steps back to estimate_sent."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        booked = record.get("appointment_booked")
+        if not isinstance(booked, dict):
+            return record
+        cancelled = record.setdefault("appointments_cancelled", [])
+        if isinstance(cancelled, list):
+            cancelled.append({**booked, "cancelled_by_sha256": sha256_text(source_message_id), "note": str(note or "")[:200],
+                              "cancelled_at": datetime.now(timezone.utc).isoformat()})
+        record.pop("appointment_booked", None)
+        if record.get("status") == "appointment_booked":
+            record["status"] = "estimate_sent"
+        write_object(path, record)
+        return record
 
 
 def record_appointment_booked(
@@ -2598,6 +2659,11 @@ def require_processed_evidence(
     ):
         raise ValueError("record specification changed after full-thread review")
     outcome = matching_review.get("outcome")
+    if outcome == "post_estimate_continuation":
+        # A reply after the estimate that needs no card (thanks, an acceptance, a cancellation): the
+        # review recorded the decision and its intents, and that is the durable outcome (simulation,
+        # 9 September 2026: such claims failed here and retried until they stuck).
+        return
     if outcome == "awaiting_specs":
         if record["status"] != "awaiting_specs":
             raise ValueError("thread review outcome does not match estimate status")

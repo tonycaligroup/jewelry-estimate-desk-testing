@@ -227,6 +227,50 @@ def _find(text: str, words: str) -> str | None:
     return None
 
 
+_PIECE_WORD_STOP = {"the", "a", "an", "and", "of", "with", "for", "my", "her", "his", "custom", "gold", "matching"}
+
+
+def _piece_words(piece: dict[str, Any]) -> list[str]:
+    words = re.findall(r"[a-z]+", str(piece.get("piece_type") or "").lower())
+    return [w for w in words if w not in _PIECE_WORD_STOP and len(w) > 2]
+
+
+def _near_piece(value: Any, own_words: str, pieces: list[Any], index: int) -> bool | None:
+    """True when the value sits within a few words of its own piece's name, False when only near another piece's, None when unclear."""
+    text = _value_text(value).lower()
+    haystack = " " + re.sub(r"\s+", " ", str(own_words or "").lower()) + " "
+    if not text:
+        return None
+    mine = _piece_words(pieces[index]) if isinstance(pieces[index], dict) else []
+    theirs = [w for i, p in enumerate(pieces) if i != index and isinstance(p, dict) for w in _piece_words(p) if w not in mine]
+    tokens = [t for t in re.findall(r"[a-z0-9.]+", text) if t not in _STOP] or [text]
+    positions = [m.start() for t in tokens for m in re.finditer(re.escape(t), haystack)]
+    if not positions:
+        return None
+    def nearest(words: list[str]) -> int | None:
+        distances = [abs(m.start() - pos) for w in words for m in re.finditer(r"\b" + re.escape(w) + r"s?\b", haystack) for pos in positions]
+        return min(distances) if distances else None
+
+    # The clause the value sits in decides first: "14k for the band, 18k for the ring" names each piece beside its value.
+    for clause in re.split(r"[,.;:!?]|\b(?:but|and|while|whereas)\b", haystack):
+        if not any(re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![0-9])", clause) for t in tokens):
+            continue
+        has_mine = any(re.search(r"\b" + re.escape(w) + r"s?\b", clause) for w in mine)
+        has_theirs = any(re.search(r"\b" + re.escape(w) + r"s?\b", clause) for w in theirs)
+        if has_mine and not has_theirs:
+            return True
+        if has_theirs and not has_mine:
+            return False
+    own, other = nearest(mine) if mine else None, nearest(theirs) if theirs else None
+    if own is None and other is None:
+        return None
+    if other is None:
+        return own <= 60
+    if own is None:
+        return False if other <= 60 else None
+    return own <= other  # the value belongs to the piece named closest to it
+
+
 def absorb(desk: Path, estimate_id: str, spec: dict[str, Any], message_id: str | None, own_words: str,
            photo_text: str = "", default_source: str = "reading", changeable: set[str] | None = None) -> list[dict[str, Any]]:
     """Record a reading as rows, each with the source its value supports; a customer row is never overwritten by less.
@@ -238,8 +282,17 @@ def absorb(desk: Path, estimate_id: str, spec: dict[str, Any], message_id: str |
     if not isinstance(spec, dict):
         return []
     standing = winning(desk, estimate_id)
+    open_now = set(open_asks(desk, estimate_id))
     added: list[dict[str, Any]] = []
     now = _now()
+    # Values the same field carries on other pieces: a word found in the message may belong to another piece.
+    per_field: dict[str, set[str]] = {}
+    raw_pieces = spec.get("pieces") if isinstance(spec.get("pieces"), list) else []
+    for piece in raw_pieces:
+        if isinstance(piece, dict):
+            for field, value in piece.items():
+                if _present(value):
+                    per_field.setdefault(field, set()).add(_value_text(value).lower())
 
     def consider(field: str, value: Any, piece: int | None) -> None:
         if field in LOOSE_KEYS or not _present(value):
@@ -248,18 +301,31 @@ def absorb(desk: Path, estimate_id: str, spec: dict[str, Any], message_id: str |
         if current is not None and current["value"] == value:
             return
         source, span = source_of(value, own_words, photo_text)
+        if source == "customer" and piece is not None and len(per_field.get(field, set())) > 1:
+            # Several pieces carry this field: the value is the customer's for this piece only when it sits near
+            # this piece's own word ("14k for the band"); near another piece's word only, it is a reading.
+            near = _near_piece(value, own_words, raw_pieces, piece)
+            if near is False:
+                source, span = "reading", None
         if source == "reading":
             source = default_source
-        if current is not None and current["source"] == "quoted" and source == "customer":
-            if not changeable or (ANY_FIELD not in changeable and field not in changeable):
+        allowed_change = bool(changeable) and (ANY_FIELD in changeable or field in changeable)
+        if current is not None and current["source"] == "quoted":
+            if not allowed_change:
                 return  # a quoted fact moves only for a change the customer named
-            source = "customer"
+            if source not in ("customer", "jeweler", "owner"):
+                return  # and only to what the customer said or left to the jeweler
+            source = "customer" if source == "customer" else source
+            if source == "jeweler":
+                source = "quoted"  # the released grade stands at the quoted rank, newest wins
+                value = value
         elif current is not None and RANK[current["source"]] > RANK[source]:
             return  # a lesser source never replaces what stands
         if current is not None and current["source"] == "customer" and source == "customer" and span is None:
             return
         row = {"field": field, "piece": piece, "stone": stone_of(field), "value": value, "source": source,
-               "gmail_message_id": message_id, "span": span, "at": now}
+               "gmail_message_id": message_id, "span": span, "at": now,
+               "answered_in": message_id if (field in open_now and source in ("customer", "jeweler", "owner")) else None}
         added.append(row)
 
     for field, value in spec.items():
@@ -321,7 +387,8 @@ def migrate(desk: Path, record: dict[str, Any]) -> int:
         count += quote(desk, estimate_id, archived, message_id)
     spec = record.get("specification") if isinstance(record.get("specification"), dict) else {}
     if spec:
-        count += len(absorb(desk, estimate_id, spec, message_id, "", "", default_source="reading"))
+        # The record's standing specification was reviewed and priced: it outranks the archived quote where they differ.
+        count += quote(desk, estimate_id, spec, message_id)
     return count
 
 
@@ -359,13 +426,16 @@ def mark_asked(desk: Path, estimate_id: str, fields: Iterable[str], message_id: 
 
 
 def open_asks(desk: Path, estimate_id: str) -> list[str]:
-    """Fields the desk asked for that no later row answered."""
+    """Fields the desk asked for that the customer (or the jeweler, or the owner) has not answered since."""
     asked: dict[str, str] = {}
     answered: set[str] = set()
     for row in rows(desk, estimate_id):
         if row.get("asked_in") and row.get("value") is None:
             asked[row["field"]] = row["asked_in"]
-        elif row.get("value") is not None and row["field"] in asked and row.get("at", "") >= "":
+            answered.discard(row["field"])
+        elif row.get("value") is not None and row["field"] in asked and (
+            row.get("answered_in") or row.get("source") in ("customer", "jeweler", "owner", "quoted")
+        ):
             answered.add(row["field"])
     return sorted(f for f in asked if f not in answered)
 

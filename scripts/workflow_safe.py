@@ -1117,7 +1117,8 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
     messages = thread.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ValueError("fetched Gmail thread has no messages")
-    decision = route_ownership.decide(route, candidates, args.claim_root, len(messages))
+    shop_seen = any(gmail_text._address(gmail_text.header(m, "From")) == mailbox.strip().lower() for m in messages if isinstance(m, dict))
+    decision = route_ownership.decide(route, candidates, args.claim_root, len(messages), shop_seen=shop_seen)
     result.update({
         "decision": decision["decision"],
         "reason_code": decision.get("reason_code"),
@@ -3073,6 +3074,34 @@ def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
             "intents": intents,
             "next_action": "manual_review",
         }
+    runner = getattr(args, "runner", subprocess.run)
+    who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "")) or "the customer"
+    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their piece"
+    if "cancellation" in intents:
+        # The customer cancelled: the booked time comes off the calendar and the owner hears it in one sentence.
+        # Nothing goes to the customer from the desk; the reply is the owner's.
+        booked = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else None
+        released = ""
+        if booked and booked.get("calendar_event_id"):
+            try:
+                profile = read_object(args.shop_profile) if getattr(args, "shop_profile", None) else {}
+                calendar_id = (profile.get("scheduling") or {}).get("calendar") or "primary"
+                kwargs = {"opener": args.opener} if getattr(args, "opener", None) else {}
+                calendar_query.delete_event(calendar_id, str(booked["calendar_event_id"]), gateway_token.load_token(), **kwargs)
+                record = estimate_record.record_appointment_cancelled(args.record_root, args.estimate_id, args.message_id, "customer cancelled")
+                released = f" Their meeting on {str(booked.get('confirmed_start') or '')[:16].replace('T', ' ')} is off the calendar."
+            except Exception as exc:  # noqa: BLE001 - the owner still hears about it, with the calendar left for them
+                released = f" I could not release the calendar time ({str(exc)[:80]}); please remove it yourself."
+        try:
+            kolo_safe.tell_owner(args.monitor_root, f"{who} cancelled ({piece}).{released} Nothing was sent to them; the reply is yours.", runner)
+        except Exception:  # noqa: BLE001
+            pass
+        intents = [i for i in intents if i != "cancellation"]
+    if "estimate_acceptance" in intents:
+        try:
+            kolo_safe.tell_owner(args.monitor_root, f"{who} accepted the estimate for {piece}. Nothing more for the desk to send; the next step is yours.", runner)
+        except Exception:  # noqa: BLE001
+            pass
     actionable = set(intents) & {"rendering_request", "appointment_request"}
     if not actionable:
         finish_processed(

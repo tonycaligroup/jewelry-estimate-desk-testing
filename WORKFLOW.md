@@ -453,6 +453,20 @@ closed by follow-up changes:
   earrings" is never drops), and when the customer sent an example piece
   the render is that photograph changed only as specified, not a logo to
   reproduce (6.6).
+- Built 9 September 2026 (unpublished, after 4.15.0), from two simulation
+  runs of the desk against the fake world: a reply after the estimate that
+  needs no card (thanks, an acceptance, a cancellation) now completes its
+  claim instead of retrying until it stuck; an acceptance and a cancellation
+  each tell the owner in one sentence, and a cancellation takes the booked
+  time off the calendar with nothing sent to the customer; a customer who
+  writes twice before the first tick is one inquiry, and a message written
+  before the desk's question went out is never a non-answer; the shop's own
+  lines pasted under a reply are not the customer's words; a reading that
+  called an order "inventory" is rescued like the other kinds; a stated
+  fact is attributed to the piece its clause names ("14k for the band");
+  a quoted grade the customer releases to the jeweler moves; a boolean
+  "no center stone" renders as one; notes never pick a render archetype;
+  the sheet is written in one batch so it is never half new (6.6, 6.10).
 - Built 9 September 2026 (4.15.0): the estimate ledger. Every
   fact the desk holds carries its source (the customer's own words with the
   span, the photo, the jeweler's choice, the owner, a quoted estimate, or a

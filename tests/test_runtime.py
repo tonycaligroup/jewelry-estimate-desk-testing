@@ -7062,7 +7062,9 @@ class SheetMirrorTests(unittest.TestCase):
             self.assertEqual(result["rows"]["This week"], 1)
             self.assertEqual(result["rows"]["Price cards"], 1)
             self.assertGreaterEqual(result["rows"]["Facts"], 4)
-            puts = {c[2]["range"]: c[2]["values"] for c in gateway.calls if c[0] == "PUT"}
+            batch = next(c[2] for c in gateway.calls if c[0] == "POST" and c[1].endswith("values:batchUpdate"))
+            puts = {d["range"].replace("!A1", "!A:Z"): d["values"] for d in batch["data"]}
+            self.assertTrue(any(c[0] == "POST" and c[1].endswith("values:batchClear") for c in gateway.calls), "leftover rows are cleared")
             customers = puts["'Customers'!A:Z"]
             self.assertEqual(customers[0], sheet_mirror.HEADERS["Customers"])
             self.assertEqual(customers[1][0], "Michael Park")

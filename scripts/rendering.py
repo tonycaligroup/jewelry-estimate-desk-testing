@@ -151,7 +151,8 @@ def archetype_for(specification: dict[str, Any]) -> str | None:
     """An archetype the piece's own words settle ("stud earrings" is never drops); None leaves it to the planner."""
     if not isinstance(specification, dict):
         return None
-    words = " ".join(str(specification.get(k) or "") for k in ("piece_type", "setting_style", "notes")).lower()
+    # The piece's name and setting only: notes are prose ("not hoops, please") and never settle an archetype.
+    words = " ".join(str(specification.get(k) or "") for k in ("piece_type", "setting_style")).lower()
     known = archetypes()
     for word, archetype in ARCHETYPE_WORDS:
         if word in words and archetype in known:
@@ -174,7 +175,9 @@ def exact_facts(specification: dict[str, Any] | str) -> list[str]:
     if piece:
         facts.append(f"the piece is {piece}")
     stone = str(spec.get("stone_type") or "").strip().lower()
-    if stone and str(spec.get("center_stone") or "").lower() not in ("no", "none", "false"):
+    center_raw = spec.get("center_stone")
+    has_center = not (center_raw is False or str(center_raw if center_raw is not None else "").strip().lower() in ("no", "none", "false"))
+    if stone and has_center:
         colour = str(spec.get("stone_color") or "").strip()
         colour_words = colour if colour and colour.lower() != "jeweler's choice" and len(colour) > 2 else STONE_COLOR_WORDS.get(stone, "")
         shape = str(spec.get("stone_shape") or spec.get("stone_cut") or "").strip()

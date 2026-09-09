@@ -63,6 +63,7 @@ def decide(
     records: Any,
     claim_root: Path,
     thread_message_count: int | None = None,
+    shop_seen: bool | None = None,
 ) -> dict[str, str]:
     if not isinstance(route, dict):
         raise ValueError("route must be a JSON object")
@@ -103,6 +104,10 @@ def decide(
             }
         if thread_message_count == 1:
             return {"decision": "new_inquiry", "reason_code": "first_thread_message"}
+        if thread_message_count is not None and shop_seen is False:
+            # A customer who wrote twice before the first tick: every message is theirs and none is the
+            # shop's, so this is their first contact, not a conversation the desk never started.
+            return {"decision": "new_inquiry", "reason_code": "first_contact_in_several_messages"}
         if thread_message_count is not None:
             return {
                 "decision": "manual_review",

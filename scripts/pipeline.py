@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 import estimate_record
 import gmail_text
+import inbox_claim
 import inbox_monitor
 import judge
 import ledger
@@ -757,15 +758,16 @@ def process_claim(
     # customer asking "what does this have to do with it?" is not junk mail.
     known = estimate_record.known_specification(record)
     photos = example_photos(p, message_id, paths, openclaw or judge.default_openclaw(), command_runner, initiating)
-    handled_words = " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
-                             if m.get("sent_by") == "customer" and m.get("claimed"))
+    shop_bodies = [str(m.get("body") or "") for m in digest.get("messages") or [] if m.get("sent_by") == "shop"]
+    handled_words = " ".join(reading_check.strip_shop_lines(reading_check.own_words(str(m.get("body") or "")), shop_bodies)
+                             for m in digest.get("messages") or [] if m.get("sent_by") == "customer" and m.get("claimed"))
     judged = judge.triage_and_extract(digest, model, judge_runner, openclaw, known=known, photos=photos) if initiating else None
     reread = False
     if judged and judged["kind"] != "estimate_request":
         if (Path(paths["work_dir"]) / workflow_safe.OWNER_SAYS_ESTIMATE_FILE).exists():
             judged, reread = {**judged, "kind": "estimate_request", "note": "the owner said to quote it"}, True
-        elif judged["kind"] in ("not_an_estimate_request", "not_a_quote_request") and not estimate_record.asks_for_inventory(handled_words) \
-                and estimate_record.reads_like_an_order(handled_words):
+        elif judged["kind"] in ("not_an_estimate_request", "not_a_quote_request", "inventory_request") \
+                and not estimate_record.asks_for_inventory(handled_words) and estimate_record.reads_like_an_order(handled_words):
             # "Do you have a 14k WG lab tennis bracelet, 7-inch, ready to ship?" names a piece and its facts:
             # a shop that makes to order quotes it, whatever the reading called it.
             judged, reread = {**judged, "kind": "estimate_request", "note": "reads like an order: quoted as a custom piece"}, True
@@ -852,7 +854,20 @@ def process_claim(
             ))
             return {"outcome": "appointment_approval_requested", "before_estimate": True,
                     "asks": list(intent.get("ask_for") or []), "next": "done"}
-        repeated = estimate_record.followup_stalled(record, message_id, reviewed["missing_required_fields"])
+        # A shop email later in the thread than this message means the desk's question went out after the
+        # customer wrote (a second email before the first tick): the thread's order says so in the fake and live.
+        messages = digest.get("messages") or []
+        claimed_at = next((i for i, m in enumerate(messages) if m.get("claimed")), None)
+        predates = claimed_at is not None and any(m.get("sent_by") == "shop" for m in messages[claimed_at + 1:])
+        if not reviewed["initiating"] and predates:
+            asked_fields, _sent_at = estimate_record.last_ask(record)
+            if set(reviewed["missing_required_fields"]) <= asked_fields:
+                # Written before the desk's question went out (a second email before the first tick): its
+                # facts are on the record, the question already covers what is left, nothing more is sent.
+                token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+                kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
+                return {"outcome": "read_before_the_ask", "next": "done"}
+        repeated = estimate_record.followup_stalled(record, message_id, reviewed["missing_required_fields"], predates_ask=predates)
         if repeated and not reviewed["initiating"]:
             # The customer was already asked for exactly this and did not
             # answer it. Asking twice reads as a broken record; the owner

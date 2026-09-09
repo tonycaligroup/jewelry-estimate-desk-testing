@@ -2,3 +2,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# agent worktrees
+.claude/worktrees/

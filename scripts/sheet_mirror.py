@@ -65,7 +65,20 @@ def sheet_id_from(text: str) -> str:
     raise ValueError("give the spreadsheet's URL or its id")
 
 
-def _call(method: str, url: str, token: str, body: Any = None, opener: Opener | None = None) -> Any:
+def _call(method: str, url: str, token: str, body: Any = None, opener: Opener | None = None, tries: int = 2) -> Any:
+    """One gateway call, tried twice: a single Google hiccup must not leave half the tabs rewritten."""
+    last: OSError | None = None
+    for attempt in range(max(1, tries)):
+        try:
+            return _call_once(method, url, token, body, opener)
+        except OSError as exc:
+            last = exc
+            if "returned 4" in str(exc) and "429" not in str(exc):
+                break  # a 4xx other than rate limiting will not change on a retry
+    raise last if last else OSError("sheets call failed")
+
+
+def _call_once(method: str, url: str, token: str, body: Any = None, opener: Opener | None = None) -> Any:
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Authorization": f"Bearer {token}"}
     if data is not None:
@@ -326,16 +339,21 @@ def push(workspace: Path, token: str | None = None, opener: Opener | None = None
     digest = hashlib.sha256(json.dumps(tabs, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     if not force and state.get("digest") == digest:
         return {"pushed": False, "reason": "unchanged"}
+    written: list[str] = []
     try:
         token = token or gateway_token.load_token()
         sheet_id = str(mirror["id"])
-        for name, rows in tabs.items():
-            rng = f"'{name}'!A:Z"
-            _call("POST", f"{BASE_URL}/{sheet_id}/values/{urllib.request.quote(rng, safe='')}:clear", token, {}, opener)
-            _call("PUT", f"{BASE_URL}/{sheet_id}/values/{urllib.request.quote(rng, safe='')}?valueInputOption=RAW", token,
-                  {"range": rng, "majorDimension": "ROWS", "values": [[str(c) if c is not None else "" for c in row] for row in rows]}, opener)
+        # All four tabs in one write, so a Google hiccup never leaves the sheet half new and half old; then one
+        # clear of whatever rows lie below the new content.
+        data = [{"range": f"'{name}'!A1", "majorDimension": "ROWS",
+                 "values": [[str(c) if c is not None else "" for c in row] for row in rows]} for name, rows in tabs.items()]
+        _call("POST", f"{BASE_URL}/{sheet_id}/values:batchUpdate", token, {"valueInputOption": "RAW", "data": data}, opener)
+        written = list(tabs)
+        _call("POST", f"{BASE_URL}/{sheet_id}/values:batchClear", token,
+              {"ranges": [f"'{name}'!A{len(rows) + 1}:Z" for name, rows in tabs.items()]}, opener)
     except OSError as exc:
-        return _journal(state_path, state, {"pushed": False, "reason": str(exc)[:200]})
+        return _journal(state_path, {**state, "digest": None}, {"pushed": False, "reason": str(exc)[:200], "tabs_written": written,
+                                                                 "partial": bool(written) and len(written) < len(tabs)})
     return _journal(state_path, {**state, "digest": digest}, {"pushed": True, "rows": {k: len(v) - 1 for k, v in tabs.items()}})
 
 
