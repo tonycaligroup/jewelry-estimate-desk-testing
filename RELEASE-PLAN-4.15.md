@@ -259,7 +259,7 @@ and no question the customer cannot answer.
 2. Diamond color and clarity: ask as a preference, or jeweler's choice with
    the assumption on the card? (2.4)
 3. Whether a photo alone may set metal color without asking. (2.5)
-4. The Sheets probes (2.8): read, addSheet, and append passed on the
-   desk's pod on 9 September 2026. Still to probe before step six: creating
-   a spreadsheet (POST `/v4/spreadsheets`) through the gateway, which setup
-   relies on.
+4. The Sheets probes (2.8) all passed on the desk's pod on 9 September
+   2026: read, addSheet, append, and create (POST `/v4/spreadsheets` with
+   two tabs returned the id and URL). No platform question remains for the
+   mirror.

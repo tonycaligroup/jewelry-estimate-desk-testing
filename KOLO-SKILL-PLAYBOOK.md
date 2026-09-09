@@ -459,6 +459,7 @@ Google Sheets through `https://gateway.maton.ai/google-sheets/v4/...`:
 GET `spreadsheets/{id}?fields=...` returned 200 with the title; POST
 `spreadsheets/{id}:batchUpdate` (addSheet) and POST
 `spreadsheets/{id}/values/{tab}!A1:append?valueInputOption=RAW` both
-returned 200 and the row landed. No second credential is needed for a
-spreadsheet mirror. A placeholder id returns a Sheets "not found" 404,
+returned 200 and the row landed; POST `spreadsheets` (create, with two
+tabs) returned 200 with the id and URL. No second credential is needed for
+a spreadsheet mirror, and setup can create the sheet itself. A placeholder id returns a Sheets "not found" 404,
 which itself shows the gateway path and the scope are right.
