@@ -146,8 +146,16 @@ along.)
 
 ### 2.8 An optional spreadsheet mirror (Google Sheets first, OneDrive/Office 365 later)
 
-The mirror is optional: off unless the profile names a sheet
-(`mirror.kind` and `mirror.id`), and built as one small interface
+The mirror is optional and set up once: setup asks whether the owner
+wants a spreadsheet mirror; if yes, the desk creates a spreadsheet named
+"Jewelry Estimate Desk" in the shop's Google account (POST
+`/v4/spreadsheets` through the gateway, tabs "Estimates" and "Facts" with
+header rows) and writes its id and URL to the profile (`mirror.kind`,
+`mirror.id`, `mirror.url`); the owner may instead paste the URL of a sheet
+they already have, and the desk verifies it can read and write it before
+accepting. Readiness checks the sheet is reachable. No Drive listing is
+needed: a URL is enough, and the Drive route through the gateway is
+reported, not verified. The mirror is built as one small interface
 (`push_rows(tab, rows)`) with a Google Sheets adapter first and an
 Excel-on-OneDrive adapter later, so the desk never depends on either.
 The owner wants the ledger visible in a sheet. The desk already reaches
@@ -251,8 +259,7 @@ and no question the customer cannot answer.
 2. Diamond color and clarity: ask as a preference, or jeweler's choice with
    the assumption on the card? (2.4)
 3. Whether a photo alone may set metal color without asking. (2.5)
-4. The Sheets scope probe (2.8): read-only, run on the desk's pod against a
-   sheet the owner creates in the shop's Google account. Passing means the
-   gateway token can read sheets; a second probe appends one row to a
-   "Probe" tab to confirm writes. A scope error means the service-account
-   route or no sheet.
+4. The Sheets probes (2.8): read, addSheet, and append passed on the
+   desk's pod on 9 September 2026. Still to probe before step six: creating
+   a spreadsheet (POST `/v4/spreadsheets`) through the gateway, which setup
+   relies on.
