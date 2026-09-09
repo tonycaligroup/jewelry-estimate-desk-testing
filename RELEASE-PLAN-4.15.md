@@ -173,6 +173,32 @@ source of truth (nothing reads back; a change is a question or a card,
 so the audit trail holds); it lives in the owner's account and is shared
 with nobody by default; a Google failure never holds up an inquiry.
 
+#### What the sheet looks like
+
+Built for the counter: a customer walks in, staff open the sheet, and the
+estimate is on the first tab under the customer's name.
+
+- **"Customers" (first tab).** One row per customer, newest activity at
+  the top: name, email, phone when known, what they are having made (the
+  piece in words), status in plain words ("waiting on details", "estimate
+  sent $5,738", "meeting Thu 10 Sep 9:00 AM", "booked"), next meeting,
+  last contact, what is still open, a link to the Gmail thread, and a link
+  to their facts. Header row frozen and bold, filter turned on, banded
+  rows, status coloured (green booked or sent, amber waiting, grey
+  closed), columns sized to read without scrolling.
+- **"This week".** The next seven days of meetings with the same row
+  beside each, so the day's visitors are one glance.
+- **"Facts".** One row per fact in readable words ("Metal karat", "18K",
+  "customer wrote: 18k white gold", "8 Sep 10:45 PM"), grouped by
+  customer, with the source in words: what the customer said, what the
+  photo showed, the jeweler's choice, the owner's decision. Filter on the
+  customer name shows one estimate's whole story.
+- Formatting is applied once at creation and re-applied by readiness when
+  it drifts (`batchUpdate`: frozen rows, bold header, banding, widths,
+  conditional colours). Nothing in the sheet is edited by hand; the desk
+  rewrites rows from the ledger, so a manual change is overwritten on the
+  next push and never read back.
+
 ## 3. Consumers
 
 | Consumer | Change |
