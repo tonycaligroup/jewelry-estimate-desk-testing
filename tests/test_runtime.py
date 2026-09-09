@@ -6990,6 +6990,41 @@ class JudgeTests(unittest.TestCase):
             judge.check_quantities({"finished_grams": 4.5, "bench_hours": 3}, [], [], True)
 
 
+class RenderFromTheLedgerTests(unittest.TestCase):
+    """Live 8 Sep: emerald halo studs rendered as diamond drops; the facts now open the prompt and the checker asks about them."""
+
+    SPEC = {"piece_type": "stud earrings", "metal": "white gold", "metal_karat": 18, "metal_color": "white", "stone_type": "emerald",
+            "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_shape": "round", "stone_color": "jeweler's choice",
+            "stone_clarity": "jeweler's choice", "setting_style": "halo", "center_stone": "yes",
+            "accent_stones": "lab-grown diamond halo, D color, VVS1", "reference_images": "from the photo: cushion halos, stud backs"}
+
+    def test_exact_facts_name_the_piece_the_stone_colour_and_the_metal_first(self) -> None:
+        import rendering
+        facts = rendering.exact_facts(self.SPEC)
+        self.assertEqual(facts[0], "the piece is stud earrings")
+        self.assertIn("green emerald center stone, round, 1.5 ct each (lab-grown)", facts[1])
+        self.assertIn("accent stones: lab-grown diamond halo, D color, VVS1", facts)
+        self.assertIn("metal: 18 white white gold", facts[3])
+        self.assertEqual(rendering.archetype_for(self.SPEC), "stud_earrings")
+        self.assertEqual(rendering.archetype_for({"piece_type": "drop earrings"}), "drop_earrings")
+        self.assertIsNone(rendering.archetype_for({"piece_type": "ring"}))
+        checks = rendering.exact_checks(facts)
+        self.assertEqual(checks[0]["id"], "exact_the_piece_is_stud_earrings")
+        self.assertIn("green emerald", checks[1]["question"])
+
+    def test_an_example_photo_is_the_base_to_change(self) -> None:
+        import rendering
+        plan = {"archetype": "stud_earrings", "mark_source": "none", "must_be_exact": rendering.exact_facts(self.SPEC),
+                "reference_kind": "example"}
+        prompts = rendering.build_prompts(plan, self.SPEC, has_artwork=True, has_exemplar=False)
+        self.assertIn("Image one is the customer's example piece", prompts[0])
+        self.assertIn("green emerald center stone", prompts[0])
+        self.assertLess(prompts[0].index("the piece is stud earrings"), prompts[0].index("Specification:"))
+        mark = rendering.build_prompts({**plan, "reference_kind": "mark"}, self.SPEC, has_artwork=True, has_exemplar=False)
+        self.assertIn("customer's mark", mark[0])
+        self.assertNotIn("example piece", mark[0])
+
+
 class GradesAreTheJewelersChoiceTests(unittest.TestCase):
     """The owner, 9 Sep 2026: color and clarity are never asked; the jeweler chooses and the card and email say so."""
 

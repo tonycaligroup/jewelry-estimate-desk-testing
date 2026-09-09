@@ -135,21 +135,109 @@ def plan_render(
     return judge.ask_json(prompt, check_plan(list(known)), model, runner, openclaw)
 
 
+STONE_COLOR_WORDS = {"emerald": "green", "sapphire": "blue", "ruby": "red", "diamond": "white, colorless", "amethyst": "purple",
+                     "aquamarine": "pale blue", "tanzanite": "violet-blue", "garnet": "deep red", "morganite": "peach-pink",
+                     "peridot": "yellow-green", "citrine": "yellow", "topaz": "blue", "opal": "iridescent white", "pearl": "white",
+                     "moissanite": "white, colorless", "tourmaline": "green", "spinel": "red", "onyx": "black", "turquoise": "turquoise"}
+ARCHETYPE_WORDS = (
+    ("stud", "stud_earrings"), ("hoop", "hoop_earrings"), ("huggie", "hoop_earrings"), ("drop earring", "drop_earrings"),
+    ("dangle", "drop_earrings"), ("tennis", "tennis_bracelet"), ("signet", "signet"), ("eternity", "eternity_band"),
+    ("three stone", "three_stone_ring"), ("three-stone", "three_stone_ring"), ("solitaire", "solitaire_ring"),
+    ("locket", "locket"), ("cufflink", "cufflinks"), ("cuff link", "cufflinks"), ("brooch", "brooch"), ("tie bar", "tie_bar"),
+)
+
+
+def archetype_for(specification: dict[str, Any]) -> str | None:
+    """An archetype the piece's own words settle ("stud earrings" is never drops); None leaves it to the planner."""
+    if not isinstance(specification, dict):
+        return None
+    words = " ".join(str(specification.get(k) or "") for k in ("piece_type", "setting_style", "notes")).lower()
+    known = archetypes()
+    for word, archetype in ARCHETYPE_WORDS:
+        if word in words and archetype in known:
+            return archetype
+    return None
+
+
+def exact_facts(specification: dict[str, Any] | str) -> list[str]:
+    """What the render must get right, from the ledger's facts, in the order that matters: the piece, each stone, the metal, the setting.
+
+    Live (8 September 2026): emerald halo studs rendered as diamond drops.
+    The stone's colour and the piece's kind open the prompt from now on and
+    the checker asks about them by name.
+    """
+    if not isinstance(specification, dict):
+        return []
+    spec = specification
+    facts: list[str] = []
+    piece = str(spec.get("piece_type") or "").strip()
+    if piece:
+        facts.append(f"the piece is {piece}")
+    stone = str(spec.get("stone_type") or "").strip().lower()
+    if stone and str(spec.get("center_stone") or "").lower() not in ("no", "none", "false"):
+        colour = str(spec.get("stone_color") or "").strip()
+        colour_words = colour if colour and colour.lower() != "jeweler's choice" and len(colour) > 2 else STONE_COLOR_WORDS.get(stone, "")
+        shape = str(spec.get("stone_shape") or spec.get("stone_cut") or "").strip()
+        carat = spec.get("stone_carat")
+        parts = [w for w in (colour_words, stone) if w]
+        desc = " ".join(parts) + " center stone" + (f", {shape}" if shape else "") + (f", {carat} ct each" if carat else "")
+        origin = str(spec.get("stone_origin") or "").strip()
+        facts.append(desc + (f" ({origin})" if origin else ""))
+    accents = str(spec.get("accent_stones") or "").strip()
+    accent_type = str(spec.get("accent_stone_type") or "").strip().lower()
+    if accents:
+        facts.append(f"accent stones: {accents}")
+    elif accent_type:
+        facts.append(f"accent stones: {STONE_COLOR_WORDS.get(accent_type, '')} {accent_type}".strip())
+    metal = " ".join(str(spec.get(k) or "").strip() for k in ("metal_karat", "metal_color", "metal") if spec.get(k)).strip()
+    metal_color = str(spec.get("metal_color") or "").strip()
+    if metal_color and metal_color.lower() not in metal.lower():
+        metal = f"{metal_color} {metal}".strip()
+    if metal:
+        facts.append(f"metal: {metal}")
+    setting = str(spec.get("setting_style") or "").strip()
+    if setting and setting.lower() != "jeweler's choice":
+        facts.append(f"setting: {setting}")
+    return [re.sub(r"\s+", " ", f) for f in facts][:6]
+
+
+def exact_checks(facts: list[str]) -> list[dict[str, str]]:
+    """One yes-or-no question per must-be-exact fact, so the checker asks about the stone and the piece by name."""
+    checks = []
+    for fact in facts:
+        ident = "exact_" + re.sub(r"[^a-z0-9]+", "_", fact.lower()).strip("_")[:40]
+        checks.append({"id": ident, "question": f"Does the render show exactly this: {fact}? Answer no if the stone colour, the kind of piece, or the metal differs."})
+    return checks
+
+
+def all_checks(plan: dict[str, Any]) -> list[dict[str, str]]:
+    return list(archetypes()[plan["archetype"]]["checks"]) + [c for c in (plan.get("exact_checks") or []) if isinstance(c, dict)]
+
+
 def build_prompts(plan: dict[str, Any], specification: dict[str, Any] | str, has_artwork: bool, has_exemplar: bool) -> list[str]:
     """Two prompts assembled from the archetype's clauses; the model never writes them."""
     arch = archetypes()[plan["archetype"]]
     refs = []
-    if has_artwork:
+    example = has_artwork and plan.get("reference_kind") == "example"
+    if has_artwork and not example:
         refs.append("Image one is the customer's mark: reproduce it exactly, letter for letter and shape for shape, do not restyle it.")
     if has_exemplar:
         refs.append(f"Image {'two' if has_artwork else 'one'} shows the construction to follow; copy how it holds together, not its design.")
     exact = plan.get("must_be_exact") or []
     exact_clause = (" Must be exact: " + "; ".join(exact) + ".") if exact else ""
-    base = (
-        f"{arch['photo']} The piece: {arch['label']}. {arch['construction']} "
-        f"Specification: {spec_text(specification)}.{exact_clause} "
-        + " ".join(refs) + " Exactly as specified, one design, no alternates, no text in the image."
-    )
+    if example:
+        base = (
+            f"{arch['photo']} Image one is the customer's example piece: make the same design, construction, and "
+            f"proportions as that photograph, changed only as follows.{exact_clause} "
+            f"The piece: {arch['label']}. Specification: {spec_text(specification)}. "
+            + " ".join(refs) + " Keep everything else as in the example, one design, no alternates, no text in the image."
+        )
+    else:
+        base = (
+            f"{arch['photo']}{exact_clause} The piece: {arch['label']}. {arch['construction']} "
+            f"Specification: {spec_text(specification)}. "
+            + " ".join(refs) + " Exactly as specified, one design, no alternates, no text in the image."
+        )
     return [f"{base} View: {view}." for view in arch["views"][:2]]
 
 
@@ -257,7 +345,7 @@ def check_image(image: Path, plan: dict[str, Any], openclaw: str, runner: Runner
                 vision_model: str | None = DEFAULT_VISION_MODEL, reference: Path | None = None,
                 deadline: float | None = None) -> dict[str, Any]:
     """The archetype's questions answered yes or no about one render."""
-    arch = archetypes()[plan["archetype"]]
+    arch = {"checks": all_checks(plan)}
     questions = "\n".join(f"- {c['id']}: {c['question']}" for c in arch["checks"])
     prompt = (
         "You are checking a product rendering of custom jewelry for a jeweler. Answer each question with yes "
@@ -435,6 +523,18 @@ def plan_piece(
                 "fine_lettering": False, "notes": "archetype given by the operator"}
     else:
         plan = plan_render(specification, context, artwork is not None, model, runner, openclaw)
+        settled = archetype_for(specification if isinstance(specification, dict) else {})
+        if settled and settled != plan.get("archetype"):
+            plan = {**plan, "archetype": settled, "notes": f"archetype from the piece's own words; the planner said {plan.get('archetype')}"}
+    facts = exact_facts(specification)
+    plan = {**plan, "must_be_exact": facts + [x for x in (plan.get("must_be_exact") or []) if x not in facts][: max(0, 8 - len(facts))],
+            "exact_checks": exact_checks(facts)}
+    if artwork:
+        # The customer's photo is an example piece (the reading said so, or the planner saw no mark in it): the
+        # render is that photograph, changed as specified. A logo or drawing stays a mark to reproduce.
+        reference = str(specification.get("reference_images") or "").lower() if isinstance(specification, dict) else ""
+        example = reference.startswith("from the photo") or "example" in reference or plan.get("mark_source") != "artwork"
+        plan["reference_kind"] = "example" if example else "mark"
     arch = archetypes()[plan["archetype"]]
     refs: list[Path] = []
     if artwork:

@@ -438,6 +438,13 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (4.15, unpublished): renderings from the ledger.
+  The facts that must be exact open the prompt in order (the piece, each
+  stone with its colour, the metal, the setting), the checker asks about
+  each by name, the archetype follows the piece's own words ("stud
+  earrings" is never drops), and when the customer sent an example piece
+  the render is that photograph changed only as specified, not a logo to
+  reproduce (6.6).
 - Built 9 September 2026 (4.15, unpublished): the estimate ledger. Every
   fact the desk holds carries its source (the customer's own words with the
   span, the photo, the jeweler's choice, the owner, a quoted estimate, or a

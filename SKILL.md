@@ -250,6 +250,10 @@ even when they also ask to come in: the appointment card carries the questions
 the estimate needs, and the one email your approval sends offers the times and
 asks them. Nothing reaches the customer before the approval.
 
+A rendering starts from the customer's example photo when they sent one and
+names the piece, each stone's colour, and the metal first; the checker asks
+about each of those by name.
+
 Every fact the desk holds carries its source (the customer's words, a photo,
 the jeweler's choice, the owner) in `estimate-desk/ledger.sqlite`; the
 customer's written word is never overwritten. A stone's color and clarity are

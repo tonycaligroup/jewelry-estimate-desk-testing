@@ -381,6 +381,19 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**4.15 (unpublished, 9 September 2026): renderings from the ledger, step 4.**
+`rendering.exact_facts` turns the specification into the facts that must
+be exact, in order: the piece, each stone with its colour word ("green
+emerald center stone, round, 1.5 ct each (lab-grown)"), the accents, the
+metal, the setting; `plan_piece` puts them first in `must_be_exact`,
+overrides the planner's archetype when the piece's own words settle it
+(`archetype_for`), and marks the customer's photo as an example piece
+(`reference_kind` example) unless the planner saw a logo, so
+`build_prompts` opens with "Image one is the customer's example piece:
+make the same design, changed only as follows" and the facts;
+`exact_checks` adds one yes-or-no question per fact that `check_image`
+asks beside the archetype's own. Golden `RenderFromExampleTests`.
+
 **4.15 (unpublished, 9 September 2026): the estimate ledger, steps 1 and 3.**
 `scripts/ledger.py` keeps every fact with its source in
 `estimate-desk/ledger.sqlite` (see RELEASE-PLAN-4.15.md): `absorb` records
