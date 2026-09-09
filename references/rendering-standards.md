@@ -51,5 +51,7 @@ conforms. Rendering review never changes the approved written specification.
 
 ## Customer note
 
-Label every rendering as an illustration of the design direction. State that
-the written specification and approved design control the final piece.
+Say every rendering is for guidance only: it shows the direction of the
+design, and a rendering that comes close is still not the finished piece, so
+small details may differ. State that the written specification and the
+approved final design are what the shop makes (the owner, 9 September 2026).

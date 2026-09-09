@@ -2121,10 +2121,10 @@ def answer_decision(
 
 
 RENDERING_NOTE = (
-    "Attached are visual illustrations of the design direction we discussed. The "
-    "written specification and the final design you approve control the finished "
-    "piece.\n\nIf you would like an adjustment to the look, reply here and tell me "
-    "what you would like changed.\n"
+    "Hello,\n\nAttached are design renderings of {piece}. They are for guidance only: they show the "
+    "direction of the design, and a rendering that comes close is still not the finished piece, so "
+    "small details may differ. The written specification and the final design you approve are what "
+    "we make.\n\nIf you would like anything changed, reply here and tell me.\n\n{shop}\n"
 )
 
 
@@ -2196,7 +2196,8 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
         profile = read_object(args.shop_profile) if getattr(args, "shop_profile", None) else {}
         _prepare_email(
             {"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id, "rendering",
-            {"piece": piece, "shop name": (profile.get("shop") or {}).get("name") or "the shop"}, RENDERING_NOTE,
+            {"piece": piece, "shop name": (profile.get("shop") or {}).get("name") or "the shop"},
+            RENDERING_NOTE.format(piece=piece, shop=(profile.get("shop") or {}).get("name") or "the shop"),
             Path(paths["customer_reply"]), _digest_from_work(paths, args.message_id, profile), runner,
         )
     except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
@@ -2278,10 +2279,11 @@ def _send_approved_rendering(args: argparse.Namespace, p: dict[str, Path], paths
         body_source = "prepared"
     else:
         record_now = estimate_record.read_object(estimate_record.record_path(p["record_root"], args.estimate_id))
+        shop_now = (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"
         text, body_source = _draft_customer_email(
             p, record_now, args.message_id, "rendering",
-            {"piece": approval.get("piece") or "the piece", "shop name": (read_object(p["shop_profile"]).get("shop") or {}).get("name") or "the shop"},
-            RENDERING_NOTE, args,
+            {"piece": approval.get("piece") or "the piece", "shop name": shop_now},
+            RENDERING_NOTE.format(piece=approval.get("piece") or "the piece", shop=shop_now), args,
         )
         body.write_text(text, encoding="utf-8")
     record = send_rendering(argparse.Namespace(
@@ -2968,6 +2970,10 @@ def _report_brief(args: argparse.Namespace, result: dict[str, Any], runner: Any,
         result["brief_report"] = "already reported by the earlier run: " + str(exc)[:120]
 
 
+ESTIMATE_CLOSING = (
+    "If you would like to move forward, reply here and we will set up a time to go over the design "
+    "together.\n\n"
+)
 ESTIMATE_NOTE = (
     "Hello,\n\nThank you for the details on {piece}. Here is where the estimate lands:\n\n"
     "{spec_lines}\n\nEstimate: ${price}\n\n"
@@ -2975,8 +2981,7 @@ ESTIMATE_NOTE = (
     "final design approval, and once your design is finalized the final price is often a little lower. "
     "If it comes in under, we pass that straight along to you. Nothing is locked in until you have seen "
     "and approved the final design.\n\n{lead_time}This estimate is good through {valid_through}.\n\n"
-    "If you would like to move forward, reply here and we will set up a time to go over the design "
-    "together.\n\n{shop}\n"
+    + ESTIMATE_CLOSING + "{shop}\n"
 )
 
 
@@ -3037,6 +3042,13 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
     booked = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else None
     if booked and booked.get("confirmed_start"):
         facts["meeting booked"] = str(booked["confirmed_start"])[:16].replace("T", " ")
+        fixed = fixed.replace(ESTIMATE_CLOSING, "We will go over the design together at your visit.\n\n")
+    elif any(isinstance(r, dict) and r.get("status") == "pending_approval" for r in record.get("appointment_approval_requests") or []):
+        # The meeting card is on the owner's phone (live, 9 September 2026: the estimate said "I will confirm your
+        # visit separately" and then asked them to reply to set up a time).
+        facts["their visit"] = ("the time they asked for is being confirmed separately, in its own email; say only that, "
+                                "and do not invite them to set up a time or ask about one")
+        fixed = fixed.replace(ESTIMATE_CLOSING, "Your visit is being confirmed separately, in its own email.\n\n")
     reference = str(spec.get("reference_images") or "").strip()
     if reference.lower().startswith("from the photo"):
         facts["read from their photo"] = reference[:160]

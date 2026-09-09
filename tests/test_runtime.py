@@ -8694,11 +8694,27 @@ class EmailFlowGuardTests(unittest.TestCase):
         import customer_mail
         previous = "Hello David,\n\nThanks for the details on the bracelet. Could you tell me natural or lab-grown?"
         check = customer_mail._check("rendering", {}, previous)
-        same_greeting = "Hello David,\n\nAttached are two illustrations of the design direction we discussed. The written specification and the final design you approve control the finished piece. Reply here with anything you would like changed.\n\nThe shop"
+        same_greeting = "Hello David,\n\nAttached are two renderings of the bracelet, for guidance only: they show the direction of the design, and a close rendering is still not the finished piece. The written specification and the final design you approve are what we make. Reply here with anything you would like changed.\n\nThe shop"
         self.assertIn("body", check({"body": same_greeting}))
-        same_opening = "Hello David,\n\nThanks for the details on the bracelet. Attached are two illustrations of the design direction. The written specification and the final design you approve control the finished piece. Reply here with anything you would like changed.\n\nThe shop"
+        same_opening = "Hello David,\n\nThanks for the details on the bracelet. Attached are two renderings, for guidance only. The written specification and the final design you approve are what we make. Reply here with anything you would like changed.\n\nThe shop"
         with self.assertRaisesRegex(ValueError, "same sentence"):
             check({"body": same_opening})
+
+    def test_a_rendering_email_says_the_pictures_are_for_guidance(self) -> None:
+        """The owner, 9 Sep: renderings are for guidance only, said nicely, for when they are close but not perfect."""
+        import customer_mail
+        check = customer_mail._check("rendering", {}, "")
+        promises = ("Hello David,\n\nAttached are two renderings of the bracelet. They illustrate the design direction we discussed, "
+                    "and the written specification and the final design you approve will control the finished piece. Reply with "
+                    "anything you would like changed.\n\nThe shop")
+        with self.assertRaisesRegex(ValueError, "guidance"):
+            check({"body": promises})
+        note = workflow_safe.RENDERING_NOTE.format(piece="a pair of earrings", shop="Lomelino Jewelry")
+        self.assertIn("for guidance only", note)
+        self.assertIn("a pair of earrings", note)
+        self.assertTrue(note.endswith("Lomelino Jewelry\n"), note)
+        self.assertIn("body", check({"body": note}))
+        self.assertIn("guidance only", customer_mail.KIND_BRIEFS["rendering"])
 
     def test_follow_up_falls_back_to_a_plain_question_list(self) -> None:
         body = pipeline.plain_followup(["stone_origin", "finger_size"], "Lomelino Jewelry")
@@ -10012,3 +10028,90 @@ class ArtworkFromTheCustomerOnlyTests(unittest.TestCase):
         self.assertEqual(log[0]["reasoning_effort"], "none")
         self.assertEqual(log[0]["max_tokens"], 1500)
         self.assertEqual(log[1]["model"], "claude-haiku-4-5", "a named model is used as named")
+
+
+class CustomersOwnSettingWordTests(unittest.TestCase):
+    """9 Sep (ruby earrings): 'earrings like these... not sure the halo size' priced as the jeweler's choice of setting."""
+
+    def test_a_setting_named_in_their_words_is_theirs(self) -> None:
+        words = "I'm looking to create earrings like these but with round rubies in the center. I'm not sure the halo size."
+        spec = {"piece_type": "pair of earrings", "stone_type": "ruby", "stone_carat": 2.5}
+        self.assertEqual(estimate_record.settle_setting_style(spec, words)["setting_style"], "halo")
+        self.assertEqual(estimate_record.settle_setting_style({**spec, "setting_style": "jeweler's choice"}, words)["setting_style"], "halo")
+        self.assertEqual(estimate_record.settle_setting_style({**spec, "setting_style": "bezel"}, words)["setting_style"], "bezel",
+                         "a setting already read stands")
+        self.assertEqual(estimate_record.setting_in_words("A bezel-set solitaire please"), "bezel-set")
+        self.assertEqual(estimate_record.setting_in_words("pavé band"), "pave")
+
+    def test_a_setting_they_do_not_want_and_a_piece_without_stones_are_left_alone(self) -> None:
+        spec = {"piece_type": "ring", "stone_type": "sapphire"}
+        self.assertNotIn("setting_style", estimate_record.settle_setting_style(spec, "I don't want a halo, something simpler"))
+        self.assertNotIn("setting_style", estimate_record.settle_setting_style(spec, "no halo please"))
+        self.assertNotIn("setting_style", estimate_record.settle_setting_style({"piece_type": "plain band"}, "a halo of light"))
+        two = {"pieces": [{"piece_type": "ring", "stone_type": "ruby"}, {"piece_type": "band"}]}
+        self.assertEqual(estimate_record.settle_setting_style(two, "a halo ring and a band"), two)
+
+
+class OneMetalQuestionTests(unittest.TestCase):
+    """9 Sep (ruby earrings): the offer email asked the metal as three bullets."""
+
+    def test_the_metal_is_one_question(self) -> None:
+        self.assertEqual(pipeline.question_lines(["metal", "metal_karat", "metal_color", "stone_origin"]), [
+            "Which metal would you like: yellow, white, or rose gold, and 14K or 18K?",
+            "Would you like natural or lab-grown stones?",
+        ])
+        self.assertEqual(pipeline.question_lines(["metal_karat", "metal_color"]), ["Which karat and color: 14K or 18K, and yellow, white, or rose?"])
+        self.assertEqual(pipeline.question_lines(["metal_color"]), ["Yellow, white, or rose?"])
+        self.assertEqual(pipeline.question_lines(["metal_karat"]), ["Which karat, 14K or 18K?"])
+        spec = {"pieces": [{"piece_type": "ring"}, {"piece_type": "band"}]}
+        lines = pipeline.question_lines(["pieces.0.metal", "pieces.0.metal_karat", "pieces.0.metal_color", "pieces.1.metal_karat"], spec)
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[0].startswith("For the "), lines)
+        self.assertIn("which metal would you like", lines[0].lower())
+        self.assertIn("which karat, 14K or 18K", lines[1])
+        body = pipeline.plain_followup(["metal", "metal_karat", "metal_color"], "Lomelino Jewelry")
+        self.assertEqual(body.count("- "), 1, body)
+
+
+class PairSummaryTests(unittest.TestCase):
+    """9 Sep (ruby earrings): the card and the rendering email said 'with a lab-grown ruby 2.5 ct' for a pair."""
+
+    def test_a_pair_names_its_stones_in_the_plural_with_the_basis(self) -> None:
+        spec = {"piece_type": "pair of earrings", "metal": "18K white gold", "stone_type": "ruby", "stone_origin": "lab-grown",
+                "stone_carat": 2.5, "stone_carat_basis": "each"}
+        self.assertEqual(owner_questions.summary_of_piece(spec), "a pair of earrings in 18K white gold with lab-grown rubies, 2.5 ct each")
+        self.assertEqual(owner_questions.summary_of_piece({**spec, "stone_carat_basis": "total"}),
+                         "a pair of earrings in 18K white gold with lab-grown rubies, 2.5 ct total for the pair")
+        self.assertEqual(owner_questions.summary_of_piece({**spec, "stone_type": "sapphire", "stone_origin": "natural", "stone_carat_basis": "each"}),
+                         "a pair of earrings in 18K white gold with natural sapphires, 2.5 ct each")
+        without = {k: v for k, v in spec.items() if k != "stone_carat_basis"}
+        self.assertEqual(owner_questions.summary_of_piece(without), "a pair of earrings in 18K white gold with a lab-grown ruby 2.5 ct")
+        ring = {**spec, "piece_type": "ring"}
+        self.assertEqual(owner_questions.summary_of_piece(ring), "a ring in 18K white gold with a lab-grown ruby 2.5 ct")
+
+
+class EstimateEmailVisitTests(unittest.TestCase):
+    """9 Sep (ruby earrings): the estimate said 'I will confirm your visit separately' and then asked them to set up a time."""
+
+    def _record(self, **extra: object) -> dict:
+        return {"proposed_price": 8480.0, "revision": 0, "specification": {"piece_type": "pair of earrings", "metal": "18K white gold"}, **extra}
+
+    def test_a_pending_booking_card_and_a_booked_visit_change_the_closing(self) -> None:
+        profile = {"shop": {"name": "Lomelino Jewelry"}}
+        facts, fixed = workflow_safe.estimate_email_facts(self._record(), profile)
+        self.assertNotIn("their visit", facts)
+        self.assertIn("set up a time", fixed)
+        pending = self._record(appointment_approval_requests=[{"status": "pending_approval"}])
+        facts, fixed = workflow_safe.estimate_email_facts(pending, profile)
+        self.assertIn("confirmed separately", facts["their visit"])
+        self.assertIn("do not invite them to set up a time", facts["their visit"])
+        self.assertIn("confirmed separately", fixed)
+        self.assertNotIn("set up a time", fixed)
+        booked = self._record(appointment_approval_requests=[{"status": "executed"}],
+                              appointment_booked={"confirmed_start": "2026-09-10T11:30:00-07:00"})
+        facts, fixed = workflow_safe.estimate_email_facts(booked, profile)
+        self.assertEqual(facts["meeting booked"], "2026-09-10 11:30")
+        self.assertNotIn("their visit", facts)
+        self.assertNotIn("set up a time", fixed)
+        self.assertIn("If the facts say their visit is being confirmed separately", customer_mail.KIND_BRIEFS["estimate"])
+        self.assertIn("never write that they need anything", customer_mail.KIND_BRIEFS["offer"])

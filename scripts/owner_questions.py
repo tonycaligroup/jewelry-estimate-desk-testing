@@ -292,7 +292,7 @@ def _with_article(piece: str) -> str:
     """'a pendant', 'an anklet', 'a pair of earrings', 'wedding bands' (never 'an earrings')."""
     words = piece.strip().lower()
     if any(words == p or words.endswith(" " + p) for p in PAIRED):
-        return f"a pair of {words}"
+        return words if words.startswith("pair of ") else f"a pair of {words}"
     if words.endswith("s") and not words.endswith("ss"):
         return words
     return f"{'an' if words[:1] in tuple('aeiou') else 'a'} {words}"
@@ -311,12 +311,26 @@ def summary_of_piece(specification: Any) -> str:
     piece = str(spec.get("piece_type") or "").strip().lower()
     metal = cost_components.extract_metal(spec)
     stone = cost_components.extract_center_stone(spec)
-    parts = [_with_article(piece) if piece else "a piece"]
+    parts = [("a " + piece if piece.startswith("pair of ") else _with_article(piece)) if piece else "a piece"]
     if metal.get("description"):
         parts.append(f"in {metal['description']}")
     if stone.get("description"):
-        parts.append(f"with a {stone['description']}")
+        basis = str(spec.get("stone_carat_basis") or "").strip().lower()
+        if estimate_record.is_pair(spec) and stone.get("stone_type") and stone.get("carat") is not None and basis in ("each", "total"):
+            # A pair: "with lab-grown rubies, 2.5 ct each", never "with a lab-grown ruby 2.5 ct" (9 September 2026).
+            kind = " ".join(part for part in (
+                "lab-grown" if stone.get("origin") == ("lab", "grown") else ("natural" if stone.get("origin") == ("natural",) else None),
+                _plural(str(stone["stone_type"]))) if part)
+            parts.append(f"with {kind}, {stone['carat']:g} ct {'each' if basis == 'each' else 'total for the pair'}")
+        else:
+            parts.append(f"with a {stone['description']}")
     return " ".join(parts)
+
+
+def _plural(word: str) -> str:
+    if word.endswith("y") and not word.endswith(("ay", "ey", "oy")):
+        return word[:-1] + "ies"
+    return word if word.endswith("s") else word + "s"
 
 
 def missing_rate_text(question: dict[str, Any], reminder: bool = False) -> str:

@@ -245,7 +245,7 @@ becomes `estimate_sent`.
 | The customer replies with | We do |
 |---|---|
 | Acceptance, or "let's do it" | Alert the owner. No further price step is needed. |
-| A request to see a picture | Produce two complementary illustrations of the same approved design and check each against the written specification, discarding any that changes the piece. Send the conforming images to the owner as a rendering approval. Only after the owner approves do the approved images go to the customer, in the thread, with the note that the written specification controls the final piece. Each distinct request is one iteration. |
+| A request to see a picture | Produce two complementary illustrations of the same approved design and check each against the written specification, discarding any that changes the piece. Send the conforming images to the owner as a rendering approval. Only after the owner approves do the approved images go to the customer, in the thread, with the note that the renderings are for guidance only (they show the direction of the design; a close rendering is still not the finished piece) and that the written specification and the approved final design control the final piece. Each distinct request is one iteration. |
 | A request to meet | Check the calendar for an existing meeting with this customer first. Build two or three fresh near-term times that are actually free inside declared windows. Send them to the owner as a booking approval. At Stage 3 the times may be offered to the customer while the owner decides; at Stage 1 or 2 nothing goes to the customer until the owner approves. The event is written and the customer is told "you're confirmed" only after the owner approves and the calendar write succeeds. |
 | A design change | Treat it as a changed specification: it returns to the gate and pricing, and the owner reviews it. |
 | Price pushback or a discount request | Owner only. No customer reply is drafted. |
@@ -438,6 +438,17 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished), from the ruby earrings thread: when
+  a reply completes the details and picks a time, the meeting card is filed
+  before the review, so a missing rate (the owner's question) never skips
+  it; while that card is pending the estimate says the visit is being
+  confirmed separately and does not ask for a time, and once booked it says
+  so (6.3, 6.7). A setting the customer names in their own words ("not sure
+  the halo size") is theirs, never the jeweler's choice (6.2). The metal is
+  one question (which metal: yellow, white, or rose gold, 14K or 18K), not
+  three bullets. A pair's stones are named in the plural with the carat
+  basis ("lab-grown rubies, 2.5 ct each"). The rendering email says the
+  pictures are for guidance only (6.6).
 - Built 9 September 2026 (4.15.0): an optional spreadsheet
   mirror built for the counter: "Customers" first (one row per customer,
   status in plain words, next meeting, what is still open, a link to the

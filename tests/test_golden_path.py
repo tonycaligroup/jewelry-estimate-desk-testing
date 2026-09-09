@@ -497,8 +497,9 @@ class World:
                     f"Reply with the one that works, or tell me what does. Nothing is booked yet.\n\n{shop}")
         elif task.startswith("Send the attached design renderings"):
             body = (f"{opening} Attached are two renderings of the signet ring with your logo on the face. They "
-                    "illustrate the design direction we discussed; the written specification and the final design "
-                    f"you approve control the finished piece. Reply with anything you would like changed.\n\n{shop}")
+                    "are for guidance only: they show the direction of the design, and a close rendering is still not "
+                    "the finished piece; the written specification and the final design you approve are what we make. "
+                    f"Reply with anything you would like changed.\n\n{shop}")
         else:
             raise AssertionError("unexpected email task: " + task)
         return body
@@ -2494,6 +2495,112 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.assertTrue(any(str(c["title"]).startswith("Price approval") for c in last_two), [c["title"] for c in last_two])
             self.assertEqual(len(world.sent), 1, "nothing goes out until the cards are approved")
             self.assertEqual(self.claim(ws, "dt2")["status"], "processed")
+        self.run_branch(branch)
+
+
+    def test_a_missing_rate_never_skips_the_booking_card(self) -> None:
+        """Live 9 Sep (ruby earrings): the rate question went out and no meeting card ever did; the estimate then said the
+        visit would be confirmed separately and asked them to set up a time; the card and the email called the setting the
+        jeweler's choice while the customer had written "halo"; the metal was asked as three bullets."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)  # no lab-grown ruby rate
+            thread = "thread-ruby"
+            world.spec = {"piece_type": "pair of earrings", "stone_type": "ruby", "stone_carat": 2.5, "stone_carat_basis": "each",
+                          "stone_shape": "round", "center_stone": "yes", "scheduling_intent": "I can also come in person",
+                          "reference_images": "from the photo: halo earrings"}
+            world.requested = ([], [])
+            world.customer_message("rb1", thread, "I'm looking to create earrings like these but with round rubies in the center "
+                                   "instead of diamonds. These earrings are 2.50ct rounds so looking to match the look as well. I'm not "
+                                   "sure the halo size. Can you please provide an estimate for me? I can also come in person\n\nTony",
+                                   subject="Ruby earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            offer = world.cards[-1]
+            self.assertEqual(offer["payload"]["ask_for"], [
+                "Which metal would you like: yellow, white, or rose gold, and 14K or 18K?",
+                "Would you like natural or lab-grown stones?",
+            ], "the metal is one question, not three bullets")
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            self.assertEqual(len(world.sent), 1)
+            estimate_id = self.only_estimate(ws)
+            self.assertEqual(self.record(ws, estimate_id)["specification"]["setting_style"], "halo", "the customer's own word")
+            # The reply: a time and the last details; the reading hands the setting to the jeweler again.
+            pick = offer["payload"]["calendar_availability"][2]
+            world.spec = {**world.spec, "metal": "white gold", "metal_karat": "18k", "metal_color": "white", "stone_origin": "lab-grown",
+                          "setting_style": "jeweler's choice", "scheduling_intent": f"I can come in {pick['label']}"}
+            world.requested = ([pick["label"]], [pick["start"][:16]])
+            world.customer_message("rb2", thread, f"I can come in {pick['label']}.\nI'd like 18k white gold, lab grown stones please.\n\nTony",
+                                   subject="Re: Ruby earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking", [c["title"] for c in world.cards])
+            self.assertEqual([q["kind"] for q in self.questions(ws, "open") if not q.get("dormant")], ["missing_rate"])
+            self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards), "no price card without the rate")
+            self.assertEqual(len(world.sent), 1, "nothing goes out before the cards are approved")
+            self.assertEqual(self.record(ws, estimate_id)["specification"]["setting_style"], "halo", "the customer's word outranks the reading")
+            # The owner books the visit first, then answers the rate.
+            self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertEqual(len(world.sent), 2)
+            self.assertIn(pick["label"], world.sent[1]["body"])
+            answered = self.answer(ws, "use 500")
+            self.assertEqual(answered["value"], 500.0, answered)
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_from_record", "approval_requested")], summary)
+            price_card = world.cards[-1]
+            self.assertTrue(str(price_card["title"]).startswith("Price approval"), price_card["title"])
+            self.assertIn("with lab-grown rubies, 2.5 ct each", price_card["title"], "a pair's stones, in the plural")
+            self.assertNotIn("setting style", price_card["title"], "the setting is the customer's, not the jeweler's choice")
+            self.assertIn("halo", price_card["title"].lower())
+            world.approve(price_card)
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["approvals"][0]["result"]["outcome"], "estimate_sent", summary)
+            estimate_prompt = [q for q in world.prompts if "Send the customer their estimate" in q][-1]
+            self.assertIn("meeting booked", estimate_prompt, "the estimate knows the visit is booked")
+            self.assertIn("chosen by the jeweler, say if you have a preference: clarity, color\n", estimate_prompt,
+                          "the setting is the customer's halo, not a jeweler's choice")
+            self.assertEqual(self.record(ws, estimate_id)["status"], "estimate_sent")
+            self.assertEqual(self.claim(ws, "rb2")["status"], "processed")
+        self.run_branch(branch)
+
+    def test_a_pending_booking_card_keeps_the_estimate_from_asking_for_a_time(self) -> None:
+        """The price card is approved before the booking card: the estimate says the visit is being confirmed separately."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            thread = "thread-pending-visit"
+            world.spec = {"piece_type": "halo earrings", "stone_type": "emerald", "stone_carat": 2.5, "stone_carat_basis": "each",
+                          "stone_shape": "round", "setting_style": "halo", "center_stone": "yes",
+                          "scheduling_intent": "I can also come in person if easier"}
+            world.requested = ([], [])
+            world.customer_message("pv1", thread, "Earrings like these with a round emerald in the center, 2.5 ct each. Can you please "
+                                   "provide an estimate? I can also come in person if easier!\n\nAnthony", subject="Custom earrings")
+            self.tick(ws, world)
+            offer = world.cards[-1]
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            pick = offer["payload"]["calendar_availability"][1]
+            world.spec = {**world.spec, "metal": "white gold", "metal_karat": "18k", "metal_color": "white", "stone_origin": "lab-grown",
+                          "scheduling_intent": f"{pick['label']} works for me"}
+            world.requested = ([pick["label"]], [pick["start"][:16]])
+            world.customer_message("pv2", thread, f"18k white gold, lab grown stones please.\n{pick['label']} works for me.\n\nAnthony",
+                                   subject="Re: Custom earrings")
+            self.tick(ws, world)
+            book, price_card = world.cards[-2], world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking")
+            world.approve(price_card)
+            self.tick(ws, world)
+            estimate_prompt = [q for q in world.prompts if "Send the customer their estimate" in q][-1]
+            facts = estimate_prompt.split("FACTS (use exactly):\n", 1)[1].split("\n\n", 1)[0]
+            self.assertIn("their visit: the time they asked for is being confirmed separately", facts)
+            self.assertNotIn("meeting booked", facts)
+            _facts, fixed = workflow_safe.estimate_email_facts(self.record(ws, self.only_estimate(ws)),
+                                                                json.loads(profile_path.read_text(encoding="utf-8")))
+            self.assertIn("confirmed separately", fixed)
+            self.assertNotIn("set up a time", fixed)
         self.run_branch(branch)
 
 

@@ -77,6 +77,8 @@ def _opening(text: str) -> str:
     return sentence if len(sentence) > 20 else ""
 
 
+# A rendering email says the pictures guide, they do not promise (the owner, 9 September 2026).
+GUIDANCE_RE = re.compile(r"(?i)\b(?:for guidance|guidance only|as a guide|guide only|for reference only|for illustration)\b")
 CLAIMS_A_MEETING_RE = re.compile(
     r"(?i)\b(?:reserved|booked|i have (?:you|us|it) down for|(?:confirm(?:ed|ing)|locked in|set aside) (?:our|your|the|that) "
     r"(?:meeting|appointment|time|slot)|(?:meeting|appointment) is (?:set|confirmed|booked)|see you (?:on|at) )"
@@ -98,6 +100,9 @@ def _check(kind: str, facts: dict[str, Any], previous: str) -> Callable[[dict[st
             # Live, 9 September 2026: an estimate email said "Thursday at 11am, which I have reserved" with nothing booked.
             raise ValueError("never say a meeting time is reserved, booked, or confirmed: no meeting is booked; "
                              "if they named a time, say only that you will confirm it separately")
+        if kind == "rendering" and not GUIDANCE_RE.search(body):
+            raise ValueError("say the renderings are for guidance only: they show the direction of the design and "
+                             "a close rendering is still not the finished piece")
         if kind == "estimate":
             approved = float(str(facts["price"]).replace("$", "").replace(",", ""))
             customer_content_guard.validate_approved_price(body, approved)
@@ -134,7 +139,8 @@ KIND_BRIEFS = {
         "chosen by the jeweler, say in one sentence that you priced it with your own choice of those (name them "
         "plainly, for example stone color and clarity) and that they can tell you if they have a preference. Never "
         "say a meeting time is reserved, booked, or confirmed unless the facts name a booked meeting; if they "
-        "named a time, say only that you will confirm it separately. When "
+        "named a time, say only that you will confirm it separately. If the facts say their visit is being "
+        "confirmed separately, say only that and do not invite them to set up a time. When "
         "the facts say there is more than one piece, name each piece in a sentence and give the one total for all of them."
     ),
     "confirmation": (
@@ -157,16 +163,18 @@ KIND_BRIEFS = {
         "those hours and state the hours exactly as written before offering the times. If the facts say the visit "
         "is to design the piece, say you look forward to designing their perfect piece together when they come in; "
         "never mention an estimate, a quote, or that there is none yet, and do not ask for any detail now, "
-        "unless the facts list details to ask: then, after the times, say that since they asked about the price you "
-        "need a few things to get the estimate started, ask for each listed detail as a short dash list of plain "
-        "questions in the customer's words, and say it is fine not to know; never a technical question. "
+        "unless the facts list details to ask: then, after the times, say that since they also asked about the "
+        "price, a few details from them would get the estimate started (you are asking; never write that they "
+        "need anything), ask for each listed detail as a short dash list of plain questions in the customer's "
+        "words, one question per detail exactly as listed, and say it is fine not to know; never a technical question. "
         "Nothing is booked yet. No prices."
     ),
     "rendering": (
-        "Send the attached design renderings. Say they illustrate the design direction discussed, that the "
-        "written specification and the final design they approve control the finished piece, and that they can "
-        "reply with anything they would like changed. When the facts name more than one piece, say which views "
-        "show which piece. No prices."
+        "Send the attached design renderings. Say warmly that the renderings are for guidance only: they show "
+        "the direction of the design, a rendering that comes close is still not the finished piece, and small "
+        "details may differ; the written specification and the final design they approve are what the shop "
+        "makes. Invite them to reply with anything they would like changed. When the facts name more than one "
+        "piece, say which views show which piece. No prices."
     ),
 }
 

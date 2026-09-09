@@ -1829,6 +1829,53 @@ LEAVES_TO_JEWELER_RE = re.compile(
 
 GRADE_KEYS = ("stone_color", "stone_clarity")
 
+# A setting the customer names outright; the words are theirs, so the fact is theirs (9 September 2026).
+SETTING_WORDS_RE = re.compile(
+    r"(?i)\b(halo|bezel(?:[- ]set)?|solitaire|pav[eé](?:[- ]set)?|channel(?:[- ]set)?|prong(?:[- ]set)?|"
+    r"three[- ]stone|tension(?:[- ]set)?|cluster|cathedral|flush(?:[- ]set)?|bead(?:[- ]set)?)\b"
+)
+# "no halo", "not a halo", "don't want a halo": the word right before the setting (an article allowed) says no.
+_NOT_THAT_SETTING_RE = re.compile(r"(?i)\b(?:no|not|without|nor|don'?t want|rather than|instead of)\s+(?:(?:a|an|the|any)\s+)?$")
+
+
+def setting_in_words(own_words: str) -> str | None:
+    """The setting style the customer's own words name ("earrings like these... not sure the halo size"), else None."""
+    text = str(own_words or "")
+    for match in SETTING_WORDS_RE.finditer(text):
+        if _NOT_THAT_SETTING_RE.search(text[max(0, match.start() - 24):match.start()]):
+            continue
+        return match.group(1).lower().replace("é", "e")
+    return None
+
+
+def settle_setting_style(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """A setting the customer names in their own words is theirs, never the jeweler's choice.
+
+    Live (9 September 2026): "earrings like these... not sure the halo size"
+    priced with "jeweler's choice: setting style" on the card and "my own
+    choice of setting style" in the estimate, while the customer had written
+    "halo". The reading is the model's; a setting word in the customer's own
+    sentence is a rule, and it fills the setting when the reading left it
+    empty or handed it to the jeweler. One piece only: a set's pieces keep
+    their own words.
+    """
+    if not isinstance(specification, dict):
+        return specification
+    raw = specification.get("pieces")
+    if isinstance(raw, list) and len(raw) > 1:
+        return specification
+    current = str(specification.get("setting_style") or "").strip().lower()
+    if current and current != "jeweler's choice":
+        return specification
+    import spec_gate  # local import: spec_gate imports this module
+
+    if not spec_gate.has_stones(specification):
+        return specification
+    named = setting_in_words(own_words)
+    if not named:
+        return specification
+    return {**specification, "setting_style": named}
+
 
 PAIR_WORDS = ("earring", "cufflink", "cuff link", "stud", "hoop", "huggie")
 _BASIS_EACH_RE = re.compile(r"(?i)\b(?:each|apiece|a ?piece|per (?:earring|ear|stone|side|piece)|every (?:earring|stone))\b")

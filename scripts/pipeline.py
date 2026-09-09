@@ -136,15 +136,44 @@ def describe_missing(specification: dict[str, Any], missing: list[str]) -> list[
     return labels
 
 
-def question_lines(missing: list[str], specification: dict[str, Any] | None = None) -> list[str]:
-    """The plain questions for what is missing, one per detail, as a customer reads them."""
-    asks = []
-    for name in missing[:8]:
+METAL_QUESTION = "which metal would you like: yellow, white, or rose gold, and 14K or 18K?"
+KARAT_AND_COLOR_QUESTION = "which karat and color: 14K or 18K, and yellow, white, or rose?"
+
+
+def _one_metal_question(missing: list[str]) -> list[tuple[str, str]]:
+    """(name, question) pairs with the metal asked once per piece, not as three bullets (live, 9 September 2026)."""
+    out: list[tuple[str, str]] = []
+    seen_metal: set[int | None] = set()
+    for name in missing:
         if reading_check.is_confirm(name):
-            asks.append(reading_check.question_for(name) or name)
+            out.append((name, reading_check.question_for(name) or name))
             continue
         index, field = estimate_record.split_field_name(name)
-        question = FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?")
+        if field in ("metal", "metal_karat", "metal_color"):
+            if index in seen_metal:
+                continue
+            seen_metal.add(index)
+            same = {estimate_record.split_field_name(n)[1] for n in missing if estimate_record.split_field_name(n)[0] == index}
+            if "metal" in same:
+                question = METAL_QUESTION
+            elif {"metal_karat", "metal_color"} <= same:
+                question = KARAT_AND_COLOR_QUESTION
+            else:
+                question = FIELD_QUESTIONS[field]
+        else:
+            question = FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?")
+        out.append((name, question))
+    return out
+
+
+def question_lines(missing: list[str], specification: dict[str, Any] | None = None) -> list[str]:
+    """The plain questions for what is missing, one per detail, as a customer reads them; the metal is one question."""
+    asks = []
+    for name, question in _one_metal_question(missing)[:8]:
+        if reading_check.is_confirm(name):
+            asks.append(question)
+            continue
+        index, _field = estimate_record.split_field_name(name)
         if index is not None:
             question = f"for the {estimate_record.piece_label(specification or {}, index)}, {question}"
         asks.append(question[0].upper() + question[1:])
@@ -153,12 +182,11 @@ def question_lines(missing: list[str], specification: dict[str, Any] | None = No
 
 def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None) -> str:
     asks = []
-    for name in missing[:8]:
+    for name, question in _one_metal_question(missing)[:8]:
         if reading_check.is_confirm(name):
-            asks.append(reading_check.question_for(name) or name)
+            asks.append(question)
             continue
-        index, field = estimate_record.split_field_name(name)
-        question = FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?")
+        index, _field = estimate_record.split_field_name(name)
         if index is not None:
             question = f"for the {estimate_record.piece_label(specification or {}, index)}, {question}"
         asks.append(question)
@@ -798,6 +826,10 @@ def process_claim(
     specification = estimate_record.settle_center_stone(
         specification, " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
                                 if m.get("sent_by") == "customer"))
+    # "Earrings like these... not sure the halo size": a setting the customer names in their own words is
+    # theirs, never the jeweler's choice (live, 9 September 2026: the card and the estimate said the setting
+    # style was the jeweler's while the customer had written "halo").
+    specification = estimate_record.settle_setting_style(specification, handled_words)
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
     specification = estimate_record.settle_scheduling_intent(specification, handled_words)
@@ -826,10 +858,30 @@ def process_claim(
         workflow_safe.write_private(Path(paths["work_dir"]) / "reading-check.json", {"disagreements": disagreements})
         missing = missing + [d["name"] for d in disagreements if d["name"] not in missing]
     workflow_safe.write_private(review_path, {"specification": specification, "missing_required_fields": missing})
+    meeting_card = False
+    if not missing and specification.get("scheduling_intent"):
+        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        if not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words):
+            # The reply gave the last details and picked a time in one breath (live, 9 September 2026: the desk
+            # priced and the estimate email claimed a meeting it never booked; then, with a rate missing, the
+            # owner's question went out and no meeting card ever did). The meeting card is filed before the
+            # review, whatever the review then does: price, or ask the owner for a rate first.
+            intent = appointment_intent(p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id)
+            intent_path = Path(paths["appointment_intent"])
+            workflow_safe.write_private(intent_path, intent)
+            workflow_safe.request_appointment_approval(argparse.Namespace(
+                monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
+                shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
+                appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
+                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=True,
+                runner=command_runner, judge_runner=judge_runner,
+            ))
+            meeting_card = True
     reviewed = workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner))
     nxt = reviewed.get("next")
     if nxt == "done":
-        return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
+        return {"outcome": reviewed.get("outcome", "done"), "next": "done",
+                **({"appointment_approval_requested": True} if meeting_card else {})}
     if nxt == "send_spec_followup":
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
         if specification.get("scheduling_intent") and (
@@ -884,26 +936,10 @@ def process_claim(
             reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner, photos=photos,
         )
     if nxt == "price":
-        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-        if specification.get("scheduling_intent") and (
-            not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words)
-        ):
-            # The reply gave the last details and picked a time in one breath (live, 9 September 2026: the desk
-            # priced and the estimate email claimed a meeting it never booked). The meeting card is filed first,
-            # the price card follows; the claim finishes with the price.
-            intent = appointment_intent(p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id)
-            intent_path = Path(paths["appointment_intent"])
-            workflow_safe.write_private(intent_path, intent)
-            workflow_safe.request_appointment_approval(argparse.Namespace(
-                monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
-                shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
-                appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
-                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=True,
-                runner=command_runner, judge_runner=judge_runner,
-            ))
-            priced = _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
-            return {**priced, "appointment_approval_requested": True}
-        return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
+        # The meeting card, when the reply also picked a time, is already filed above; the price card follows
+        # and the claim finishes with the price.
+        priced = _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
+        return {**priced, **({"appointment_approval_requested": True} if meeting_card else {})}
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")
 
 
