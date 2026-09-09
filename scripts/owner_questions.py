@@ -355,7 +355,7 @@ def missing_rate_text(question: dict[str, Any], reminder: bool = False) -> str:
     lines = [
         f"{who} asked for a quote on {piece}. I do not have a {unit} price for "
         f"{rate['description']} on your rate card. What price {unit} should I use?",
-        f'Reply with just the number, for example "use 450". '
+        f'Reply with just the number, for example "use 450", to add it to your rate card, or "use 450 once" for this estimate only. '
         f"(Question {reference(question['question_id'])}, estimate "
         f"{question['estimate_id'].upper()})",
     ]

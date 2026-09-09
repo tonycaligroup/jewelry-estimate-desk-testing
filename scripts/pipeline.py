@@ -271,7 +271,7 @@ def _send_followup(
         specification = record_now.get("specification") or {}
     except (OSError, ValueError):
         record_now, specification = {}, {}
-    understanding = estimate_record.vision_in_words(specification, on_file=bool((record_now.get("prior_piece") or {}).get("on_file")))
+    understanding = estimate_record.vision_in_words(specification, on_file=estimate_record.prior_basis(record_now))
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
                                        shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding,

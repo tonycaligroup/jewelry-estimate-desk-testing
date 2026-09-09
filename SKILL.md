@@ -177,6 +177,15 @@ location and collect:
 5. Pricing model: cost-plus multiplier or target margin. For cost-plus, convert
    `25%` to `1.25` and confirm `$1,000 cost → $1,250 quote`. For target margin,
    store the decimal margin and confirm the resulting example price.
+5a. Their rate card. Ask for whatever pricing notes the shop already has (a
+   spreadsheet exported as CSV, a PDF, a text file, or a pasted paragraph) and
+   run `python3 {baseDir}/scripts/rates_intake.py --workspace '<absolute-workspace>'
+   --file '<path>'` (or `--text '...'`). It reads their numbers onto the desk's
+   rate card, never inventing one, and prints what it filled, what stayed blank,
+   and what it could not place; tell the owner those three lists in a sentence
+   each. The "Rates" tab of the spreadsheet mirror shows the same card with the
+   Value column theirs to edit; a rate the desk lacks later is asked in chat,
+   and "use 450 once" keeps it off the card.
 6. Whether spot metal pricing is enabled; provider (`stackerscan` or
    `gold-api`), refresh frequency (`per_estimate`, `daily`, or `weekly`), and
    unit. StackerScan is the default and supports grams; gold-api uses troy oz.

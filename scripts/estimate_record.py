@@ -1462,9 +1462,11 @@ def prepare_approval_state(
         enforce_configured_price(
             state["internal_cost_sheet"], state["proposed_price"], shop_profile
         )
+        import cost_components  # local import: cost_components imports this module
+
         enforce_rate_provenance(
             state["internal_cost_sheet"],
-            (shop_profile or {}).get("pricing"),
+            cost_components.with_one_time_rates((shop_profile or {}).get("pricing"), record),  # "use 450 once" (9 September 2026)
             candidate.get("spot_price_evidence"),
         )
         return state
@@ -1961,7 +1963,23 @@ def prior_piece_facts(prior_spec: dict[str, Any], current: dict[str, Any]) -> di
         carried.pop("stone_carat", None)
         carried.pop("stone_dimensions", None)
         carried.pop("stone_carat_basis", None)
+    piece = str(prior_spec.get("piece_type") or (current or {}).get("piece_type") or "").lower()
+    if "earring" in piece and not _present((current or {}).get("earring_style")) and not _present(carried.get("earring_style")):
+        # An earlier estimate from before the style was a field: its own words or photo say studs, hoops, or drops
+        # (live, 9 September 2026: the carried pair was still asked "studs, hoops, or drops?").
+        style = earring_style_in_words(piece) or earring_style_in_words(str(prior_spec.get("reference_images") or "")) \
+            or earring_style_in_words(str(prior_spec.get("setting_style") or "")) or earring_style_in_words(str(prior_spec.get("notes") or ""))
+        if style:
+            carried["earring_style"] = style
     return carried
+
+
+def prior_basis(record: dict[str, Any] | None) -> bool | str:
+    """False, "estimate" (an earlier estimate on file), or "made" (the owner's details of a piece the shop made)."""
+    prior = (record or {}).get("prior_piece") if isinstance((record or {}).get("prior_piece"), dict) else {}
+    if not prior.get("on_file"):
+        return False
+    return "made" if prior.get("owner") == "details" else "estimate"
 
 
 def mark_prior_piece(root: Path, estimate_id: str, info: dict[str, Any]) -> dict[str, Any]:
@@ -1970,6 +1988,17 @@ def mark_prior_piece(root: Path, estimate_id: str, info: dict[str, Any]) -> dict
     with record_lock(root):
         record = read_object(path)
         record["prior_piece"] = {"on_file": bool(info.get("on_file")), **{k: v for k, v in info.items() if k != "on_file"}}
+        write_object(path, record)
+        return record
+
+
+def set_one_time_rate(root: Path, estimate_id: str, rate_kind: str, rate_key: str, value: float) -> dict[str, Any]:
+    """A rate for this estimate only ("use 450 once"): never on the card, used by this record's pricing alone."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        rates = record.setdefault("one_time_rates", {})
+        rates.setdefault(rate_kind, {})[rate_key] = float(value)
         write_object(path, record)
         return record
 
@@ -2053,7 +2082,7 @@ def photo_reading(specification: dict[str, Any] | None) -> str:
     return text if text.lower().startswith("from the photo") else ""
 
 
-def vision_in_words(specification: dict[str, Any] | None, on_file: bool = False) -> str | None:
+def vision_in_words(specification: dict[str, Any] | None, on_file: bool | str = False) -> str | None:
     """The customer's vision as a jeweler would say it back, when a photo came with the words (the owner, 9 September 2026).
 
     "I want the attached but with sapphires" plus a photo of halo studs is
@@ -2116,7 +2145,10 @@ def vision_in_words(specification: dict[str, Any] | None, on_file: bool = False)
     size = clean(spec.get("stone_dimensions"))
     if size and not spec.get("stone_carat"):
         parts.append(f"the stone {size}")
-    return ", ".join(parts) + (", after the piece we made for you, with the changes you named" if on_file else "")
+    if on_file:
+        made = isinstance(on_file, str) and on_file == "made"
+        parts.append("after the piece we made for you, with the changes you named" if made else "after the design we discussed before, with the changes you named")
+    return ", ".join(parts)
 
 
 _MM_SIZE_RE = re.compile(r"(?i)\b(\d{1,2}(?:\.\d)?)\s*(?:mm)?\s*(?:x|×|by)\s*(\d{1,2}(?:\.\d)?)\s*mm\b")

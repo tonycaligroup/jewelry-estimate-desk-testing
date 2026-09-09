@@ -905,7 +905,7 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         elif options:
             labels = [o.get("label") or o["start"] for o in options]
             facts, fixed = _offer_facts(approval, piece, labels, shop, estimate_record.vision_in_words(
-                record.get("specification"), on_file=bool((record.get("prior_piece") or {}).get("on_file"))))
+                record.get("specification"), on_file=estimate_record.prior_basis(record)))
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
                            "offer", {**facts, **before}, fixed, prepared_email_path(store), digest,
                            getattr(args, "runner", subprocess.run))
@@ -2203,13 +2203,18 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
         )
     value = owner_questions.parse_amount(args.answer)
     question = owner_questions.record_answer(root, question, args.answer, value)
-    owner_questions.save_rate(
-        p["shop_profile"],
-        question["rate"]["rate_kind"],
-        question["rate"]["rate_key"],
-        value,
-        owner_questions.answer_provenance(question),
-    )
+    if re.search(r"(?i)\b(?:once|one[- ]time|just this (?:one|time|estimate|job)|this (?:estimate|job|one) only)\b", str(args.answer or "")):
+        # "use 450 once": this estimate only, the card untouched (the owner, 9 September 2026).
+        estimate_record.set_one_time_rate(p["record_root"], question["estimate_id"], question["rate"]["rate_kind"],
+                                          question["rate"]["rate_key"], value)
+    else:
+        owner_questions.save_rate(
+            p["shop_profile"],
+            question["rate"]["rate_kind"],
+            question["rate"]["rate_key"],
+            value,
+            owner_questions.answer_provenance(question),
+        )
     message_id = _question_message_id(question)
     estimate_id = question["estimate_id"]
     import cron_config  # local import keeps module import order unchanged
@@ -3076,7 +3081,7 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     labels = [o.get("label") or o["start"] for o in options]
     store = approval_store_path(p["monitor_root"], record["estimate_id"], message_id)
     approval_now = read_object(store) if store.exists() else {}
-    understanding = estimate_record.vision_in_words(record.get("specification"), on_file=bool((record.get("prior_piece") or {}).get("on_file"))) \
+    understanding = estimate_record.vision_in_words(record.get("specification"), on_file=estimate_record.prior_basis(record)) \
         if approval_now.get("ask_for") else None
     facts, fixed = _offer_facts(approval_now, piece, labels, shop, understanding)
     prepared = prepared_email_path(store)

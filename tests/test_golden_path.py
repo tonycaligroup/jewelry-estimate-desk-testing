@@ -3074,6 +3074,7 @@ class PriorPieceTests(SideBranchTests):
             self.assertEqual((spec["stone_type"], spec["stone_origin"]), ("sapphire", "lab-grown"), "the new words win")
             self.assertEqual((spec["metal_karat"], spec["setting_style"], spec["earring_style"], spec["stone_carat"]), ("18k", "halo", "stud", 2.5),
                              "everything else from the earlier estimate")
+            self.assertIn("after the design we discussed before", estimate_record.vision_in_words(spec, on_file=estimate_record.prior_basis(self.record(ws, new_id))))
             self.assertEqual(self.record(ws, new_id)["prior_piece"]["estimate_id"], first_id)
             title = world.cards[-1]["title"]
             self.assertTrue(title.startswith("Price approval"), title)
@@ -3166,6 +3167,28 @@ class ReviveTests(SideBranchTests):
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
             self.assertNotEqual(world.cards[-1]["brief_id"], card["brief_id"], "a fresh card")
             self.assertEqual(self.record(ws, estimate_id)["status"], "pending_approval")
+        self.run_branch(branch)
+
+
+class OneTimeRateAnswerTests(SideBranchTests):
+    """'use 500 once' prices the estimate and leaves the rate card alone."""
+
+    def test_once_keeps_the_rate_off_the_card(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {"piece_type": "pendant", "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "stone_type": "ruby",
+                          "stone_origin": "lab-grown", "stone_carat": 1.0, "stone_shape": "round", "setting_style": "bezel", "center_stone": "yes"}
+            world.customer_message("ot1", "thread-once", "A 14k yellow gold pendant with a 1 ct round lab-grown ruby, bezel set. Estimate please.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([q["kind"] for q in self.questions(ws, "open") if not q.get("dormant")], ["missing_rate"])
+            answered = self.answer(ws, "use 500 once")
+            self.assertEqual(answered["value"], 500.0, answered)
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            self.assertNotIn("lab_grown_ruby", profile["pricing"]["stones_per_carat"], "the card is untouched")
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_from_record", "approval_requested")], summary)
+            self.assertIn("x $500.00", world.cards[-1]["title"])
+            self.assertEqual(self.record(ws, self.only_estimate(ws))["one_time_rates"], {"stones_per_carat": {"lab_grown_ruby": 500.0}})
         self.run_branch(branch)
 
 

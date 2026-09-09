@@ -9233,7 +9233,7 @@ class OwnerQuestionTests(unittest.TestCase):
                 "Tony Lomelino asked for a quote on a pendant in 14K white gold with a "
                 "lab-grown sapphire 0.75 ct. I do not have a per carat price for lab-grown "
                 "sapphire on your rate card. What price per carat should I use? Reply with "
-                'just the number, for example "use 450". '
+                'just the number, for example "use 450", to add it to your rate card, or "use 450 once" for this estimate only. '
                 f"(Question {owner_questions.reference(q['question_id'])}, estimate JED-0123456789ABCDEF)",
             )
             again, same = owner_questions.create_missing_rate(
@@ -10454,6 +10454,22 @@ class IDontKnowTests(unittest.TestCase):
         self.assertEqual(settled["stone_carat"], "jeweler's choice")
 
 
+class CarriedEarringStyleTests(unittest.TestCase):
+    """Live 9 Sep: the carried pair from an earlier estimate was still asked studs, hoops, or drops."""
+
+    def test_the_earlier_estimate_says_which_earrings(self) -> None:
+        prior = {"piece_type": "earrings", "reference_images": "from the photo: cushion halo studs", "metal": "18k white gold", "setting_style": "halo"}
+        carried = estimate_record.prior_piece_facts(prior, {"piece_type": "earrings", "stone_type": "diamond"})
+        self.assertEqual(carried["earring_style"], "stud")
+        self.assertEqual(estimate_record.prior_piece_facts({"piece_type": "hoop earrings"}, {"piece_type": "earrings"})["earring_style"], "hoop")
+        self.assertNotIn("earring_style", estimate_record.prior_piece_facts({"piece_type": "earrings"}, {"piece_type": "earrings"}))
+        self.assertIn("after the piece we made for you", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="made"))
+        self.assertIn("after the design we discussed before", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="estimate"))
+        self.assertEqual(estimate_record.prior_basis({"prior_piece": {"on_file": True, "owner": "details"}}), "made")
+        self.assertEqual(estimate_record.prior_basis({"prior_piece": {"on_file": True, "estimate_id": "jed-x"}}), "estimate")
+        self.assertFalse(estimate_record.prior_basis({}))
+
+
 class EarlierConversationTests(unittest.TestCase):
     """Live 9 Sep: 'the emerald earrings we talked about earlier' pointed at an estimate on file and was asked everything again."""
 
@@ -10490,3 +10506,101 @@ class CostSheetDraftTests(unittest.TestCase):
         self.assertEqual(sheet_mirror._editable_hash(rows), sheet_mirror._editable_hash(untouched))
         untouched[0][9] = "pending"
         self.assertNotEqual(sheet_mirror._editable_hash(rows), sheet_mirror._editable_hash(untouched))
+
+
+class RateCardTests(unittest.TestCase):
+    """The owner, 9 Sep: our fields, the jeweler's numbers; nothing shipped filled in."""
+
+    def test_the_card_ships_blank_and_reads_the_owners_numbers_back(self) -> None:
+        import rate_card
+        profile = {"pricing": {"model": "cost_plus_multiplier", "markup_multiplier": 2.0, "metal_per_gram": {}, "stones_per_carat": {},
+                               "fees": {}, "bench_labor_per_hour": None, "spot_metal": {"enabled": False}}}
+        rows = rate_card.rows_from_profile(profile)
+        self.assertEqual(rows[0], rate_card.HEADERS)
+        values = [r[3] for r in rows[1:] if r[0] not in ("pricing model",)]
+        self.assertTrue(all(v == "" for v in values), "no number ships with the desk")
+        self.assertIn(["metal per gram", "14K yellow gold", "14k_yellow_gold", "", "$/g", "", ""], rows)
+        # The owner fills a few cells, adds a stone of their own, and types words where a number belongs.
+        edited = [list(r) for r in rows]
+        for r in edited:
+            if r[2] == "14k_white_gold": r[3] = "70"
+            if r[2] == "bench_labor_per_hour": r[3] = "$95"
+            if r[2] == "prong": r[3] = "four dollars"
+            if r[2] == "target_margin": r[3] = "30%"
+        edited.append(["colored stones per carat", "Lab-grown spinel", "", "120", "", "", ""])
+        updated, changes, errors = rate_card.profile_from_rows(edited, profile)
+        self.assertEqual(updated["pricing"]["metal_per_gram"]["14k_white_gold"], 70.0)
+        self.assertEqual(updated["pricing"]["bench_labor_per_hour"], 95.0)
+        self.assertEqual(updated["pricing"]["stones_per_carat"]["lab_grown_spinel"], 120.0, "a row the schema lacks, keyed from its words")
+        self.assertEqual(updated["pricing"]["target_margin"], 0.3, "a percentage becomes a decimal")
+        self.assertEqual(errors, ["prong: 'four dollars' is not a number"])
+        self.assertEqual({c["key"] for c in changes}, {"pricing.metal_per_gram.14k_white_gold", "pricing.bench_labor_per_hour",
+                                                       "pricing.stones_per_carat.lab_grown_spinel", "pricing.target_margin"})
+        # Filled rows sort to the top of their section; a cleared cell unsets the rate.
+        again = rate_card.rows_from_profile(updated)
+        metal = [r for r in again if r[0] == "metal per gram"]
+        self.assertEqual(metal[0][2], "14k_white_gold")
+        cleared = [list(r) for r in again]
+        for r in cleared:
+            if r[2] == "14k_white_gold": r[3] = ""
+        updated2, changes2, _ = rate_card.profile_from_rows(cleared, updated)
+        self.assertNotIn("14k_white_gold", updated2["pricing"]["metal_per_gram"])
+        self.assertEqual([c["new"] for c in changes2], [None])
+
+    def test_apply_values_from_the_intake(self) -> None:
+        import rate_card
+        profile = {"pricing": {"model": "cost_plus_multiplier", "markup_multiplier": 2.0, "metal_per_gram": {}, "stones_per_carat": {},
+                               "fees": {}, "bench_labor_per_hour": None, "spot_metal": {"enabled": False}}}
+        updated, changes, errors = rate_card.apply_values(profile, {"14k_yellow_gold": 65, "bench_labor_per_hour": 90, "fees/laser_welding": 40,
+                                                                    "other/rhodium_plating": 35}, "intake")
+        self.assertEqual(updated["pricing"]["metal_per_gram"]["14k_yellow_gold"], 65.0)
+        self.assertEqual(updated["pricing"]["fees"]["laser_welding"], 40.0)
+        self.assertEqual(updated["pricing"]["custom"]["rhodium_plating"], 35.0)
+        self.assertEqual(errors, [])
+        self.assertTrue(all(c["source"] == "intake" for c in changes))
+
+
+class RatesIntakeTests(unittest.TestCase):
+    """The jeweler's own pricing notes onto the card; nothing invented."""
+
+    def test_the_notes_fill_what_they_state_and_the_rest_stays_blank(self) -> None:
+        import rates_intake
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            (ws / "estimate-desk").mkdir()
+            profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
+            profile["shop"]["name"] = "Lomelino Jewelry"
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps(profile))
+            answer = {"values": {"14k_yellow_gold": 65, "lab_grown_diamond_melee": 175, "bench_labor_per_hour": 90,
+                                 "fees/laser_welding": 40, "markup_multiplier": 2.0}, "unmatched": ["watch batteries $15"]}
+            with patch.object(rates_intake.judge, "ask_json", return_value=rates_intake.check_values(answer)):
+                result = rates_intake.intake(ws, "14k yellow gold $65/g; lab melee $175/ct; bench $90/hr; laser welding $40; markup 2x; watch batteries $15")
+            self.assertEqual(result["outcome"], "filled", result)
+            self.assertIn("pricing.metal_per_gram.14k_yellow_gold", result["filled"])
+            self.assertIn("pricing.fees.laser_welding", result["filled"])
+            self.assertIn("lab_grown_sapphire", result["still_blank"], "a rate the notes never stated stays blank")
+            self.assertEqual(result["unmatched"], ["watch batteries $15"])
+            saved = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text())
+            self.assertEqual(saved["pricing"]["metal_per_gram"]["14k_yellow_gold"], 65.0)
+            self.assertNotIn("natural_sapphire", saved["pricing"]["stones_per_carat"])
+            journal = json.loads((ws / "estimate-desk" / "run-work" / "rates-journal.json").read_text())
+            self.assertTrue(all(e["source"] == "intake" for e in journal))
+        self.assertEqual(rates_intake.check_values({"values": {"prong": "four", "bezel": 11, "model": "target_margin"}})["values"], {"bezel": 11.0, "model": "target_margin"})
+        with self.assertRaises(ValueError):
+            rates_intake.read_document(Path("/tmp/nope.xlsx"))
+
+
+class OneTimeRateTests(unittest.TestCase):
+    """'use 450 once': this estimate only, the card untouched."""
+
+    def test_a_one_time_rate_prices_this_record_and_stays_off_the_card(self) -> None:
+        import cost_components
+        record = {"one_time_rates": {"stones_per_carat": {"lab_grown_ruby": 500.0}}}
+        pricing = {"stones_per_carat": {"lab_grown_emerald": 400.0}, "metal_per_gram": {}}
+        merged = cost_components.with_one_time_rates(pricing, record)
+        self.assertEqual(merged["stones_per_carat"], {"lab_grown_emerald": 400.0, "lab_grown_ruby": 500.0})
+        self.assertEqual(pricing["stones_per_carat"], {"lab_grown_emerald": 400.0}, "the card itself is untouched")
+        self.assertIs(cost_components.with_one_time_rates(pricing, {}), pricing)
+        text = owner_questions.missing_rate_text({"rate": {"rate_kind": "stones_per_carat", "rate_key": "lab_grown_ruby", "description": "lab-grown ruby",
+                                                           "suggested_key": "lab_grown_ruby"}, "question_id": "q-1", "estimate_id": "jed-x", "customer_name": "Pat"})
+        self.assertIn('"use 450 once"', text)

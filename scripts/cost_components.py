@@ -289,6 +289,18 @@ def center_stone_card(card: Any) -> dict[str, Any]:
     return {key: value for key, value in card.items() if "melee" not in str(key).lower()}
 
 
+def with_one_time_rates(pricing: Any, record: dict[str, Any]) -> Any:
+    """The card plus the rates the owner gave for this estimate only ("use 450 once", 9 September 2026)."""
+    once = record.get("one_time_rates") if isinstance(record, dict) and isinstance(record.get("one_time_rates"), dict) else {}
+    if not isinstance(pricing, dict) or not once:
+        return pricing
+    merged = dict(pricing)
+    for kind, rates in once.items():
+        if isinstance(rates, dict):
+            merged[kind] = {**(pricing.get(kind) if isinstance(pricing.get(kind), dict) else {}), **rates}
+    return merged
+
+
 def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[dict[str, Any]]:
     """Rates the card lacks for this specification, in the order pricing needs them.
 
@@ -299,7 +311,7 @@ def missing_rates(record: dict[str, Any], shop_profile: dict[str, Any]) -> list[
     specification = record.get("specification")
     if not isinstance(specification, dict) or not specification:
         raise ValueError("the record has no specification; record the thread review first")
-    pricing = shop_profile.get("pricing")
+    pricing = with_one_time_rates(shop_profile.get("pricing"), record)
     if not isinstance(pricing, dict):
         raise ValueError("shop profile is missing its pricing block")
     missing: list[dict[str, Any]] = []
@@ -553,7 +565,7 @@ def prepare(
         raise ValueError(
             "the record has no specification; record the thread review first"
         )
-    pricing = shop_profile.get("pricing")
+    pricing = with_one_time_rates(shop_profile.get("pricing"), record)
     if not isinstance(pricing, dict):
         raise ValueError("shop profile is missing its pricing block")
     bench = pricing.get("bench_labor_per_hour")
@@ -703,6 +715,7 @@ def prepare(
             for item in _catalog(pricing.get("fees"))
         ],
         "stone_catalog": _catalog(pricing.get("stones_per_carat")),
+        "one_time_rates": record.get("one_time_rates") if isinstance(record.get("one_time_rates"), dict) else {},
         "metal_catalog": [] if spot_enabled else _catalog(pricing.get("metal_per_gram")),
     }
     if spot_enabled:
@@ -721,7 +734,7 @@ def finalize(
     skeleton: dict[str, Any], shop_profile: dict[str, Any]
 ) -> dict[str, Any]:
     """Normalize every rate, derive the price, and emit the approval state."""
-    pricing = shop_profile.get("pricing")
+    pricing = with_one_time_rates(shop_profile.get("pricing"), {"one_time_rates": skeleton.get("one_time_rates") or {}})
     if not isinstance(pricing, dict):
         raise ValueError("shop profile is missing its pricing block")
     unresolved = skeleton.get("unresolved") or []

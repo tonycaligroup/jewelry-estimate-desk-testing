@@ -33,10 +33,11 @@ import gateway_token
 import kolo_safe
 import ledger
 import owner_questions
+import rate_card
 
 BASE_URL = "https://gateway.maton.ai/google-sheets/v4/spreadsheets"
 TITLE = "Jewelry Estimate Desk"
-TABS = ("Customers", "This week", "Price cards", "Cost sheet", "Facts")
+TABS = ("Customers", "This week", "Price cards", "Cost sheet", "Rates", "Facts")
 HEADERS = {
     "Customers": ["Customer", "Email", "Piece", "Status", "Next meeting", "Last contact", "Still open", "Gmail thread", "Estimate"],
     "This week": ["When", "Customer", "Piece", "Status", "Estimate"],
@@ -45,6 +46,8 @@ HEADERS = {
     # owner edits Status, Quantity, Unit cost, and Details; the desk reads them back every tick.
     "Cost sheet": ["Date", "Customer", "Piece", "Line", "Item", "Quantity", "Unit", "Unit cost", "Line total", "Status", "Details", "Estimate"],
     "Facts": ["Customer", "Detail", "Value", "Source", "When", "Estimate"],
+    # The rate card: our fields, the jeweler's numbers (rate_card.py); the Value column is theirs, read back every tick.
+    "Rates": ["Section", "Field", "Key", "Value", "Unit", "Notes", "Updated"],
 }
 STATE_FILE = "sheet-mirror.json"
 COST_TAB = "Cost sheet"
@@ -357,7 +360,12 @@ def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
     for block in cost_blocks(workspace):
         costs.extend(block["rows"])
         costs.append([""] * len(HEADERS[COST_TAB]))
-    return {"Customers": customers, "This week": week, "Price cards": cards, "Cost sheet": costs, "Facts": facts}
+    try:
+        profile = json.loads((desk / "shop-profile.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        profile = {}
+    rates = rate_card.rows_from_profile(profile)
+    return {"Customers": customers, "This week": week, "Price cards": cards, "Cost sheet": costs, "Rates": rates, "Facts": facts}
 
 
 def _column(name: str) -> int:
@@ -666,14 +674,13 @@ def pull(workspace: Path, token: str | None = None, opener: Opener | None = None
     except (OSError, ValueError):
         state = {}
     known = state.get("cost_blocks") or {}
-    if not known:
-        return {"pulled": False, "reason": "nothing written yet"}
     result: dict[str, Any] = {"pulled": True, "drafts": [], "ready": [], "errors": []}
     try:
         token = token or gateway_token.load_token()
         on_sheet = parse_blocks(_read_cost_tab(str(mirror["id"]), token, opener))
     except OSError as exc:
         return {"pulled": False, "reason": str(exc)[:200]}
+    result["rates"] = _pull_rates(workspace, profile, str(mirror["id"]), token, opener, state)
     root = Path(workspace) / "estimate-desk" / "records"
     for estimate_id, existing in on_sheet.items():
         remembered = known.get(estimate_id)
@@ -707,6 +714,47 @@ def pull(workspace: Path, token: str | None = None, opener: Opener | None = None
                     pass
     _journal(state_path, {**state, "cost_blocks": known}, {**state.get("last", {}), "pull": result})
     return result
+
+
+def _pull_rates(workspace: Path, profile: dict[str, Any], sheet_id: str, token: str, opener: Opener | None,
+                state: dict[str, Any]) -> dict[str, Any]:
+    """The Value column of the Rates tab into the profile: numbers only, journaled; a bad cell is one chat question."""
+    try:
+        got = _call("GET", f"{BASE_URL}/{sheet_id}/values/'Rates'!A1:G2000", token, None, opener)
+    except OSError as exc:
+        return {"read": False, "reason": str(exc)[:160]}
+    values = got.get("values") if isinstance(got, dict) else None
+    if not isinstance(values, list) or len(values) < 2:
+        return {"read": True, "changes": 0}
+    digest = hashlib.sha256(json.dumps(values, default=str).encode("utf-8")).hexdigest()
+    if state.get("rates_digest") == digest:
+        return {"read": True, "changes": 0, "unchanged": True}
+    updated, changes, errors = rate_card.profile_from_rows(values, profile)
+    if changes:
+        try:
+            import validate_profile  # local import: only when the card changed
+
+            problems = [e for e in (validate_profile.validate_profile(updated).get("errors") or []) if str(e).startswith("pricing.")]
+        except Exception:  # noqa: BLE001
+            problems = []
+        if problems:
+            errors = errors + [f"the card as a whole: {'; '.join(problems)[:200]}"]
+            changes = []
+        else:
+            profile_path = Path(workspace) / "estimate-desk" / "shop-profile.json"
+            profile_path.write_text(json.dumps(updated, indent=2) + "\n", encoding="utf-8")
+            rate_card.journal(workspace, changes)
+    state["rates_digest"] = digest
+    if errors and state.get("rates_errors") != errors:
+        state["rates_errors"] = errors
+        try:
+            kolo_safe.tell_owner(Path(workspace) / "estimate-desk" / "inbox-monitor",
+                                 "On the Rates tab I could not read: " + "; ".join(errors)[:400] + ". Numbers only in the Value column.")
+        except Exception:  # noqa: BLE001
+            pass
+    elif not errors:
+        state.pop("rates_errors", None)
+    return {"read": True, "changes": len(changes), "changed": [c["key"] for c in changes][:20], "errors": errors}
 
 
 def _journal(state_path: Path, state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
