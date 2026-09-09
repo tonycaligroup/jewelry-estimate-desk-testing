@@ -3334,7 +3334,8 @@ def _draft_customer_email(p: dict[str, Path], record: dict[str, Any], message_id
     except Exception:  # noqa: BLE001 - a missing thread only costs the draft its context
         digest = {"messages": []}
     try:
-        return customer_mail.draft(kind, facts, digest, profile, fallback, switch.get("model"), judge_runner, openclaw)
+        return customer_mail.draft(kind, facts, digest, profile, fallback, switch.get("model"), judge_runner, openclaw,
+                                   customer_name=estimate_record.customer_first_name(record))
     except Exception:  # noqa: BLE001 - the fixed text always goes out
         return fallback, "fallback"
 

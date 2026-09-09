@@ -233,15 +233,16 @@ def draft(
     model: str | None = None,
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
+    customer_name: str = "",
 ) -> tuple[str, str]:
-    """(body, source): source is "model" or "fallback". Never raises."""
+    """(body, source): source is "model" or "fallback". Never raises. `customer_name` is the owner's correction, when they made one."""
     if kind not in KIND_BRIEFS:
         raise ValueError("unsupported email kind")
     shop = profile.get("shop") or {}
     voice = str(shop.get("voice") or DEFAULT_VOICE)
     shop_name = str(shop.get("name") or "the shop")
     previous = _last_desk_email(digest)
-    sender = gmail_text.sender_first_name(digest)
+    sender = (str(customer_name or "").strip().split() or [""])[0].strip(",.") or gmail_text.sender_first_name(digest)
     if sender:
         facts = {**facts, "the customer's name, from their address line": sender + " (address them by it, never by someone "
                  "else they mention, such as the person the piece is for)"}

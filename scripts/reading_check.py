@@ -84,6 +84,9 @@ def _customer_text(digest: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
+_CARAT_RANGE_RE = re.compile(r"(?i)\b(\d+(?:\.\d+)?)\s*(?:ct|carats?)?\s*(?:to|-|–|or)\s*(\d+(?:\.\d+)?)\s*(?:ct|carats?)\b")
+
+
 def _number(value: Any) -> float | None:
     match = re.search(r"\d+(?:\.\d+)?", str(value or ""))
     return float(match.group(0)) if match else None
@@ -125,10 +128,13 @@ def compare(digest: dict[str, Any], specification: dict[str, Any]) -> list[dict[
     elif len(sizes) == 1 and read_sizes and not sizes & read_sizes:
         add("finger_size", "size " + next(iter(sizes)), "size " + ", ".join(read_sizes))
 
-    # Carats: a figure in the text that no piece's center stone carries.
+    # Carats: a figure in the text that no piece's center stone carries. A range ("2 to 3 ct") agrees with any
+    # reading inside it (live, 9 September 2026: "maybe in the 2 to 3ct range" was asked to confirm the carat).
     carats = {f"{float(m.group(1)):g}" for m in _CARAT_RE.finditer(text)}
     read_carats = {f"{n:g}" for n in (_number(p.get("stone_carat")) for p in pieces) if n is not None}
-    if carats and read_carats and not carats & read_carats:
+    ranges = [(float(m.group(1)), float(m.group(2))) for m in _CARAT_RANGE_RE.finditer(text)]
+    inside = any(lo <= float(r) <= hi for r in read_carats for lo, hi in ranges) if ranges else False
+    if carats and read_carats and not carats & read_carats and not inside:
         add("stone_carat", ", ".join(sorted(carats, key=float)) + " ct", ", ".join(sorted(read_carats, key=float)) + " ct")
 
     # Origin: a plain lab or natural word against the opposite reading.

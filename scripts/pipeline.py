@@ -275,7 +275,7 @@ def _send_followup(
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
                                        shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding,
-                                       questions=question_lines(missing, specification))
+                                       questions=question_lines(missing, specification), customer_name=estimate_record.customer_first_name(record_now))
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
@@ -853,6 +853,8 @@ def process_claim(
     specification = estimate_record.settle_earring_style(specification, handled_words)
     # "15mm x 12mm oval": a stone sized in millimetres is sized; the carat is the jeweler's to derive, never asked.
     specification = estimate_record.settle_stone_dimensions(specification, handled_words)
+    # "maybe in the 2 to 3 ct range": the top of the range is priced and the range is the assumption, never a question.
+    specification = estimate_record.settle_carat_range(specification, handled_words)
     made_before = estimate_record.refers_to_a_prior_piece(handled_words)
     talked_before = estimate_record.refers_to_an_earlier_conversation(handled_words)
     if initiating and (made_before or talked_before) and not record.get("prior_piece"):

@@ -198,6 +198,9 @@ def _choices(specification: Any) -> str:
     size = str(specification.get("stone_dimensions") or "").strip()
     if size and not specification.get("stone_carat"):
         parts.append(f"stone sized {size}, carat estimated from it")
+    carat_range = str(specification.get("stone_carat_range") or "").strip()
+    if carat_range and specification.get("stone_carat"):
+        parts.append(f"priced at the top of their {carat_range} range")
     reference = str(specification.get("reference_images") or "").strip()
     if reference.lower().startswith("from the photo"):
         parts.append(reference[:120])

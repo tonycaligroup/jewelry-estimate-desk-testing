@@ -2003,6 +2003,39 @@ def set_one_time_rate(root: Path, estimate_id: str, rate_kind: str, rate_key: st
         return record
 
 
+CUSTOMER_FIELDS = ("name", "phone", "notes")
+
+
+def save_customer_overrides(root: Path, estimate_id: str, values: dict[str, Any]) -> dict[str, Any]:
+    """What the owner typed about the person on the Customers tab: a corrected name, a phone, notes (9 September 2026)."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        block = {k: str(values.get(k) or "").strip()[:200] for k in CUSTOMER_FIELDS if str(values.get(k) or "").strip()}
+        if block:
+            record["customer_overrides"] = {**block, "at": datetime.now(timezone.utc).isoformat()}
+        else:
+            record.pop("customer_overrides", None)
+        write_object(path, record)
+        return record
+
+
+def customer_name(record: dict[str, Any] | None) -> str:
+    """The owner's corrected name when they gave one, else the address line's display name."""
+    override = (record or {}).get("customer_overrides") if isinstance((record or {}).get("customer_overrides"), dict) else {}
+    if override.get("name"):
+        return str(override["name"])
+    import kolo_safe  # local import: kolo_safe imports this module
+
+    return kolo_safe._sender_display(str(((record or {}).get("route") or {}).get("recipient") or ""))
+
+
+def customer_first_name(record: dict[str, Any] | None) -> str:
+    override = (record or {}).get("customer_overrides") if isinstance((record or {}).get("customer_overrides"), dict) else {}
+    name = str(override.get("name") or "").strip()
+    return name.split()[0].strip(",.") if name else ""
+
+
 def save_sheet_draft(root: Path, estimate_id: str, draft: dict[str, Any]) -> dict[str, Any]:
     """What the owner typed on the cost sheet, kept on the record so nothing typed is lost (9 September 2026)."""
     path = record_path(root, estimate_id)
@@ -2158,6 +2191,37 @@ def stone_size_in_words(own_words: str) -> str | None:
     """The stone size in millimetres the customer wants ('15mm x 12mm'); the last one named when they compare sizes."""
     found = [f"{a}mm x {b}mm" for a, b in _MM_SIZE_RE.findall(str(own_words or ""))]
     return found[-1] if found else None
+
+
+_CARAT_RANGE_WORDS_RE = re.compile(r"(?i)\b(\d+(?:\.\d+)?)\s*(?:ct|carats?)?\s*(?:to|-|–|or)\s*(\d+(?:\.\d+)?)\s*(?:ct|carats?)\b")
+
+
+def settle_carat_range(specification: dict[str, Any], own_words: str) -> dict[str, Any]:
+    """"Maybe in the 2 to 3 ct range": the top of the range is priced (estimated high), the range shown as the assumption.
+
+    Live (9 September 2026): the reading took the middle, the check saw a
+    figure the reading lacked, and the customer was asked to confirm a carat
+    they had given as a range. A range is an answer.
+    """
+    if not isinstance(specification, dict):
+        return specification
+    raw = specification.get("pieces")
+    if isinstance(raw, list) and len(raw) > 1:
+        return specification
+    match = _CARAT_RANGE_WORDS_RE.search(str(own_words or ""))
+    if not match:
+        return specification
+    low, high = float(match.group(1)), float(match.group(2))
+    if not 0 < low < high < 100:
+        return specification
+    current = specification.get("stone_carat")
+    try:
+        number = float(current) if current not in (None, "") else None
+    except (TypeError, ValueError):
+        number = None
+    if number is not None and not (low <= number <= high):
+        return specification  # a carat outside the range came from somewhere else; leave it
+    return {**specification, "stone_carat": high, "stone_carat_range": f"{low:g} to {high:g} ct"}
 
 
 def settle_stone_dimensions(specification: dict[str, Any], own_words: str) -> dict[str, Any]:

@@ -39,7 +39,8 @@ BASE_URL = "https://gateway.maton.ai/google-sheets/v4/spreadsheets"
 TITLE = "Jewelry Estimate Desk"
 TABS = ("Customers", "This week", "Price cards", "Cost sheet", "Rates", "Facts")
 HEADERS = {
-    "Customers": ["Customer", "Email", "Piece", "Status", "Next meeting", "Last contact", "Still open", "Gmail thread", "Estimate"],
+    # Customer, Phone, and Notes are the owner's to edit (read back every tick, 9 September 2026); the rest is the desk's.
+    "Customers": ["Customer", "Email", "Phone", "Notes", "Piece", "Status", "Next meeting", "Last contact", "Still open", "Gmail thread", "Estimate"],
     "This week": ["When", "Customer", "Piece", "Status", "Estimate"],
     "Price cards": ["Date", "Customer", "Piece", "Quote", "Hard cost", "Profit", "Margin", "Assumptions", "Outcome", "Estimate"],
     # The owner, 9 September 2026: the full cost breakdown, one block per estimate, one row per cost line. The
@@ -314,13 +315,14 @@ def rows_for(workspace: Path) -> dict[str, list[list[Any]]]:
     for record in records:
         route = record.get("route") or {}
         recipient = str(route.get("recipient") or "")
-        name, email = _display(recipient), _address(recipient)
+        name, email = estimate_record.customer_name(record) or _display(recipient), _address(recipient)
+        overrides = record.get("customer_overrides") if isinstance(record.get("customer_overrides"), dict) else {}
         spec = record.get("specification") or {}
         piece = owner_questions.summary_of_piece(spec) if spec else "their piece"
         booked = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else None
         next_meeting = _when(booked["confirmed_start"]) if booked and booked.get("confirmed_start") else ""
-        customers.append([name, email, piece, _status_words(record), next_meeting, _last_contact(record), _open_words(record),
-                          _thread_link(record), record.get("estimate_id", "")])
+        customers.append([name, email, str(overrides.get("phone") or ""), str(overrides.get("notes") or ""), piece, _status_words(record),
+                          next_meeting, _last_contact(record), _open_words(record), _thread_link(record), record.get("estimate_id", "")])
         if booked and booked.get("confirmed_start"):
             try:
                 start = datetime.fromisoformat(str(booked["confirmed_start"]).replace("Z", "+00:00"))
@@ -681,6 +683,7 @@ def pull(workspace: Path, token: str | None = None, opener: Opener | None = None
     except OSError as exc:
         return {"pulled": False, "reason": str(exc)[:200]}
     result["rates"] = _pull_rates(workspace, profile, str(mirror["id"]), token, opener, state)
+    result["customers"] = _pull_customers(workspace, str(mirror["id"]), token, opener, state)
     root = Path(workspace) / "estimate-desk" / "records"
     for estimate_id, existing in on_sheet.items():
         remembered = known.get(estimate_id)
@@ -714,6 +717,42 @@ def pull(workspace: Path, token: str | None = None, opener: Opener | None = None
                     pass
     _journal(state_path, {**state, "cost_blocks": known}, {**state.get("last", {}), "pull": result})
     return result
+
+
+def _pull_customers(workspace: Path, sheet_id: str, token: str, opener: Opener | None, state: dict[str, Any]) -> dict[str, Any]:
+    """Customer, Phone, and Notes typed on the Customers tab go onto the record; the other columns are ignored."""
+    try:
+        got = _call("GET", f"{BASE_URL}/{sheet_id}/values/'Customers'!A1:K5000", token, None, opener)
+    except OSError as exc:
+        return {"read": False, "reason": str(exc)[:160]}
+    values = got.get("values") if isinstance(got, dict) else None
+    if not isinstance(values, list) or len(values) < 2:
+        return {"read": True, "changed": []}
+    digest = hashlib.sha256(json.dumps(values, default=str).encode("utf-8")).hexdigest()
+    if state.get("customers_digest") == digest:
+        return {"read": True, "changed": [], "unchanged": True}
+    state["customers_digest"] = digest
+    columns = HEADERS["Customers"]
+    root = Path(workspace) / "estimate-desk" / "records"
+    changed: list[str] = []
+    for row in values[1:]:
+        cells = [str(c) if c is not None else "" for c in row] + [""] * (len(columns) - len(row))
+        estimate_id = cells[columns.index("Estimate")].strip()
+        if not estimate_id.startswith("jed-"):
+            continue
+        try:
+            record = estimate_record.read_object(estimate_record.record_path(root, estimate_id))
+        except (OSError, ValueError):
+            continue
+        typed = {"name": cells[columns.index("Customer")].strip(), "phone": cells[columns.index("Phone")].strip(), "notes": cells[columns.index("Notes")].strip()}
+        default_name = _display(str((record.get("route") or {}).get("recipient") or ""))
+        if typed["name"] == default_name:
+            typed["name"] = ""  # the desk's own name is not a correction
+        current = record.get("customer_overrides") if isinstance(record.get("customer_overrides"), dict) else {}
+        if {k: current.get(k, "") for k in ("name", "phone", "notes")} != typed:
+            estimate_record.save_customer_overrides(root, estimate_id, typed)
+            changed.append(estimate_id)
+    return {"read": True, "changed": changed}
 
 
 def _pull_rates(workspace: Path, profile: dict[str, Any], sheet_id: str, token: str, opener: Opener | None,

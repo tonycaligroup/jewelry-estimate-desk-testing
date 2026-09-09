@@ -172,7 +172,7 @@ class PassingSheetMirrorBehaviourTests(unittest.TestCase):
             ws = _workspace(d, [record])
             row = sheet_mirror.rows_for(ws)["Customers"][1]
             self.assertEqual(row[0], "Pat Doe")
-            self.assertEqual(row[2], "their piece")
+            self.assertEqual(row[4], "their piece")
 
     def test_a_record_closed_as_not_an_inquiry_is_never_listed(self) -> None:
         """Live 9 Sep: vendor and personal mail opened records that triage closed, and the sheet listed them as customers."""
@@ -243,7 +243,7 @@ class PassingSheetMirrorBehaviourTests(unittest.TestCase):
                       "route": {"recipient": "Pat Doe <pat@example.net>"}}
             ws = _workspace(d, [record])
             row = sheet_mirror.rows_for(ws)["Customers"][1]
-            self.assertEqual(row[3], "closed")
+            self.assertEqual(row[5], "closed")
 
     def test_a_booking_in_the_past_is_excluded_from_this_week_a_future_one_is_included(self) -> None:
         with tempfile.TemporaryDirectory() as d:

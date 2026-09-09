@@ -7069,8 +7069,8 @@ class SheetMirrorTests(unittest.TestCase):
             customers = puts["'Customers'!A:Z"]
             self.assertEqual(customers[0], sheet_mirror.HEADERS["Customers"])
             self.assertEqual(customers[1][0], "Michael Park")
-            self.assertIn("estimate sent $5,738", customers[1][3])
-            self.assertIn("mail.google.com", customers[1][7])
+            self.assertIn("estimate sent $5,738", customers[1][5])
+            self.assertIn("mail.google.com", customers[1][9])
             cards = puts["'Price cards'!A:Z"]
             self.assertEqual(cards[1][3], "$5,738.00")
             self.assertEqual(cards[1][5], "$2,869.00")
@@ -10604,3 +10604,79 @@ class OneTimeRateTests(unittest.TestCase):
         text = owner_questions.missing_rate_text({"rate": {"rate_kind": "stones_per_carat", "rate_key": "lab_grown_ruby", "description": "lab-grown ruby",
                                                            "suggested_key": "lab_grown_ruby"}, "question_id": "q-1", "estimate_id": "jed-x", "customer_name": "Pat"})
         self.assertIn('"use 450 once"', text)
+
+
+class CustomersTabEditsTests(unittest.TestCase):
+    """The owner corrects a name or adds a phone and notes on the Customers tab; the desk keeps them and uses the name."""
+
+    def test_the_owners_name_wins_in_the_greeting_check(self) -> None:
+        import customer_mail
+        record = {"route": {"recipient": "D Trujillo <d@example.net>"}, "customer_overrides": {"name": "David Trujillo"}}
+        self.assertEqual(estimate_record.customer_name(record), "David Trujillo")
+        self.assertEqual(estimate_record.customer_first_name(record), "David")
+        self.assertEqual(estimate_record.customer_name({"route": {"recipient": "Pat Doe <pat@example.net>"}}), "Pat Doe")
+        digest = {"messages": [{"from": "D Trujillo <d@example.net>", "sent_by": "customer", "claimed": True, "body": "hi"}]}
+        seen: dict = {}
+        def fake_ask(prompt, check, *a, **k):
+            seen["prompt"] = prompt
+            return check({"body": "Hi David,\n\nHappy to set up a time to go over the design for the pendant together. Reply with the one that works for you, or tell me what does and I will find something.\n\nLomelino Jewelry"})
+        with patch.object(customer_mail.judge, "ask_json", fake_ask):
+            body, source = customer_mail.draft("offer", {"time_labels": []}, digest, {"shop": {"name": "Lomelino Jewelry"}}, "fallback", customer_name="David Trujillo")
+        self.assertEqual(source, "model")
+        self.assertIn("the customer's name, from their address line: David", seen["prompt"])
+
+    def test_saving_overrides_and_reading_them_from_the_tab(self) -> None:
+        import sheet_mirror
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            root = ws / "estimate-desk" / "records"
+            root.mkdir(parents=True)
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps({"schema_version": 1, "shop": {"name": "Lomelino Jewelry"}}))
+            record = {"estimate_id": "jed-00000000000000dd", "status": "awaiting_specs", "route": {"recipient": "D Trujillo <d@example.net>", "thread_id": "t"},
+                      "specification": {"piece_type": "pendant"}}
+            (root / "jed-00000000000000dd.json").write_text(json.dumps(record))
+            rows = sheet_mirror.rows_for(ws)["Customers"]
+            self.assertEqual(rows[0][:4], ["Customer", "Email", "Phone", "Notes"])
+            self.assertEqual(rows[1][:4], ["D Trujillo", "d@example.net", "", ""])
+            typed = [list(r) for r in rows]
+            typed[1][0], typed[1][2], typed[1][3] = "David Trujillo", "555-0100", "sister's birthday in October"
+            got = {"values": typed}
+            state: dict = {}
+            result = sheet_mirror._pull_customers(ws, "SHEET1", "tok", lambda request, timeout=30: _json_response(got), state)
+            self.assertEqual(result["changed"], ["jed-00000000000000dd"])
+            saved = json.loads((root / "jed-00000000000000dd.json").read_text())
+            self.assertEqual({k: saved["customer_overrides"][k] for k in ("name", "phone", "notes")},
+                             {"name": "David Trujillo", "phone": "555-0100", "notes": "sister's birthday in October"})
+            self.assertEqual(sheet_mirror.rows_for(ws)["Customers"][1][:4], ["David Trujillo", "d@example.net", "555-0100", "sister's birthday in October"])
+            again = sheet_mirror._pull_customers(ws, "SHEET1", "tok", lambda request, timeout=30: _json_response(got), state)
+            self.assertTrue(again.get("unchanged"), "an unchanged tab is not read into the records again")
+
+
+def _json_response(payload: dict):
+    class Resp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    return Resp(json.dumps(payload).encode("utf-8"))
+
+
+class CaratRangeTests(unittest.TestCase):
+    """Live 9 Sep (engagement ring): 'maybe in the 2 to 3ct range' was asked to confirm the carat, and the second follow-up opened like the first."""
+
+    def test_a_range_is_an_answer_priced_at_its_top(self) -> None:
+        import reading_check
+        words = "That sounds right, but I'm not entirely sure about the specifics yet. Maybe in the 2 to 3ct range? Her finger size is a 6 i think but unsure."
+        spec = estimate_record.settle_carat_range({"piece_type": "engagement ring", "stone_type": "diamond", "stone_carat": 2.5}, words)
+        self.assertEqual((spec["stone_carat"], spec["stone_carat_range"]), (3.0, "2 to 3 ct"))
+        self.assertNotIn("stone_carat_range", estimate_record.settle_carat_range({"piece_type": "ring", "stone_carat": 1.0}, "a 1 ct stone"))
+        self.assertEqual(estimate_record.settle_carat_range({"piece_type": "ring", "stone_carat": 5.0}, words)["stone_carat"], 5.0, "a carat outside the range stands")
+        digest = {"messages": [{"sent_by": "customer", "claimed": True, "body": words}]}
+        self.assertEqual(reading_check.compare(digest, {"piece_type": "engagement ring", "stone_carat": 2.5, "finger_size": "6"}), [], "no confirm question for a range")
+        self.assertEqual(reading_check.compare(digest, {"piece_type": "engagement ring", "stone_carat": 3, "finger_size": "6"}), [])
+        self.assertIn("priced at the top of their 2 to 3 ct range", kolo_safe._choices(spec))
+
+    def test_the_second_follow_up_does_not_open_like_the_first(self) -> None:
+        previous = "Hi David,\n\nIt is wonderful to hear you are planning such a special moment for your partner this year. I would love to put this together.\n\n- Which cut or shape?\n\nLomelino Jewelry"
+        check = judge.check_body_covers(["stone_cut"], None, "David", ["Which cut or shape?"], previous)
+        with self.assertRaisesRegex(ValueError, "same sentence"):
+            check({"body": "Hi David,\n\nIt is wonderful to hear you are planning such a special moment for your partner this year. Thanks for the range.\n\n- Which cut or shape?\n\nLomelino Jewelry"})
+        self.assertIn("body", check({"body": "Hi David,\n\nA 2 to 3 ct stone and a size 6 give me plenty to work with. One last thing:\n\n- Which cut or shape?\n\nLomelino Jewelry"}))

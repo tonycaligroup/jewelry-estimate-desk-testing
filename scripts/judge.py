@@ -648,9 +648,15 @@ def words_covered(body: str, text: str) -> bool:
     return hits * 2 >= len(words)
 
 
-def check_body_covers(missing_fields: list[str], understanding: str | None = None, sender: str = "", questions: list[str] | None = None):
+def check_body_covers(missing_fields: list[str], understanding: str | None = None, sender: str = "", questions: list[str] | None = None,
+                      previous: str = ""):
     def check(value: dict[str, Any]) -> dict[str, Any]:
         result = check_body(value)
+        if previous:
+            import customer_mail  # local import: customer_mail imports this module
+
+            if customer_mail._opening(result["body"]) and customer_mail._opening(result["body"]) == customer_mail._opening(previous):
+                raise ValueError("do not open with the same sentence as the shop's last email on this thread; react to what they just said")
         import gmail_text  # local import: gmail_text does not depend on this module
 
         other = gmail_text.greets_someone_else(result["body"], sender)
@@ -688,11 +694,12 @@ def draft_followup(
     photos: list[str] | None = None,
     understanding: str | None = None,
     questions: list[str] | None = None,
+    customer_name: str = "",
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing; a photo's vision is confirmed first."""
     import gmail_text  # local import: gmail_text does not depend on this module
 
-    sender = gmail_text.sender_first_name(digest)
+    sender = (str(customer_name or "").strip().split() or [""])[0].strip(",.") or gmail_text.sender_first_name(digest)
     closing = "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. "
     prompt = (
         "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
@@ -728,7 +735,9 @@ def draft_followup(
         + f"TEMPLATE (tone and structure only):\n{template}\n\n"
         f"THREAD:\n{thread_text(digest)}"
     )
-    return ask_json(prompt, check_body_covers(list(missing_fields), understanding, sender, questions), model, runner, openclaw, temperature=DRAFT_TEMPERATURE)
+    previous = next((str(m.get("body") or "") for m in reversed(digest.get("messages") or []) if m.get("sent_by") == "shop"), "")
+    return ask_json(prompt, check_body_covers(list(missing_fields), understanding, sender, questions, previous), model, runner, openclaw,
+                    temperature=DRAFT_TEMPERATURE)
 
 
 LOCAL_DATETIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
