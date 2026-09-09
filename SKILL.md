@@ -281,7 +281,8 @@ customer's written word is never overwritten. A stone's color and clarity are
 never asked: the jeweler chooses, and the card and the estimate say so.
 
 The desk asks a customer only what they can answer about what they want (metal,
-karat, color, stone, origin, a ring size, a rough length) and interprets the
+karat, color, stone, origin, a ring size, a rough length, studs, hoops, or drops
+for earrings) and interprets the
 reference and the description for the rest; it never asks a technical question
 (millimetres, diameters, drop lengths, weights, prong or stone counts), and a
 customer's "I don't know" makes that detail the jeweler's choice.
