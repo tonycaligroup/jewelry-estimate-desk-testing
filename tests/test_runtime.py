@@ -10680,3 +10680,72 @@ class CaratRangeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "same sentence"):
             check({"body": "Hi David,\n\nIt is wonderful to hear you are planning such a special moment for your partner this year. Thanks for the range.\n\n- Which cut or shape?\n\nLomelino Jewelry"})
         self.assertIn("body", check({"body": "Hi David,\n\nA 2 to 3 ct stone and a size 6 give me plenty to work with. One last thing:\n\n- Which cut or shape?\n\nLomelino Jewelry"}))
+
+
+class GatedPricingRulesTests(unittest.TestCase):
+    """Tier 2 (the owner, 9 Sep): each rule switches on only when the jeweler's own number is on the card."""
+
+    PRICING = {"model": "cost_plus_multiplier", "markup_multiplier": 2.0, "metal_per_gram": {"14k_yellow_gold": 65.0},
+               "stones_per_carat": {"lab_grown_sapphire": 300.0, "natural_diamond_melee_small": 450.0, "lab_grown_diamond_melee_small": 175.0},
+               "fees": {"casting": 120.0}, "bench_labor_per_hour": 90.0, "spot_metal": {"enabled": False},
+               "setting_labor": {"center_1_to_1_99": 60.0, "pave": 5.0, "bezel_extra_pct": 40.0, "fancy_shape_extra_pct": 25.0},
+               "allowances": {"metal_waste_pct": 8.0, "melee_waste_pct": 5.0, "contingency_normal_pct": 10.0}, "minimum_job": 5000.0}
+    LINES = {"metal_lines": [{"metal": "14K yellow gold", "rate_key": "14k_yellow_gold", "quantity_grams": 5.0, "unit_cost": 65.0}],
+             "stone_lines": [{"stone": "lab-grown sapphire", "rate_key": "lab_grown_sapphire", "quantity": 1.5, "unit_cost": 300.0},
+                             {"stone": "natural diamond melee", "rate_key": "natural_diamond_melee_small", "quantity": 0.18, "unit_cost": 450.0}],
+             "labor_lines": [{"task": "bench labor", "hours": 3.0, "rate": 90.0}],
+             "other_hard_cost_lines": [{"label": "casting", "rate_key": "casting", "total_cost": 120.0}]}
+    SPEC = {"piece_type": "ring", "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_shape": "oval", "setting_style": "bezel",
+            "accent_stones": "18 x 1.3mm natural diamonds, pave", "accent_stone_origin": "natural", "center_stone": "yes"}
+
+    def test_the_allowance_lines_follow_from_the_card_and_the_provenance_check_redoes_them(self) -> None:
+        import cost_components, copy
+        lines = copy.deepcopy(self.LINES)
+        added = cost_components.apply_allowances(lines, self.PRICING, self.SPEC)
+        by = {l["rate_key"]: l for l in added}
+        self.assertAlmostEqual(by["allowance:setting_labor:center_1_to_1_99"]["total_cost"], 60 * 1.65, places=2, msg="oval and bezel extras")
+        self.assertEqual(by["allowance:setting_labor:pave"]["total_cost"], 90.0, "18 stones at $5")
+        self.assertAlmostEqual(by["allowance:allowances:metal_waste_pct"]["total_cost"], 325 * 0.08, places=2)
+        self.assertAlmostEqual(by["allowance:allowances:melee_waste_pct"]["total_cost"], 81 * 0.05, places=2)
+        subtotal = 325 + 450 + 81 + 270 + 120 + 99 + 90 + 26 + 4.05
+        self.assertAlmostEqual(by["allowance:allowances:contingency_normal_pct"]["basis"], subtotal, delta=0.01)
+        self.assertAlmostEqual(by["allowance:pricing:minimum_job"]["total_cost"], 5000 - subtotal * 1.1, delta=0.02)
+        # The provenance check accepts them and refuses a tampered one.
+        sheet = {"metal_lines": lines["metal_lines"], "stone_lines": lines["stone_lines"], "labor_lines": lines["labor_lines"],
+                 "other_hard_cost_lines": lines["other_hard_cost_lines"] + added}
+        estimate_record.enforce_rate_provenance(sheet, self.PRICING)
+        bad = copy.deepcopy(sheet)
+        bad["other_hard_cost_lines"][-1]["total_cost"] += 1
+        with self.assertRaisesRegex(ValueError, "does not follow"):
+            estimate_record.enforce_rate_provenance(bad, self.PRICING)
+        # With none of those numbers on the card, nothing is added.
+        bare = {k: v for k, v in self.PRICING.items() if k not in ("setting_labor", "allowances", "minimum_job")}
+        self.assertEqual(cost_components.apply_allowances(copy.deepcopy(self.LINES), bare, self.SPEC), [])
+
+    def test_sized_melee_uses_the_chart_and_the_size_band(self) -> None:
+        import cost_components
+        self.assertEqual(cost_components.carats_for_mm(1.3), 0.01)
+        self.assertAlmostEqual(cost_components.carats_for_mm(1.25), 0.009, places=3)
+        self.assertIsNone(cost_components.carats_for_mm(7.0))
+        self.assertEqual(cost_components.accent_count_and_size({"accent_stones": "18 x 1.3mm natural diamonds"}), (18, 1.3))
+        self.assertEqual(cost_components.accent_count_and_size({"accent_stones": "twelve small diamonds"}), None)
+        sized = cost_components.sized_melee({"accent_stones": "18 x 1.3mm diamonds", "accent_stone_origin": "natural"}, self.PRICING)
+        self.assertEqual((sized["key"], sized["carats"], sized["count"]), ("natural_diamond_melee_small", 0.18, 18))
+        self.assertIsNone(cost_components.sized_melee({"accent_stones": "18 x 3.5mm diamonds", "accent_stone_origin": "natural"}, self.PRICING),
+                          "no rate for that size band: nothing to price from")
+        self.assertEqual(cost_components.melee_band_key("lab-grown", 2.0), "lab_grown_diamond_melee_small")
+        self.assertEqual(cost_components.melee_band_key("natural", 3.0), "natural_diamond_melee_large")
+
+    def test_a_lab_center_above_the_line_is_asked_for_not_guessed(self) -> None:
+        import cost_components
+        pricing = {**self.PRICING, "stones_per_carat": {**self.PRICING["stones_per_carat"], "lab_grown_diamond": 400.0}, "lab_center_live_quote_ct": 2.0}
+        stone = {"stone_type": "diamond", "origin": ("lab", "grown"), "carat": 2.5}
+        self.assertEqual(cost_components.live_quote_key(stone, pricing), "lab_grown_diamond_center_2_5ct")
+        self.assertIsNone(cost_components.live_quote_key({**stone, "carat": 1.0}, pricing))
+        self.assertIsNone(cost_components.live_quote_key(stone, {**pricing, "lab_center_live_quote_ct": None}))
+        record = {"specification": {"piece_type": "ring", "stone_type": "diamond", "stone_origin": "lab-grown", "stone_carat": 2.5, "center_stone": "yes",
+                                    "metal": "14k yellow gold"}}
+        missing = cost_components.missing_rates(record, {"pricing": pricing})
+        self.assertEqual([m["suggested_key"] for m in missing], ["lab_grown_diamond_center_2_5ct"])
+        self.assertIn("live quote", missing[0]["description"])
+        self.assertEqual(cost_components.missing_rates({"specification": {**record["specification"], "stone_carat": 1.0}}, {"pricing": pricing}), [])

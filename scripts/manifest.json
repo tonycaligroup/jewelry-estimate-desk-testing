@@ -2,19 +2,19 @@
   "files": {
     "activation_binding.py": "8feae734601e7c35c6874014b130de58",
     "appointment_options.py": "70fe9ea4bcc25f9eedc48cb442c5bbac",
-    "approval_guard.py": "1502cc22754bd8f3e87abe560cd6d691",
+    "approval_guard.py": "6e48bcdca9434ad018384fb972870149",
     "artwork.py": "16c33aa10dd2bc3b39997c471ec74f3f",
     "brief_registry.py": "9b86561d08a561cc1fe11f2200ef831c",
     "business_state_reset.py": "464187ae198afce7f2e5ff0257cbff0e",
     "calendar_query.py": "fb0fbac384cb45e0406a8ae936510f3e",
     "cli.py": "11dc98d7c9f266c70225fe7110b4d9df",
-    "cost_components.py": "dc528e466b43febc5306c9ed757e774e",
+    "cost_components.py": "474a8c24a0f599eca8dcb333ff2c55bd",
     "cron_config.py": "2d60a0ef3e06d91030186b9aab52a836",
     "customer_content_guard.py": "d21e5b76a2da0e67e91f806674ade777",
     "customer_mail.py": "62f321893dcd93fffb883cb70496b87f",
     "customer_state_reset.py": "e58516280744282cb70ca278a5e4b341",
     "doctor.py": "ee93e435e15850b0980547e535398cb1",
-    "estimate_record.py": "6efaca68785f0994c4a366aa4685d0d1",
+    "estimate_record.py": "11847913203a2dea53a710304523f3a9",
     "gateway_token.py": "d1742620e7d3af2005928733f400ab24",
     "gmail_classify.py": "e1dd64f4f7f765d99f10b365ded9780b",
     "gmail_fetch.py": "3eed73faa64e87dfa50a9c7f1a2d220f",
@@ -31,9 +31,9 @@
     "ledger.py": "c2f064c932036216fed5f0b5e671c4ba",
     "manifest.py": "a94d8af8a570000c8e2dbe027243555f",
     "owner_questions.py": "a22c9814b3f96056e1dd2659cf20b0bf",
-    "pipeline.py": "60c33de99095cba41b0c28ac691d5fe4",
+    "pipeline.py": "f3e07076136e3d2fd01c9d94dea7ed98",
     "pricing_model.py": "133e46b1d5047ff321ea0f2e38fe8c57",
-    "rate_card.py": "f8197b3bb9becbce2e24c5360e35d8ae",
+    "rate_card.py": "62c408d155106de332ebef57bb1ac665",
     "rates_intake.py": "727dde1285d8f52feee2efc59f060d0f",
     "readiness.py": "2f45eec97285e0312f233dc5141d9eb8",
     "reading_check.py": "bb89823594b6d70cdf66a03c1893b2a4",
@@ -52,5 +52,5 @@
     "validate_profile.py": "dd294e2d04031e6008d29c60e1cf78bd",
     "workflow_safe.py": "d2878e6b92cb9cabe79bf0c360031353"
   },
-  "version": "4.15.7"
+  "version": "4.15.8"
 }

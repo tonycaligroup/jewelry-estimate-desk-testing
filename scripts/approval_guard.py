@@ -72,7 +72,7 @@ def build_internal_cost_sheet(
         "metal_lines": ("rate_key", "spot_price_per_gram", "purity"),
         "stone_lines": ("rate_key",),
         "labor_lines": (),
-        "other_hard_cost_lines": ("rate_key",),
+        "other_hard_cost_lines": ("rate_key", "kind", "rate", "basis"),  # kind/rate/basis: an allowance line (9 September 2026)
     }
     result: dict[str, Any] = {}
     hard_cost_total = 0.0
@@ -149,7 +149,7 @@ def validate_internal_cost_sheet(value: Any, proposed_price: float) -> dict[str,
         "metal_lines": ("rate_key", "spot_price_per_gram", "purity"),
         "stone_lines": ("rate_key",),
         "labor_lines": (),
-        "other_hard_cost_lines": ("rate_key",),
+        "other_hard_cost_lines": ("rate_key", "kind", "rate", "basis"),
     }
     calculated = 0.0
     for group, fields in line_specs.items():

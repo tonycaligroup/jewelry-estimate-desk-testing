@@ -456,6 +456,23 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): the rate card is the desk's fields
+  with the jeweler's numbers, blank until they fill it: a "Rates" tab (the
+  Value column theirs, read back every tick, journaled, a bad cell named
+  once in chat), their own pricing notes read in at setup by
+  `rates_intake.py` with nothing invented, a rate the card lacks asked in
+  chat with "use 450 once" for this estimate only. The rules those numbers
+  switch on, each silent without its number: setting labor for the center
+  by carat band (with fancy, bezel, and fragile extras) and per melee stone
+  by style, melee sized by count and millimetres against the chart and the
+  size band, metal and melee waste, contingency by complexity, the minimum
+  job charge, and a live-quote line for lab-grown diamond centers above the
+  jeweler's threshold (asked, never guessed). Every added line says what it
+  was computed from and the provenance check redoes the arithmetic (6.3,
+  3). The Customers tab takes the owner's corrections (name, phone, notes)
+  and the corrected name greets the customer. A carat range ("2 to 3 ct")
+  is an answer priced at its top and shown as the assumption; a follow-up
+  never opens like the last one (6.2).
 - Built 9 September 2026 (unpublished): the cost sheet is where the owner
   works. One block per estimate (a header row with a Status dropdown and a
   Details cell, one row per cost line, two spare lines) shows what the desk

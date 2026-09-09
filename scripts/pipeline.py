@@ -1200,6 +1200,16 @@ def _price_after_review(
         owner = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id)).get("owner_quantities") or {}
     except (OSError, ValueError):
         owner = {}
+    if "pieces" not in chosen:
+        try:
+            import cost_components  # local import: cost_components does not import this module
+
+            sized = cost_components.sized_melee(specification, workflow_safe.read_object(p["shop_profile"]).get("pricing") or {})
+        except Exception:  # noqa: BLE001
+            sized = None
+        if sized:
+            # "18 x 1.3 mm lab diamonds" with the size band on the card: the count and the chart set the carats (9 September 2026).
+            chosen["accents"] = [{"key": sized["key"], "carats": sized["carats"]}]
     if owner and "pieces" not in chosen:
         # The owner's numbers from the cost sheet outrank the model's estimate (9 September 2026).
         for key in ("finished_grams", "bench_hours", "center_carat"):

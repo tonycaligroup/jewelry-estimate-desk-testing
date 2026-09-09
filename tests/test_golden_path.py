@@ -3192,6 +3192,37 @@ class OneTimeRateAnswerTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class GatedRulesOnTheCardTests(SideBranchTests):
+    """Tier 2 live: with the jeweler's allowances on the card the price card shows them; without, nothing changes."""
+
+    def test_contingency_waste_and_the_minimum_ride_on_the_card(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["allowances"] = {"metal_waste_pct": 8.0, "contingency_simple_pct": 5.0, "contingency_normal_pct": 10.0}
+            profile["pricing"]["setting_labor"] = {"center_1_to_1_99": 60.0}
+            profile["pricing"]["stones_per_carat"]["lab_grown_sapphire"] = 300.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            world.spec = {"piece_type": "ring", "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "finger_size": "7",
+                          "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_shape": "round", "setting_style": "solitaire",
+                          "center_stone": "yes"}
+            world.customer_message("gr1", "thread-gated", "A 14k yellow gold solitaire with a 1.5 ct round lab-grown sapphire, size 7. Estimate please.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            title = world.cards[-1]["title"]
+            self.assertIn("metal waste 8% $", title)
+            self.assertIn("contingency 5% (simple) $", title, "a plain solitaire reads as simple")
+            self.assertIn("center stone setting (1 to 1 99 ct) $60.00", title)
+            record = self.record(ws, self.only_estimate(ws))
+            lines = {l["rate_key"]: l for l in record["internal_cost_sheet"]["other_hard_cost_lines"] if str(l.get("rate_key", "")).startswith("allowance:")}
+            self.assertEqual(set(lines), {"allowance:allowances:metal_waste_pct", "allowance:allowances:contingency_simple_pct", "allowance:setting_labor:center_1_to_1_99"})
+            world.approve(world.cards[-1])
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["approvals"][0]["result"]["outcome"], "estimate_sent", "the provenance check accepts the allowance lines")
+        self.run_branch(branch)
+
+
 class PairCaratTests(SideBranchTests):
     """The owner, 9 Sep: a pair's carat is each stone or the total; the price sheet counts two stones when it is each."""
 

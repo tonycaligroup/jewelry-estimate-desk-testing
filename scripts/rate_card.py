@@ -82,6 +82,7 @@ SCHEMA: list[dict[str, Any]] = [
     {"section": "labor", "path": "pricing", "unit": "$", "fields": [
         ("bench labor per hour", "bench_labor_per_hour", "the loaded productive hour"),
         ("minimum job charge", "minimum_job", "hard cost floor"),
+        ("lab-grown diamond center, live quote from (ct)", "lab_center_live_quote_ct", "at or above this the desk asks you for the stone's price"),
     ]},
     {"section": "waste and contingency", "path": "pricing.allowances", "unit": "%", "fields": [
         ("metal waste %", "metal_waste_pct", ""), ("melee waste %", "melee_waste_pct", "extra stones ordered"),
@@ -159,7 +160,7 @@ def rows_from_profile(profile: dict[str, Any]) -> list[list[str]]:
             for key in sorted(node):
                 if key in seen or key in ("rate_updates",) or not KEY_RE.fullmatch(str(key)) or isinstance(node[key], (dict, list)):
                     continue
-                if block["path"] == "pricing" and key not in ("metal_factor", "minimum_job"):
+                if block["path"] == "pricing" and key not in ("metal_factor", "minimum_job", "lab_center_live_quote_ct"):
                     continue  # the pricing block's own settings are not rates
                 section_rows.append([section, key.replace("_", " "), key, _shown(node[key]), block["unit"], "added by you",
                                      str(stamps.get(f"{block['path']}.{key}") or "")])

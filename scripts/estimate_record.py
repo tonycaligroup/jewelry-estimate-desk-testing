@@ -1316,6 +1316,25 @@ def _card_rate(card: Any, rate_key: Any, label: str) -> float:
     return float(rate)
 
 
+def _check_allowance(line: dict[str, Any], pricing: dict[str, Any], label: str) -> None:
+    """An allowance line (waste, contingency, setting labor, the minimum job) must redo its arithmetic from the card."""
+    try:
+        _prefix, section, key = str(line.get("rate_key")).split(":", 2)
+    except ValueError:
+        raise ValueError(f"{label} names a malformed allowance") from None
+    card = pricing if section == "pricing" else pricing.get(section)
+    rate = card.get(key) if isinstance(card, dict) else None
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+        raise ValueError(f"{label} allowance '{section}.{key}' is not on the rate card")
+    if abs(float(line.get("rate") or 0) - float(rate)) > 0.01:
+        raise ValueError(f"{label}.rate does not equal the configured {section}.{key}")
+    kind, basis, total = str(line.get("kind") or ""), float(line.get("basis") or 0), float(line.get("total_cost") or 0)
+    expected = {"pct": basis * float(rate) / 100, "setting": float(rate) * (1 + basis / 100), "per_stone": float(rate) * basis,
+                "minimum": float(rate) - basis}.get(kind)
+    if expected is None or abs(round(expected, 2) - total) > 0.01 or total <= 0:
+        raise ValueError(f"{label}.total_cost does not follow from its basis and the configured {section}.{key}")
+
+
 def enforce_rate_provenance(
     internal_cost_sheet: dict[str, Any],
     pricing: Any,
@@ -1339,6 +1358,10 @@ def enforce_rate_provenance(
 
     for index, line in enumerate(internal_cost_sheet["other_hard_cost_lines"]):
         label = f"internal_cost_sheet.other_hard_cost_lines[{index}]"
+        rate_key = str(line.get("rate_key") or "")
+        if rate_key.startswith("allowance:"):
+            _check_allowance(line, pricing, label)
+            continue
         rate = _card_rate(pricing.get("fees"), line.get("rate_key"), label)
         if abs(float(line["total_cost"]) - rate) > 0.01:
             raise ValueError(f"{label}.total_cost does not equal its configured fee")

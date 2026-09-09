@@ -289,6 +289,18 @@ def center_stone_card(card: Any) -> dict[str, Any]:
     return {key: value for key, value in card.items() if "melee" not in str(key).lower()}
 
 
+def live_quote_key(stone: dict[str, Any], pricing: dict[str, Any]) -> str | None:
+    """The key for a lab-grown diamond center at or above the jeweler's live-quote line, else None."""
+    threshold = pricing.get("lab_center_live_quote_ct") if isinstance(pricing, dict) else None
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool) or threshold <= 0:
+        return None
+    if stone.get("stone_type") != "diamond" or stone.get("origin") != ("lab", "grown") or not stone.get("carat"):
+        return None
+    if float(stone["carat"]) < float(threshold):
+        return None
+    return f"lab_grown_diamond_center_{str(float(stone['carat'])).replace('.', '_').rstrip('0').rstrip('_')}ct"
+
+
 def with_one_time_rates(pricing: Any, record: dict[str, Any]) -> Any:
     """The card plus the rates the owner gave for this estimate only ("use 450 once", 9 September 2026)."""
     once = record.get("one_time_rates") if isinstance(record, dict) and isinstance(record.get("one_time_rates"), dict) else {}
@@ -352,6 +364,14 @@ def _missing_rates_for_piece(specification: dict[str, Any], index: int, pricing:
         key, candidates = match_rate_key(
             center_stone_card(pricing.get("stones_per_carat")), {stone["stone_type"]}, preferred
         )
+        live = live_quote_key(stone, pricing)
+        if live and live not in (pricing.get("stones_per_carat") or {}):
+            missing.append({
+                "rate_kind": "stones_per_carat", "line": f"stone_lines[{index}]", "suggested_key": live,
+                "description": f"a {stone['carat']:g} ct lab-grown diamond center (live quote, above your {float(pricing.get('lab_center_live_quote_ct')):g} ct line)",
+                "candidates": [],
+            })
+            key = live
         if key is None:
             origin = stone["origin"] or ()
             words = (
@@ -369,6 +389,170 @@ def _missing_rates_for_piece(specification: dict[str, Any], index: int, pricing:
     else:
         missing.extend(missing_accent_rates(specification, pricing))
     return missing
+
+
+# Round brilliant millimetres to carats, the trade's standard chart (geometry, not a price; interpolated between rows).
+MM_TO_CT = [(0.8, 0.0025), (0.9, 0.004), (1.0, 0.005), (1.1, 0.006), (1.2, 0.008), (1.3, 0.010), (1.4, 0.012), (1.5, 0.015),
+            (1.6, 0.018), (1.7, 0.020), (1.8, 0.025), (1.9, 0.027), (2.0, 0.030), (2.1, 0.035), (2.2, 0.040), (2.3, 0.045),
+            (2.4, 0.050), (2.5, 0.060), (2.6, 0.065), (2.7, 0.070), (2.8, 0.080), (2.9, 0.090), (3.0, 0.10), (3.2, 0.12),
+            (3.4, 0.15), (3.5, 0.16), (3.8, 0.20), (4.0, 0.24), (4.5, 0.35), (5.0, 0.48)]
+FRAGILE_STONES = ("emerald", "opal", "tanzanite", "pearl", "turquoise", "kunzite", "apatite")
+_COUNT_MM_RE = re.compile(r"(?i)\b(\d{1,3})\s*(?:x|×|pcs?|pieces?|stones?)?\s*(?:of\s+)?(\d(?:\.\d)?)\s*mm\b")
+
+
+def carats_for_mm(mm: float) -> float | None:
+    """Carats of one round stone of this diameter, from the chart; None outside it."""
+    if mm < MM_TO_CT[0][0] or mm > MM_TO_CT[-1][0]:
+        return None
+    for (m1, c1), (m2, c2) in zip(MM_TO_CT, MM_TO_CT[1:]):
+        if m1 <= mm <= m2:
+            return round(c1 + (c2 - c1) * (mm - m1) / (m2 - m1), 4) if m2 != m1 else c1
+    return None
+
+
+def accent_count_and_size(specification: dict[str, Any]) -> tuple[int, float] | None:
+    """'18 x 1.3mm diamonds' in the customer's or owner's words: (count, millimetres), else None."""
+    text = " ".join(str(specification.get(k) or "") for k in ("accent_stones", "notes", "setting_style"))
+    match = _COUNT_MM_RE.search(text)
+    if not match:
+        return None
+    count, mm = int(match.group(1)), float(match.group(2))
+    return (count, mm) if 0 < count <= 500 and 0.5 <= mm <= 6.0 else None
+
+
+def melee_band_key(origin: str, mm: float) -> str:
+    """The rate card key for round melee of this size: small up to 1.5 mm natural (2.5 mm lab), medium to 2.5, large to 4."""
+    if origin == "lab-grown":
+        return "lab_grown_diamond_melee_small" if mm <= 2.5 else "lab_grown_diamond_melee_large"
+    return "natural_diamond_melee_small" if mm <= 1.5 else "natural_diamond_melee_medium" if mm <= 2.5 else "natural_diamond_melee_large"
+
+
+def sized_melee(specification: dict[str, Any], pricing: dict[str, Any]) -> dict[str, Any] | None:
+    """When the words give a count and a millimetre size and the card has that size band: the accent line, priced from it."""
+    found = accent_count_and_size(specification)
+    if not found:
+        return None
+    count, mm = found
+    each = carats_for_mm(mm)
+    if each is None:
+        return None
+    origin_raw = str(specification.get("stone_origin") or specification.get("accent_stone_origin") or "").lower()
+    origin = "lab-grown" if origin_raw.startswith("lab") else "natural" if origin_raw == "natural" else ""
+    if not origin:
+        return None
+    key = melee_band_key(origin, mm)
+    card = pricing.get("stones_per_carat") if isinstance(pricing.get("stones_per_carat"), dict) else {}
+    if not isinstance(card.get(key), (int, float)) or isinstance(card.get(key), bool):
+        return None
+    return {"key": key, "carats": round(count * each, 3), "count": count, "mm": mm, "each": each}
+
+
+def _pct(pricing: dict[str, Any], section: str, key: str) -> float | None:
+    block = pricing.get(section)
+    value = block.get(key) if isinstance(block, dict) else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else None
+
+
+def _setting_rate(pricing: dict[str, Any], key: str) -> float | None:
+    return _pct(pricing, "setting_labor", key)
+
+
+def _center_band(carat: float) -> str:
+    if carat < 0.5:
+        return "center_under_0_50"
+    if carat < 1:
+        return "center_0_50_to_0_99"
+    if carat < 2:
+        return "center_1_to_1_99"
+    if carat < 3:
+        return "center_2_to_2_99"
+    if carat < 5:
+        return "center_3_to_4_99"
+    return "center_5_plus"
+
+
+def _complexity(specification: dict[str, Any]) -> str:
+    text = " ".join(str(specification.get(k) or "") for k in ("setting_style", "notes", "accent_stones", "engraving")).lower()
+    if any(w in text for w in ("micro pave", "micro-pave", "intricate", "filigree", "hand engraved", "complex", "eternity", "cluster")):
+        return "complex"
+    if any(w in text for w in ("plain", "simple", "solitaire", "band only")) and not specification.get("accent_stones"):
+        return "simple"
+    return "normal"
+
+
+def apply_allowances(normalized: dict[str, list[dict[str, Any]]], pricing: dict[str, Any], specification: dict[str, Any]) -> list[dict[str, Any]]:
+    """The rules the jeweler's own numbers switch on (9 September 2026): setting labor, waste, contingency, the minimum job.
+
+    Each rule runs only when its rate is on the card, and each line it adds
+    says what it was computed from, so the provenance check can redo the
+    arithmetic. Nothing here invents a number.
+    """
+    added: list[dict[str, Any]] = []
+    spec = specification if isinstance(specification, dict) else {}
+    metal_total = sum(float(l.get("quantity_grams") or 0) * float(l.get("unit_cost") or 0) for l in normalized.get("metal_lines") or [])
+    stone_lines = normalized.get("stone_lines") or []
+    labor_total = sum(float(l.get("hours") or 0) * float(l.get("rate") or 0) for l in normalized.get("labor_lines") or [])
+    fees_total = sum(float(l.get("total_cost") or 0) for l in normalized.get("other_hard_cost_lines") or [])
+    stones_total = sum(float(l.get("quantity") or 0) * float(l.get("unit_cost") or 0) for l in stone_lines)
+
+    def line(label: str, section: str, key: str, kind: str, rate: float, basis: float, total: float) -> None:
+        if total > 0:
+            added.append({"label": label, "rate_key": f"allowance:{section}:{key}", "kind": kind, "rate": rate, "basis": round(basis, 4),
+                          "total_cost": round(total, 2)})
+
+    # Center stone setting by carat band, with the extras the card names.
+    center = extract_center_stone(spec)
+    if center.get("stone_type") and center.get("carat") and not estimate_record.customer_supplies_stone(spec):
+        band = _center_band(float(center["carat"]))
+        rate = _setting_rate(pricing, band)
+        if rate is not None:
+            extras = 0.0
+            shape = str(spec.get("stone_shape") or spec.get("stone_cut") or "").lower()
+            if shape and shape != "round" and _setting_rate(pricing, "fancy_shape_extra_pct"):
+                extras += _setting_rate(pricing, "fancy_shape_extra_pct") or 0
+            if "bezel" in str(spec.get("setting_style") or "").lower() and _setting_rate(pricing, "bezel_extra_pct"):
+                extras += _setting_rate(pricing, "bezel_extra_pct") or 0
+            if str(center["stone_type"]).lower() in FRAGILE_STONES and _setting_rate(pricing, "fragile_extra_pct"):
+                extras += _setting_rate(pricing, "fragile_extra_pct") or 0
+            stones = 2 if estimate_record.is_pair(spec) else 1
+            line(f"center stone setting ({band.replace('_', ' ').replace('center ', '')} ct" + (f", +{extras:g}%" if extras else "") + ")",
+                 "setting_labor", band, "setting", rate, extras + 100 * (stones - 1), rate * (1 + extras / 100) * stones)
+    # Melee setting per stone, when the count is known and the style has a rate.
+    sized = accent_count_and_size(spec)
+    if sized:
+        # The melee's own words first ("18 x 1.3mm, pave"), then the piece's setting.
+        style_words = str(spec.get("accent_stones") or "").lower() + " | " + str(spec.get("setting_style") or "").lower()
+        style = next((k for k in ("micro_pave", "shared_prong", "baguette_channel", "pave", "channel", "bezel", "flush", "bead", "prong")
+                      if k.replace("_", " ") in style_words or k.replace("_", "-") in style_words), None)
+        rate = _setting_rate(pricing, style) if style else None
+        if rate is not None:
+            line(f"setting {sized[0]} stones, {style.replace('_', ' ')}", "setting_labor", style, "per_stone", rate, float(sized[0]), rate * sized[0])
+    # Waste on metal, melee, and fragile stones.
+    pct = _pct(pricing, "allowances", "metal_waste_pct")
+    if pct and metal_total:
+        line(f"metal waste {pct:g}%", "allowances", "metal_waste_pct", "pct", pct, metal_total, metal_total * pct / 100)
+    pct = _pct(pricing, "allowances", "melee_waste_pct")
+    melee_total = sum(float(l.get("quantity") or 0) * float(l.get("unit_cost") or 0) for l in stone_lines
+                      if any(w in str(l.get("rate_key") or "").lower() for w in ("melee", "accent", "pave")))
+    if pct and melee_total:
+        line(f"melee waste {pct:g}%", "allowances", "melee_waste_pct", "pct", pct, melee_total, melee_total * pct / 100)
+    pct = _pct(pricing, "allowances", "fragile_waste_pct")
+    fragile_total = sum(float(l.get("quantity") or 0) * float(l.get("unit_cost") or 0) for l in stone_lines
+                        if any(w in str(l.get("stone") or "").lower() for w in FRAGILE_STONES))
+    if pct and fragile_total:
+        line(f"fragile stone waste {pct:g}%", "allowances", "fragile_waste_pct", "pct", pct, fragile_total, fragile_total * pct / 100)
+    # Contingency before CAD, by how complex the piece reads.
+    subtotal = metal_total + stones_total + labor_total + fees_total + sum(float(l["total_cost"]) for l in added)
+    complexity = _complexity(spec)
+    pct = _pct(pricing, "allowances", f"contingency_{complexity}_pct")
+    if pct and subtotal:
+        line(f"contingency {pct:g}% ({complexity})", "allowances", f"contingency_{complexity}_pct", "pct", pct, subtotal, subtotal * pct / 100)
+        subtotal += subtotal * pct / 100
+    # The minimum job charge tops the hard cost up.
+    minimum = pricing.get("minimum_job")
+    if isinstance(minimum, (int, float)) and not isinstance(minimum, bool) and minimum > subtotal > 0:
+        line("minimum job charge", "pricing", "minimum_job", "minimum", float(minimum), subtotal, float(minimum) - subtotal)
+    return added
 
 
 def accent_stone_needs(specification: dict[str, Any]) -> list[tuple[str, str]]:
@@ -649,6 +833,11 @@ def prepare(
             key, candidates = match_rate_key(
                 center_stone_card(pricing.get("stones_per_carat")), {stone["stone_type"]}, preferred
             )
+            live = live_quote_key(stone, pricing)
+            if live and live not in (pricing.get("stones_per_carat") or {}):
+                key, candidates = None, []  # asked for, this stone's own price (the jeweler's threshold)
+            elif live:
+                key = live
             center_index = len(stone_lines)
             sl = f"stone_lines[{center_index}]"
             if key is None:
@@ -799,6 +988,8 @@ def finalize(
                 _filled_number(line, "hours", label)
                 line["rate"] = float(bench)
             else:
+                if str(line.get("rate_key") or "").startswith("allowance:"):
+                    continue  # recomputed below from the card
                 rate = estimate_record._card_rate(
                     pricing.get("fees"), line.get("rate_key"), label
                 )
@@ -807,6 +998,8 @@ def finalize(
                 line["total_cost"] = rate
             normalized[group].append(line)
 
+    normalized["other_hard_cost_lines"] = [l for l in normalized["other_hard_cost_lines"] if not str(l.get("rate_key") or "").startswith("allowance:")]
+    normalized["other_hard_cost_lines"].extend(apply_allowances(normalized, pricing, skeleton.get("specification") or {}))
     provisional = approval_guard.build_internal_cost_sheet(normalized, 0.0)
     proposed_price = pricing_model.quote_price(provisional["hard_cost_total"], pricing)
     sheet = approval_guard.build_internal_cost_sheet(normalized, proposed_price)
