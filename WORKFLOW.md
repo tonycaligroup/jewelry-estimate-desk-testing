@@ -438,7 +438,13 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 9 September 2026 (unpublished), from the ruby earrings thread: when
+- Built 9 September 2026 (unpublished): a stretch of days the customer
+  names without a clock time ("next week", "early next week", "Friday
+  afternoon", "tomorrow morning", "the 15th") is where the offered times
+  come from; only when nothing is free there do the nearest days stand in,
+  and the card says so. Live: "times next week" was offered today and
+  tomorrow (6.7).
+- Built 9 September 2026 (4.15.3), from the ruby earrings thread: when
   a reply completes the details and picks a time, the meeting card is filed
   before the review, so a missing rate (the owner's question) never skips
   it; while that card is pending the estimate says the visit is being

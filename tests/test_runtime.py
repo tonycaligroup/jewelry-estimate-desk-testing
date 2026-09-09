@@ -8979,6 +8979,63 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(slots.offer_times({"scheduling": {"timezone": "UTC", "windows": []}}, "t", Path("/tmp"))["options"], [])
 
 
+    def test_a_named_stretch_of_days_is_where_the_offer_comes_from(self) -> None:
+        """Live 9 Sep: 'times next week' was offered today and tomorrow."""
+        import email.utils
+        now = datetime(2026, 9, 8, 16, 0, tzinfo=timezone.utc)  # Tuesday 8 Sep 09:00 PT
+        profile = {"scheduling": {**self.scheduling(), "book_out_days": 30}}
+        busy: list = []
+        class Response:
+            headers = {"x-request-id": "abcdef1234567890", "date": email.utils.format_datetime(now)}
+            def __init__(self, body): self._body = body
+            def read(self): return json.dumps(self._body).encode("utf-8")
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        queries: list = []
+        def opener(request, timeout=15):
+            query = json.loads(request.data.decode("utf-8")); queries.append(query)
+            return Response({"kind": "calendar#freeBusy", "timeMin": query["timeMin"], "timeMax": query["timeMax"],
+                             "calendars": {"primary": {"busy": list(busy)}}})
+        def offer(phrases):
+            with tempfile.TemporaryDirectory() as directory, patch.object(slots.calendar_query, "REQUEST_ID_RE", re.compile(r"[a-z0-9]{8,}")):
+                return slots.offer_times(profile, "token", Path(directory), now=now, opener=opener, phrases=phrases)
+        labels = [o["label"] for o in offer(["next week"])["options"]]
+        self.assertEqual(len(labels), 3, labels)
+        self.assertTrue(all(("September 14" in l) or ("September 16" in l) for l in labels), labels)
+        self.assertTrue(queries[-1]["timeMax"] >= "2026-09-20", queries[-1])
+        self.assertEqual({o["label"][:20] for o in offer(["Friday afternoon"])["options"]}, {"Friday, September 11"})
+        early = [o["label"] for o in offer(["early next week"])["options"]]
+        self.assertTrue(early and all(("September 14" in l) or ("September 16" in l) for l in early), early)
+        self.assertTrue(offer(["sometime next week"])["options"][0]["label"].startswith("Monday, September 14"))
+        # Nothing free next week: the nearest days, and the card says why.
+        busy = [{"start": "2026-09-14T00:00:00Z", "end": "2026-09-21T00:00:00Z"}]
+        fallback = offer(["next week"])
+        self.assertTrue(fallback["options"][0]["label"].startswith("Wednesday, September 9"), fallback["options"])
+        self.assertEqual(fallback["period_note"], "nothing free next week; the nearest free times instead")
+        busy = []
+        # A phrase with a clock time is not a period; a vague word is not either.
+        self.assertIsNone(slots.requested_period(["Friday at 3pm"], now.astimezone(slots.ZoneInfo("America/Los_Angeles"))))
+        self.assertIsNone(slots.requested_period(["whenever suits"], now))
+        self.assertEqual(slots.offer_times(profile, "t", Path("/tmp"), now=now, opener=opener, phrases=["whenever suits"])["period_note"], "")
+
+    def test_requested_period_reads_the_customers_words(self) -> None:
+        now = datetime(2026, 9, 8, 9, 0, tzinfo=slots.ZoneInfo("America/Los_Angeles"))  # Tuesday
+        period = slots.requested_period(["next week"], now)
+        self.assertEqual((period["start"], period["end"], period["half"]), ("2026-09-14", "2026-09-20", None))
+        self.assertEqual(slots.requested_period(["late next week"], now)["start"], "2026-09-17")
+        self.assertEqual(slots.requested_period(["this week"], now)["end"], "2026-09-13")
+        self.assertEqual(slots.requested_period(["tomorrow morning"], now)["half"], "morning")
+        self.assertEqual(slots.requested_period(["tomorrow morning"], now)["start"], "2026-09-09")
+        self.assertEqual(slots.requested_period(["next Tuesday"], now)["start"], "2026-09-15")
+        self.assertEqual(slots.requested_period(["Friday"], now)["start"], "2026-09-11")
+        self.assertEqual(slots.requested_period(["the 15th"], now)["start"], "2026-09-15")
+        self.assertEqual(slots.requested_period(["September 21 afternoon"], now)["start"], "2026-09-21")
+        self.assertEqual(slots.requested_period(["afternoons"], now)["half"], "afternoon")
+        self.assertTrue(slots.in_period({"start": "2026-09-14T10:00:00-07:00"}, period))
+        self.assertFalse(slots.in_period({"start": "2026-09-11T10:00:00-07:00"}, period))
+        self.assertFalse(slots.in_period({"start": "2026-09-14T10:00:00-07:00"}, {**period, "half": "afternoon"}))
+
+
 class RenderingGateTests(unittest.TestCase):
     def test_owner_sees_the_views_and_the_send_waits_for_approval(self) -> None:
         import hashlib

@@ -212,14 +212,14 @@ def neighbour_slots(scheduling: dict[str, Any], requested: dict[str, str], now: 
     return found
 
 
-def all_window_slots(scheduling: dict[str, Any], now: datetime) -> list[dict[str, str]]:
-    """Every slot inside the declared windows over the offer period, earliest first."""
+def all_window_slots(scheduling: dict[str, Any], now: datetime, days_ahead: int | None = None) -> list[dict[str, str]]:
+    """Every slot inside the declared windows over the offer period (or `days_ahead` days), earliest first."""
     zone = ZoneInfo(scheduling.get("timezone") or "UTC")
     windows = parse_windows(scheduling)
     length = timedelta(minutes=duration_minutes(scheduling))
     buffer = timedelta(minutes=int(scheduling.get("buffer_minutes") or 0))
     notice = timedelta(minutes=int(scheduling.get("minimum_notice_minutes") or 0))
-    days_ahead = int(scheduling.get("meeting_offer_window_days") or 7)
+    days_ahead = int(days_ahead if days_ahead is not None else (scheduling.get("meeting_offer_window_days") or 7))
     local_now = now.astimezone(zone)
     earliest = local_now + notice
     found: list[dict[str, str]] = []
@@ -373,6 +373,94 @@ def resolve_requested(phrases: list[str], model_resolved: list[str], now: dateti
     return model_values[:3]
 
 
+_PERIOD_DAY_RE = re.compile(
+    r"(?i)\b(?:(?P<next>next|this(?: coming)?)\s+)?(?P<day>monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thur?s?|fri|sat|sun)\b"
+)
+_HALF_RE = re.compile(r"(?i)\b(?P<half>morning|afternoon|evening)s?\b")
+
+
+def requested_period(phrases: list[str], now: datetime) -> dict[str, Any] | None:
+    """The stretch of days the customer's words ask for, when they name one without a clock time.
+
+    Live (9 September 2026): "times next week" was offered today and
+    tomorrow, because a phrase with no clock time resolved to nothing and the
+    calendar gave the nearest days. "Next week", "this week", "tomorrow", a
+    weekday ("Friday", "next Tuesday"), a date ("the 15th", "September 15"),
+    each with an optional morning or afternoon, become a first and last day
+    (and a half of the day) the offer is drawn from. "Early next week" is
+    Monday to Wednesday, "late next week" Thursday to Friday. A phrase with
+    a clock time is resolved elsewhere and never comes here.
+    """
+    local = now
+    today = local.date()
+    for raw in phrases or []:
+        text = str(raw or "").strip().lower()
+        if not text or resolve_phrase(text, now):
+            continue
+        half_match = _HALF_RE.search(text)
+        half = half_match.group("half") if half_match else None
+        start = end = None
+        if re.search(r"\bnext week\b", text):
+            monday = today + timedelta(days=7 - today.weekday())
+            start, end = monday, monday + timedelta(days=6)
+            if re.search(r"\b(?:early|beginning|start)\b", text):
+                end = monday + timedelta(days=2)
+            elif re.search(r"\b(?:late|later|end)\b", text):
+                start = monday + timedelta(days=3)
+        elif re.search(r"\bthis week\b", text):
+            start, end = today, today + timedelta(days=6 - today.weekday())
+        elif re.search(r"\btomorrow\b", text):
+            start = end = today + timedelta(days=1)
+        elif re.search(r"\btoday\b", text):
+            start = end = today
+        else:
+            day_match = _PERIOD_DAY_RE.search(text)
+            month_match = re.search(_MONTH_DAY, text, re.IGNORECASE)
+            ordinal_match = re.search(_ORDINAL_DAY, text, re.IGNORECASE)
+            if day_match:
+                weekday = _WEEKDAYS[day_match.group("day")]
+                ahead = (weekday - today.weekday()) % 7
+                if ahead == 0 and (day_match.group("next") or "").startswith("next"):
+                    ahead = 7
+                start = end = today + timedelta(days=ahead)
+            elif month_match:
+                try:
+                    start = today.replace(month=_MONTHS[month_match.group("month").lower()], day=int(month_match.group("mday")))
+                except ValueError:
+                    continue
+                if start < today:
+                    start = start.replace(year=start.year + 1)
+                end = start
+            elif ordinal_match:
+                try:
+                    start = today.replace(day=int(ordinal_match.group("mday2")))
+                except ValueError:
+                    continue
+                if start < today:
+                    start = (start.replace(day=1) + timedelta(days=32)).replace(day=start.day)
+                end = start
+            elif half:
+                start, end = today, today + timedelta(days=int(7))
+        if start is None:
+            continue
+        return {"start": start.isoformat(), "end": end.isoformat(), "half": half, "words": str(raw).strip()[:80]}
+    return None
+
+
+def in_period(slot: dict[str, str], period: dict[str, Any]) -> bool:
+    """A slot on one of the period's days, and in its half of the day when one was named."""
+    start = datetime.fromisoformat(slot["start"])
+    day = start.date().isoformat()
+    if not (period["start"] <= day <= period["end"]):
+        return False
+    half = period.get("half")
+    if half == "morning":
+        return start.hour < 12
+    if half in ("afternoon", "evening"):
+        return start.hour >= 12
+    return True
+
+
 def query_horizon_days(scheduling: dict[str, Any], requested: list[str], now: datetime) -> int:
     """Days of calendar to read: the offer window, stretched to a requested day within `book_out_days`."""
     zone = ZoneInfo(scheduling.get("timezone") or "UTC")
@@ -424,11 +512,16 @@ def offer_times(
     opener: Callable[..., Any] | None = None,
     requested: list[str] | None = None,
     force_offer: bool = False,
+    phrases: list[str] | None = None,
 ) -> dict[str, Any]:
     """Live-checked options for the owner's card, or an empty list with a reason.
 
     A time the customer asked for comes first whenever it is inside the
     declared windows and free; the earliest other free slots fill the rest.
+    `phrases` are the customer's own words about timing: a stretch of days
+    they name ("next week", "Friday afternoon") is where the offer is drawn
+    from, and only when nothing is free there do the nearest days stand in,
+    said so on the card.
     """
     scheduling = profile.get("scheduling") or {}
     calendar_id = scheduling.get("calendar")
@@ -440,6 +533,14 @@ def offer_times(
     # A customer who names a day past the offer window (next Tuesday, asked on
     # a Sunday) is checked on that day, as far out as the shop books.
     horizon = query_horizon_days(scheduling, requested or [], current)
+    period = requested_period(phrases or [], current) if not requested else None
+    if period:
+        book_out = int(scheduling.get("book_out_days") or 30)
+        needed = (datetime.fromisoformat(period["end"]).date() - current.date()).days + 1
+        if needed > max(book_out, days_ahead):
+            period = None  # further out than the shop books; the nearest days it is
+        else:
+            horizon = max(horizon, needed)
     time_min = current.replace(second=0, microsecond=0).isoformat()
     time_max = (current + timedelta(days=horizon)).replace(second=0, microsecond=0).isoformat()
     kwargs = {"opener": opener} if opener else {}
@@ -472,6 +573,12 @@ def offer_times(
     elif asked:
         # Scenario 3: asked for a time that is taken; offer times around it.
         free = [s for s in neighbour_slots(scheduling, asked[0], current) if is_free(s)][:MAX_OPTIONS]
+    period_note = ""
+    if not free and not (force_offer and asked) and period:
+        # The days they named ("next week", "Friday afternoon"): a spread inside them.
+        free = spread_slots([s for s in all_window_slots(scheduling, current, horizon) if in_period(s, period)], is_free)
+        if not free:
+            period_note = f"nothing free {period['words']}; the nearest free times instead"
     if not free and not (force_offer and asked):
         # Scenario 2: no time given, or nothing free near the one they named;
         # offer a spread across the nearest days. The owner gets a card
@@ -491,4 +598,5 @@ def offer_times(
         "reason": "" if labelled else "no free slot inside the declared windows",
         "outside_hours": outside_hours(scheduling, requested or []),
         "hours": hours_text(scheduling),
+        "period_note": period_note,
     }

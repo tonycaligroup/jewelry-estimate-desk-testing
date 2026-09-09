@@ -672,7 +672,7 @@ def appointment_intent(
         import gateway_token  # local import; only needed when a calendar is configured
 
         offered = slots.offer_times(
-            profile, token or gateway_token.load_token(), Path(paths["work_dir"]), requested=resolved,
+            profile, token or gateway_token.load_token(), Path(paths["work_dir"]), requested=resolved, phrases=asked,
         )
         intent["calendar_availability"] = [
             {"start": o["start"], "end": o["end"], "label": o["label"]} for o in offered["options"]
@@ -683,6 +683,8 @@ def appointment_intent(
             intent["hours"] = str(offered.get("hours") or "")[:160]
         if offered.get("reason"):
             intent["availability_note"] = offered["reason"]
+        elif offered.get("period_note"):
+            intent["availability_note"] = str(offered["period_note"])[:160]
         elif offered.get("outside_hours") and offered.get("mode") == "offer":
             intent["availability_note"] = (
                 f"the time they asked for ({'; '.join(offered['outside_hours'][:2])}) is outside your hours; these are free"
