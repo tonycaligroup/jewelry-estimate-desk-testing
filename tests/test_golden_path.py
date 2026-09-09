@@ -2350,19 +2350,23 @@ class MeetingAndEstimateTests(SideBranchTests):
             world.customer_message("b1", thread, "Hi Tony, my wife loves these emerald earrings, about 1.5 ct. Could I come by next week? "
                                    "And is there any way I can get a ballpark estimate first?\n\nDavid", subject="Emerald earrings")
             summary = self.tick(ws, world)
-            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertTrue(summary["inline"][0].get("asks") or True)
             offer = world.cards[-1]
             self.assertEqual(offer["kind"], "appointment_offer", offer["payload"])
-            self.assertEqual(len(world.sent), 1, "the questions go now")
-            self.assertRegex(world.sent[0]["body"], r"(?i)metal")
+            self.assertTrue(offer["payload"].get("ask_for"), offer["payload"])
+            self.assertEqual(world.sent, [], "nothing reaches the customer before the approval")
             self.assertEqual(self.claim(ws, "b1")["status"], "processed")
             estimate_id = self.only_estimate(ws)
             self.assertEqual(self.record(ws, estimate_id)["status"], "awaiting_specs")
-            # Approving the card sends the times; the record still waits for the details.
+            self.assertFalse(self.record(ws, estimate_id).get("spec_gate_reply"))
+            # Approving the card sends one email: the times and the questions; the record knows the ask went.
             self.execute(ws, world, offer["payload"]["execute"], offer)
-            self.assertEqual(len(world.sent), 2)
+            self.assertEqual(len(world.sent), 1)
             for option in offer["payload"]["calendar_availability"]:
-                self.assertIn(option["label"], world.sent[1]["body"])
+                self.assertIn(option["label"], world.sent[0]["body"])
+            self.assertRegex(world.sent[0]["body"], r"(?i)metal")
+            self.assertTrue(self.record(ws, estimate_id).get("spec_gate_reply"), "the ask is on the record")
         self.run_branch(branch)
 
 

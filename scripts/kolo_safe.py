@@ -332,10 +332,15 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
     elif options:
         for index, slot in enumerate(options[:3], start=1):
             rows[f"Option {index}"] = str(slot.get("label") or slot.get("start") or "")[:120]
-        rows["Approve means"] = "Email these times to the customer and let them pick one. Nothing is booked yet."
+        asks = [str(q) for q in (details.get("ask_for") or []) if str(q).strip()]
+        rows["Approve means"] = ("Email these times to the customer and let them pick one. Nothing is booked yet."
+                                 + (" The same email asks the details the estimate needs." if asks else ""))
         rows["Reject means"] = reject
+        if asks:
+            rows["Also asks"] = "; ".join(asks)[:400]
         labels = "; ".join(str(slot.get("label") or slot.get("start") or "") for slot in options[:3])
-        title = f"Offer times to {_sender_display(customer)}: {piece}. Options: {labels}. They asked for: {asked_text}."[:TITLE_LIMIT]
+        title = (f"Offer times to {_sender_display(customer)}: {piece}. Options: {labels}. They asked for: {asked_text}."
+                 + (f" Also asks: {'; '.join(asks)}." if asks else ""))[:TITLE_LIMIT]
         why = str(details.get("availability_note") or "").strip()
         reasoning = (
             f"{customer} asked to meet ({asked_text}). "

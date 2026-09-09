@@ -381,6 +381,18 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
+**Unpublished after 4.14.7 (8 September 2026): the questions ride on the offer card.**
+Live, "please provide an estimate... I can also come in person" produced
+the questions email at once and the times after the approval; the owner
+wants nothing before the approval. `pipeline.process_claim` now puts the
+plain questions (`question_lines`) into the appointment intent as
+`ask_for`; `_appointment_approval_details` validates and carries them onto
+the card; `_offer_facts` adds them to the offer email's facts and fixed
+text; `_send_times` records the ask on the record (`record_spec_gate_sent`
+or `record_followup_sent`) once the email is sent, and falls back to the
+fixed text if the draft asks a technical question. The follow-up's
+`meeting_offered` closing is gone. Golden `MeetingAndEstimateTests`.
+
 **Unpublished after 4.14.7 (8 September 2026): an answer without a code finds its question.**
 Live, the owner replied "skip" while three questions were open; the
 session listed and read `estimate-desk/questions/` and answered an old

@@ -134,6 +134,21 @@ def describe_missing(specification: dict[str, Any], missing: list[str]) -> list[
     return labels
 
 
+def question_lines(missing: list[str], specification: dict[str, Any] | None = None) -> list[str]:
+    """The plain questions for what is missing, one per detail, as a customer reads them."""
+    asks = []
+    for name in missing[:8]:
+        if reading_check.is_confirm(name):
+            asks.append(reading_check.question_for(name) or name)
+            continue
+        index, field = estimate_record.split_field_name(name)
+        question = FIELD_QUESTIONS.get(field, f"could you tell us the {field.replace('_', ' ')}?")
+        if index is not None:
+            question = f"for the {estimate_record.piece_label(specification or {}, index)}, {question}"
+        asks.append(question[0].upper() + question[1:])
+    return asks
+
+
 def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None) -> str:
     asks = []
     for name in missing[:8]:
@@ -211,7 +226,7 @@ def _send_followup(
     p: dict[str, Path], base_dir: Path, message_id: str, estimate_id: str,
     digest: dict[str, Any], missing: list[str], initiating: bool, paths: dict[str, str],
     profile: dict[str, Any], model: str | None, judge_runner: Runner, openclaw: str | None,
-    command_runner: Runner = subprocess.run, photos: list[str] | None = None, meeting_offered: bool = False,
+    command_runner: Runner = subprocess.run, photos: list[str] | None = None,
 ) -> dict[str, Any]:
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
     missing = prioritized(missing)
@@ -222,7 +237,7 @@ def _send_followup(
         specification = {}
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
-                                       shop_name, model, judge_runner, openclaw, photos=photos, meeting_offered=meeting_offered)
+                                       shop_name, model, judge_runner, openclaw, photos=photos)
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
@@ -803,7 +818,6 @@ def process_claim(
         return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
     if nxt == "send_spec_followup":
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-        meeting_offered = False
         if specification.get("scheduling_intent") and (
             not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words)
         ):
@@ -811,23 +825,24 @@ def process_claim(
             # not a questionnaire. The details are settled at the meeting or
             # in a later email, and pricing picks up from there. When they
             # also ask for a price ("could I get a ballpark before I come
-            # in?"), the desk pursues both: the card offers the times, and
-            # the questions for the estimate go now (the owner's rule).
-            wants_estimate = estimate_record.asks_for_estimate(handled_words)
+            # in?"), the desk pursues both in one email after the owner's
+            # approval: the offer card carries the questions, and the email
+            # that offers the times asks them (the owner's rule, 8 September
+            # 2026: nothing reaches the customer before the approval).
+            intent = appointment_intent(p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id)
+            if estimate_record.asks_for_estimate(handled_words):
+                intent["ask_for"] = question_lines(reviewed["missing_required_fields"], specification)
             intent_path = Path(paths["appointment_intent"])
-            workflow_safe.write_private(intent_path, appointment_intent(
-                p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id,
-            ))
+            workflow_safe.write_private(intent_path, intent)
             workflow_safe.request_appointment_approval(argparse.Namespace(
                 monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
                 shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
                 appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
-                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=wants_estimate,
+                record_output=Path(paths["current_record"]), defer_finalize_for_rendering=False,
                 runner=command_runner, judge_runner=judge_runner,
             ))
-            if not wants_estimate:
-                return {"outcome": "appointment_approval_requested", "before_estimate": True, "next": "done"}
-            meeting_offered = True
+            return {"outcome": "appointment_approval_requested", "before_estimate": True,
+                    "asks": list(intent.get("ask_for") or []), "next": "done"}
         repeated = estimate_record.followup_stalled(record, message_id, reviewed["missing_required_fields"])
         if repeated and not reviewed["initiating"]:
             # The customer was already asked for exactly this and did not
@@ -837,14 +852,10 @@ def process_claim(
                 _namespace(p, message_id, estimate_id, runner=command_runner), record, repeated,
             )
             return {"outcome": "awaiting_owner", "question_id": asked.get("question_id"), "next": "done"}
-        sent = _send_followup(
+        return _send_followup(
             p, base_dir, message_id, estimate_id, digest, reviewed["missing_required_fields"],
             reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner, photos=photos,
-            meeting_offered=meeting_offered,
         )
-        if meeting_offered:
-            sent = {**sent, "appointment_approval_requested": True, "before_estimate": True}
-        return sent
     if nxt == "price":
         return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner)
     raise ValueError(f"review-thread returned an unknown next step {nxt!r}")

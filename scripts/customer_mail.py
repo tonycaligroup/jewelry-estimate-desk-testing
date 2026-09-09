@@ -142,7 +142,10 @@ KIND_BRIEFS = {
         "works or say what does. If the facts give consultation hours, say the time they asked for falls outside "
         "those hours and state the hours exactly as written before offering the times. If the facts say the visit "
         "is to design the piece, say you look forward to designing their perfect piece together when they come in; "
-        "never mention an estimate, a quote, or that there is none yet, and do not ask for any detail now. "
+        "never mention an estimate, a quote, or that there is none yet, and do not ask for any detail now, "
+        "unless the facts list details to ask: then, after the times, say that since they asked about the price you "
+        "need a few things to get the estimate started, ask for each listed detail as a short dash list of plain "
+        "questions in the customer's words, and say it is fine not to know; never a technical question. "
         "Nothing is booked yet. No prices."
     ),
     "rendering": (

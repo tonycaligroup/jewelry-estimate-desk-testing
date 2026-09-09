@@ -638,15 +638,9 @@ def draft_followup(
     runner: Runner = subprocess.run,
     openclaw: str | None = None,
     photos: list[str] | None = None,
-    meeting_offered: bool = False,
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing."""
-    closing = (
-        "Close by saying you look forward to seeing them, since meeting times are being offered in a separate note; "
-        "do not invite them to come by or name times. "
-        if meeting_offered else
-        "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. "
-    )
+    closing = "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. "
     prompt = (
         "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
         "body (no subject line, no headers) in the tone of the template: warm, personal, unhurried. Open with "

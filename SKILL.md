@@ -246,8 +246,9 @@ discovery watermark, and the Kolo user who installs and activates the skill is
 automatically the approver.
 
 When a customer mentions an estimate, a price, or a cost, the desk pursues it
-even when they also ask to come in: the appointment card offers times and the
-questions for the estimate go out in the same tick.
+even when they also ask to come in: the appointment card carries the questions
+the estimate needs, and the one email your approval sends offers the times and
+asks them. Nothing reaches the customer before the approval.
 
 The desk asks a customer only what they can answer about what they want (metal,
 karat, color, stone, origin, a ring size, a rough length) and interprets the

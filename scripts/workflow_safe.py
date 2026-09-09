@@ -616,9 +616,14 @@ def _appointment_approval_details(
     monitor_root: Path | None = None,
 ) -> dict[str, Any]:
     if not {"requested_times", "calendar_availability"} <= set(intent) or not set(intent) <= {
-        "requested_times", "resolved_times", "calendar_availability", "availability_note", "mode", "outside_hours", "hours"
+        "requested_times", "resolved_times", "calendar_availability", "availability_note", "mode", "outside_hours", "hours", "ask_for"
     }:
         raise ValueError("appointment intent contains missing or unsupported fields")
+    ask_for = intent.get("ask_for") or []
+    if not isinstance(ask_for, list) or len(ask_for) > 8 or any(
+        not isinstance(q, str) or not q.strip() or len(q) > 200 or any(c in q for c in "\r\n") for q in ask_for
+    ):
+        raise ValueError("ask_for must contain at most eight short questions")
     resolved_times = intent.get("resolved_times", [])
     if not isinstance(resolved_times, list) or len(resolved_times) > 3 or any(
         not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", value) for value in resolved_times
@@ -680,6 +685,8 @@ def _appointment_approval_details(
     }
     if normalized_slots:
         details["proposed_time"] = dict(normalized_slots[0])
+    if ask_for:
+        details["ask_for"] = [q.strip() for q in ask_for]  # the questions the approved email also asks
     if monitor_root is not None:
         common = {"estimate_id": record["estimate_id"], "message_id": message_id, "brief_id": "<Brief ID>"}
         if mode == "book":
@@ -2436,6 +2443,14 @@ def _offer_facts(approval: dict[str, Any], piece: str, labels: list[str], shop: 
         fixed = OFFER_NOTE_OUTSIDE_HOURS.format(piece=piece, hours=hours, asked="; ".join(outside), lines=lines, shop=shop)
     else:
         fixed = OFFER_NOTE.format(piece=piece, lines=lines, shop=shop)
+    asks = [str(q).strip() for q in (approval.get("ask_for") or []) if str(q).strip()]
+    if asks:
+        # The customer also asked for a price: the same email asks the details the estimate needs (8 September 2026).
+        facts["details to ask for the estimate, one bullet each, plain questions"] = asks
+        questions = "\n".join(f"- {q}" for q in asks)
+        fixed = fixed.replace(f"\n\n{shop}\n", "\n\nSince you asked about the price as well, to get the estimate started could "
+                              f"you tell me:\n\n{questions}\n\nIf you are not sure about any of it, say so and I will suggest "
+                              f"what usually looks best.\n\n{shop}\n")
     return facts, fixed
 
 
@@ -2452,6 +2467,8 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
         body, body_source = prepared.read_text(encoding="utf-8"), "prepared"
     else:
         body, body_source = _draft_customer_email(p, record, message_id, "offer", facts, fixed, args or argparse.Namespace())
+    if judge.bench_measurement_questions(body):
+        body, body_source = fixed, "fallback"  # never a technical question to a customer
     customer_content_guard.validate_customer_text(body)
     work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -2463,8 +2480,15 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
         allow_parked_claim=True,
     )
     updated = estimate_record.record_times_offered(p["record_root"], record["estimate_id"], message_id, options, delivery)
+    if approval_now.get("ask_for"):
+        # The questions went with the times: the record knows the ask was made, so a reply is judged against it.
+        if (record.get("route") or {}).get("gmail_message_id") == message_id and not record.get("spec_gate_reply"):
+            updated = estimate_record.record_spec_gate_sent(p["record_root"], record["estimate_id"], body, delivery)
+        else:
+            updated = estimate_record.record_followup_sent(p["record_root"], record["estimate_id"], message_id, body, delivery)
     mirror_record(updated, work_dir / "current-record.json")
-    return {"outcome": "times_offered", "options": labels, "provider_message_id": delivery["id"], "email": body_source}
+    return {"outcome": "times_offered", "options": labels, "provider_message_id": delivery["id"], "email": body_source,
+            "asked": list(approval_now.get("ask_for") or [])}
 
 
 def send_approved_times(args: argparse.Namespace) -> dict[str, Any]:

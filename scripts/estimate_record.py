@@ -2332,7 +2332,8 @@ def record_appointment_approval_requested(
     }
     # The owner's card also carries the piece, the proposed time, and a note
     # about availability; they are display fields, not binding ones.
-    optional = {"piece", "proposed_time", "availability_note", "execute", "execute_on_reject", "reject_code", "outside_hours", "hours"}
+    optional = {"piece", "proposed_time", "availability_note", "execute", "execute_on_reject", "reject_code", "outside_hours", "hours",
+                "ask_for"}  # ask_for: the questions the approved offer email also asks (8 September 2026)
     if (
         not isinstance(approval, dict)
         or not required <= set(approval)
