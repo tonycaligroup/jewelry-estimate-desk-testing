@@ -381,7 +381,7 @@ reconciler; a malformed answer after the retry files `classification_malformed`.
 Expected: two to three completions per claim, finishing in the tick that
 discovered it, and no agent loop that can wander.
 
-**Unpublished after 4.14.2 (8 September 2026): a ready-made inquiry gets a visit, then the owner.**
+**4.14.3 (built 8 September 2026): a ready-made inquiry gets a visit, then the owner.**
 The owner's rule (8 September): people looking for premade inventory are
 offered an appointment; if nothing is booked within two replies the desk
 tells the jeweler to open the email and handle it. `estimate_record.
@@ -398,7 +398,7 @@ email and handle it yourself", and retires the record so later messages
 on the thread are the owner's. Golden `InventoryTests`; fixture
 `2026-09-08-ready-to-ship-bracelet-gets-a-visit.json` (verbatim).
 
-**Unpublished after 4.14.2 (8 September 2026): out of scope asks the owner; an order reads as an order.**
+**4.14.3 (built 8 September 2026): out of scope asks the owner; an order reads as an order.**
 Live, "any lab tennis bracelets available in the $2,000 to $3,000 range?
 14k WG lab diamonds, 7-inch wrist... ready to ship?" was read as an
 inventory question; `not_an_estimate_request` filed a manual review, which
@@ -415,7 +415,7 @@ claim to the owner. The doctor knows the kind parks a claim. Fixture
 `2026-09-08-ready-to-ship-bracelet-is-an-estimate.json` (verbatim, with
 the reading's kind) and `OutOfScopeTests`.
 
-**Unpublished after 4.14.2 (8 September 2026): a proposed day and time is resolved in code.**
+**4.14.3 (built 8 September 2026): a proposed day and time is resolved in code.**
 Live, after the desk offered times, "would Friday at 3pm work for you?"
 produced a card offering Wednesday and Thursday although Friday at 3pm
 was free: the phrase reached the calendar unresolved (the reading copies
@@ -427,7 +427,7 @@ prefers that to the model's resolution, keeping the model's only for
 phrases code cannot read ("the second one"). `pipeline.appointment_intent`
 applies it before the calendar is read.
 
-**Unpublished after 4.14.2 (8 September 2026): a reschedule is a meeting, not a questionnaire.**
+**4.14.3 (built 8 September 2026): a reschedule is a meeting, not a questionnaire.**
 Live, "Something came up for Saturday... Any chance we can do Friday at
 4pm?" on an old thread was read as an estimate request and answered with
 the questionnaire. The reading is the model's, but whether the message

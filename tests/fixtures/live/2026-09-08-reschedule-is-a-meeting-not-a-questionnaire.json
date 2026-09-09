@@ -1,7 +1,7 @@
 {
   "defect": "a customer wrote 'Something came up for Saturday... Any chance we can do Friday at 4pm?' on an old thread; the desk read it as an estimate request and sent the questionnaire (length or size, metal, karat, color) instead of handling the meeting",
   "seen_on": "4.14.2",
-  "fixed_in": "unpublished after 4.14.2",
+  "fixed_in": "4.14.3",
   "text_is": "verbatim",
   "kind": "golden_path",
   "steps": [

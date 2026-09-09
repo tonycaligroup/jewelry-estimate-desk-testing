@@ -438,7 +438,7 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
-- Built 8 September 2026 (unpublished, after 4.14.2): a ready-made
+- Built 8 September 2026 (4.14.3): a ready-made
   inquiry (in stock, ready to ship, "do you have any") is offered a visit
   through the appointment card, never a quote or a questionnaire; the time
   the customer names is booked when free; after two replies without a
@@ -447,12 +447,12 @@ closed by follow-up changes:
   question to the owner ("quote it" or "handle myself"), never a silent
   manual review; a message naming a piece with two of its facts is an
   estimate request whatever the reading called it (triage table, 6.10).
-- Built 8 September 2026 (unpublished, after 4.14.2): a day and clock
+- Built 8 September 2026 (4.14.3): a day and clock
   time in the customer's own words ("would Friday at 3pm work for you?")
   is resolved to a date in code, whatever the reading resolved; a free
   time inside the windows is a booking card, never an offer of other days
   (6.6).
-- Built 8 September 2026 (unpublished, after 4.14.2): whether a message
+- Built 8 September 2026 (4.14.3): whether a message
   asks for a meeting is decided in code from the customer's own words: a
   named meeting (appointment, come by the shop, in person) or a proposed
   day and time ("any chance we can do Friday at 4pm?") is handled as a
