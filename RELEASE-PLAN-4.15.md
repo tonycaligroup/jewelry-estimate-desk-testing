@@ -35,9 +35,21 @@ rewrites on every message, with no memory of where a fact came from.
 
 ## 2. Design
 
-### 2.1 The ledger
+### 2.1 The ledger, in SQLite
 
-`record["ledger"]` is a list of rows. Each row:
+The ledger is a database, not a field on the record: one file,
+`estimate-desk/ledger.sqlite` (Python's own `sqlite3`, WAL mode, no
+dependency on the pod). Two tables, `facts` and `asks`, keyed by estimate
+id. Writes are transactions, so parallel claims need no file lock;
+"what did we ask this customer" and "every estimate waiting on a rate"
+are queries. The per-estimate JSON record keeps route, status, the
+journals of sends and bookings, and the mirror Kolo's record store
+expects; its `specification` is derived from the ledger (2.1, last
+paragraph). Reset (rows by estimate, refusing an unknown schema), doctor,
+readiness, and the manifest learn the file. One way: the desk writes,
+everything else reads.
+
+Each row of `facts`:
 
 ```json
 {"field": "metal_karat", "piece": 0, "stone": null,
@@ -132,6 +144,22 @@ the customer as "they"; the fixed text goes instead. (The owner has said
 not to prioritise the greeting; it is one line in the check, so it rides
 along.)
 
+### 2.8 A Google Sheet mirror
+
+The owner wants the ledger visible in a sheet. The desk already reaches
+Google through Kolo's gateway token, proven for Gmail and Calendar;
+whether that token carries the Sheets scope is an open fact until the
+probe in 7.4 runs on the pod. If it does, a small module pushes changed
+rows after each ledger write, best-effort and journaled, to a "Facts" tab
+(one row per fact) and an "Estimates" tab (one row per estimate:
+customer, piece, status, missing, price, next step). If the scope is
+missing, the alternative is a service account whose key lives on the pod
+and whose address the sheet is shared with; a second credential, taken
+only if the gateway says no. Rules: the sheet is a mirror and never the
+source of truth (nothing reads back; a change is a question or a card,
+so the audit trail holds); it lives in the owner's account and is shared
+with nobody by default; a Google failure never holds up an inquiry.
+
 ## 3. Consumers
 
 | Consumer | Change |
@@ -141,7 +169,10 @@ along.)
 | `kolo_safe` cards | assumptions say "from the photo", "jeweler's choice", "customer" |
 | `judge` | reading contract with spans; drafting facts in the second person; photo clause folds into the ledger |
 | `rendering` | must-be-exact from the ledger; reference image as the edit base; checker questions from rows |
-| `estimate_record` | ledger, derived specification, migration from snapshot records on first read |
+| `estimate_record` | derived specification from the ledger, migration from snapshot records on first read |
+| `ledger` (new) | the SQLite store: schema, transactions, queries, per-estimate delete for the reset |
+| `sheet_mirror` (new) | best-effort push of changed rows to the owner's Google Sheet, journaled |
+| `customer_state_reset`, `readiness`, `manifest` | know the ledger file; the reset deletes rows by estimate and refuses an unknown schema |
 | `reading_check` | becomes the span validator (its size and carat rules stay) |
 | `doctor` | lists ledger inconsistencies (two winning rows, an ask with no email) |
 | tests | golden path unchanged in outcomes; new ledger unit tests; Michael's thread as a fixture end to end |
@@ -179,8 +210,10 @@ From the optimizer's `patterns.md`, with what the live desk taught:
 
 ## 5. Order of work
 
-1. **Ledger and derived view** (estimate_record, doctor, migration; tests).
-   Live check: readiness READY, an old record reads and prices unchanged.
+1. **Ledger in SQLite and the derived view** (ledger, estimate_record,
+   doctor, reset, readiness, manifest, migration; tests). Live check:
+   readiness READY, an old record reads and prices unchanged, the reset
+   empties the ledger.
 2. **Reading contract with spans** (judge, pipeline, reading_check;
    fixtures for every live email of 8 September). Live check: Michael's
    first email yields the right rows and asks only karat and origin.
@@ -192,6 +225,9 @@ From the optimizer's `patterns.md`, with what the live desk taught:
    photo, checker lines answered.
 5. **Email voice check** (customer_mail, judge, content guard). Live
    check: no "Hi Tony", no "they".
+6. **Sheet mirror** (sheet_mirror; after the scope probe in 7.4). Live
+   check: a new fact appears in the sheet within a tick; a Google outage
+   changes nothing for the customer.
 
 Each step is one PR with tests and one live check the same day. Steps 1
 and 2 change no customer-visible behaviour on their own.
@@ -210,3 +246,8 @@ and no question the customer cannot answer.
 2. Diamond color and clarity: ask as a preference, or jeweler's choice with
    the assumption on the card? (2.4)
 3. Whether a photo alone may set metal color without asking. (2.5)
+4. The Sheets scope probe (2.8): read-only, run on the desk's pod against a
+   sheet the owner creates in the shop's Google account. Passing means the
+   gateway token can read sheets; a second probe appends one row to a
+   "Probe" tab to confirm writes. A scope error means the service-account
+   route or no sheet.
