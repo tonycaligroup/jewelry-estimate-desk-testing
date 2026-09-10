@@ -2720,6 +2720,21 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.assertEqual(len(world.calendar_events), 1, "the old event is gone, the new one is in")
             self.assertIn(monday.date().isoformat(), json.dumps(next(iter(world.calendar_events.values()))["start"]))
             self.assertEqual(len(world.sent), 2)
+            # Live 9 Sep: "Sorry, I meant to say Tuesday." went to the owner as a stalled question. A bare day with
+            # reschedule words is that day at the booked time.
+            tuesday = monday + timedelta(days=1)
+            world.requested = ([], [])
+            world.customer_message("wd3", thread, "Sorry, I meant to say Tuesday.", subject="Re: Engagement ring")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "no question to the owner")
+            move = world.cards[-1]
+            self.assertEqual(move["kind"], "appointment_booking", move["payload"])
+            self.assertEqual(move["payload"]["calendar_availability"][0]["start"][:16], local_key(tuesday), move["payload"]["calendar_availability"])
+            self.execute(ws, world, move["payload"]["execute"], move)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertIn(tuesday.date().isoformat(), json.dumps(next(iter(world.calendar_events.values()))["start"]))
+            self.assertEqual(len(world.sent), 3)
         self.run_branch(branch)
 
     def test_bare_earrings_without_a_photo_are_asked_studs_hoops_or_drops(self) -> None:

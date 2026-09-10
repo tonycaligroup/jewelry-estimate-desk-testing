@@ -692,6 +692,15 @@ def appointment_intent(
     for sentence in own_sentences:
         if sentence[:160] not in asked and len(asked) < 5:
             asked.append(sentence[:160])
+    if estimate_id:
+        try:
+            booked_record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        except (OSError, ValueError):
+            booked_record = {}
+        moved = estimate_record.moved_to_same_time(" ".join(
+            reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or [] if m.get("claimed")), booked_record)
+        if moved and moved not in asked:
+            asked = [moved] + asked  # "I meant to say Tuesday": Tuesday at the booked time, ahead of the reading's bare day
     try:
         from zoneinfo import ZoneInfo as _Zone
 

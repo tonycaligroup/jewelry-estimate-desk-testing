@@ -7172,6 +7172,13 @@ class NoInventedMeetingTests(unittest.TestCase):
         self.assertTrue(estimate_record.asks_to_reschedule("Any chance Friday at 4 works?", booked=True))
         self.assertFalse(estimate_record.asks_to_reschedule("Can we do Monday at 3pm?"), "no booking: a request, not a move")
         self.assertFalse(estimate_record.asks_to_reschedule("See you Friday at 3pm!", booked=True))
+        self.assertTrue(estimate_record.asks_to_reschedule("Sorry, I meant to say Tuesday.", booked=True))
+        self.assertFalse(estimate_record.asks_to_reschedule("Sorry, I meant to say Tuesday."), "no booking: nothing to move")
+        booked = {"appointment_booked": {"confirmed_start": "2026-09-14T15:00:00-07:00"}}
+        self.assertEqual(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", booked), "Tuesday at 3pm")
+        self.assertEqual(estimate_record.moved_to_same_time("Actually the 22nd works better.", {"appointment_booked": {"confirmed_start": "2026-09-14T10:30:00-07:00"}}), "the 22nd at 10:30am")
+        self.assertIsNone(estimate_record.moved_to_same_time("Can we do Tuesday at 4pm instead?", booked), "a time of their own is theirs")
+        self.assertIsNone(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", {}))
         self.assertFalse(estimate_record.asks_to_reschedule("I can pick it up Friday at 4pm.", booked=True))
 
     def test_a_sheet_range_url_has_no_spaces_and_the_real_client_accepts_it(self) -> None:

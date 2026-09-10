@@ -1827,7 +1827,8 @@ NOT_A_VISIT_RE = re.compile(
 )
 RESCHEDULE_RE = re.compile(
     r"(?i)\b(?:reschedul\w*|something came up|can(?:no|')t make|(?:move|push|change) (?:it|our|the|my|that)\b|"
-    r"(?:a )?different (?:day|time)|another (?:day|time)|instead|my mistake|wrong (?:day|time|date)|meant to say|mixed (?:up|that up))\b"
+    r"(?:a )?different (?:day|time)|another (?:day|time)|instead|my mistake|wrong (?:day|time|date)|meant to say|mixed (?:up|that up)|"
+    r"works better|would be better)\b"
 )
 # Picking or accepting a time the shop offered: "the second one works", "Wednesday is fine", "2pm works".
 ACCEPTS_TIME_RE = re.compile(
@@ -2679,10 +2680,29 @@ def asks_to_reschedule(own_words: str, booked: bool = False) -> bool:
     text = str(own_words or "")
     sentences = scheduling_sentences(text)
     if not sentences:
-        return False
+        # "Sorry, I meant to say Tuesday": a bare day with reschedule words moves the booked meeting (live, 9 Sep).
+        return booked and bool(RESCHEDULE_RE.search(text)) and bool(day_sentences(text))
     if RESCHEDULE_RE.search(text):
         return True
     return booked and any(s.rstrip().endswith("?") or _ASKS_FOR_TIME_RE.match(s) for s in sentences)
+
+
+def moved_to_same_time(own_words: str, record: dict[str, Any] | None) -> str | None:
+    """'Sorry, I meant to say Tuesday' with a meeting booked: that day, at the booked time, as a phrase the resolver reads."""
+    booked = (record or {}).get("appointment_booked") if isinstance((record or {}).get("appointment_booked"), dict) else None
+    text = str(own_words or "")
+    if not booked or not booked.get("confirmed_start") or scheduling_sentences(text) or not RESCHEDULE_RE.search(text):
+        return None
+    days = day_sentences(text)
+    match = _DAY_NAMED_RE.search(days[0]) if days else None
+    if not match:
+        return None
+    try:
+        start = datetime.fromisoformat(str(booked["confirmed_start"]))
+    except ValueError:
+        return None
+    clock = start.strftime("%I:%M%p").lstrip("0").lower().replace(":00", "")
+    return f"{match.group(0)} at {clock}"
 
 
 # A day named without a clock time: "Monday", "next Tuesday", "the 14th", "next week", "tomorrow morning".
@@ -2724,7 +2744,8 @@ def settle_scheduling_intent(specification: dict[str, Any], own_words: str, reco
     if not isinstance(specification, dict) or present_value(specification.get("scheduling_intent")):
         return specification
     sentences = scheduling_sentences(own_words)
-    if not sentences and times_were_offered(record):
+    booked = isinstance((record or {}).get("appointment_booked"), dict)
+    if not sentences and (times_were_offered(record) or (booked and RESCHEDULE_RE.search(str(own_words or "")))):
         sentences = day_sentences(own_words)
     if not sentences:
         return specification
@@ -2748,6 +2769,8 @@ def drop_carried_scheduling_intent(specification: dict[str, Any], record: dict[s
         return specification
     if times_were_offered(record) and day_sentences(own_words):
         return specification
+    if asks_to_reschedule(own_words, booked=isinstance((record or {}).get("appointment_booked"), dict)):
+        return specification  # "Sorry, I meant to say Tuesday": the booked meeting moving (live, 9 September 2026)
     # The reading of the thread can re-word the earlier request, so its text is
     # never compared: on a reply, only the reply's own words carry a meeting.
     return {k: v for k, v in specification.items() if k != "scheduling_intent"}

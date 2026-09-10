@@ -14,7 +14,7 @@
     "customer_mail.py": "3dfbc332b53d881091c63487ecfb79dc",
     "customer_state_reset.py": "e58516280744282cb70ca278a5e4b341",
     "doctor.py": "ee93e435e15850b0980547e535398cb1",
-    "estimate_record.py": "ed8ad047439bf24cd5c1b79fc38a1263",
+    "estimate_record.py": "a07f718e6b225bee9b32b0b16667e009",
     "gateway_token.py": "d1742620e7d3af2005928733f400ab24",
     "gmail_classify.py": "e1dd64f4f7f765d99f10b365ded9780b",
     "gmail_fetch.py": "3eed73faa64e87dfa50a9c7f1a2d220f",
@@ -31,7 +31,7 @@
     "ledger.py": "c2f064c932036216fed5f0b5e671c4ba",
     "manifest.py": "a94d8af8a570000c8e2dbe027243555f",
     "owner_questions.py": "7b36a181c90bd371c0351be732639d40",
-    "pipeline.py": "3ca3e3288aa15310b15a59230e45e6b1",
+    "pipeline.py": "d6de8ab8a467484732437e25cc078601",
     "pricing_model.py": "133e46b1d5047ff321ea0f2e38fe8c57",
     "rate_card.py": "62c408d155106de332ebef57bb1ac665",
     "rates_intake.py": "727dde1285d8f52feee2efc59f060d0f",
@@ -50,7 +50,7 @@
     "spec_gate.py": "ac8ed9b67006fe093be9e64d1f88d509",
     "spot_price.py": "10a3327c317c1f2a970b73e03b562db8",
     "validate_profile.py": "dd294e2d04031e6008d29c60e1cf78bd",
-    "words.py": "8e2487a4becb27d47e8ae49d4c632d44",
+    "words.py": "15fbe5659ab034cd112bd1e2dd8faedd",
     "workflow_safe.py": "f67557ba550888333cf8ee6f7bbc1089"
   },
   "version": "4.15.13"
