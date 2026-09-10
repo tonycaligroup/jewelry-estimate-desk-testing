@@ -48,6 +48,8 @@ allows a faster model to be trusted.
 
 ## 2. The pieces
 
+The estimate record's keys, writers and shapes are in `RECORD-SCHEMA.md`; the customer-phrase rules and their live fixtures are in `scripts/words.py`.
+
 ```
 Gmail (via Maton) ──► Watcher (command cron, every 1–2 min, no model)
                           │  discover → claim → fetch → classify → route →

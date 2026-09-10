@@ -832,3 +832,4 @@ closed by follow-up changes:
   trade markup setting were removed on 6 September 2026. The tests that pin
   customer wording and phase order exist to keep the implementation faithful
   to this document.
+- The rules that read a customer's own words (meeting sentences, 'I don't know', a piece the shop made, an earlier conversation, pair carats, millimetre sizes, phone numbers, call or visit, periods of days, technical questions, greeting the right person) are listed in one table, `scripts/words.py`, each with the live phrases from tester threads it must keep reading right; `tests/test_words.py` runs every phrase. A tester's new phrasing becomes a row there before a rule changes (10 September 2026). The estimate record itself is described key by key in `RECORD-SCHEMA.md`, checked against the code by `tests/test_record_schema.py`.
