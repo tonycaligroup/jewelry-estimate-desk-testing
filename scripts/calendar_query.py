@@ -221,6 +221,40 @@ def list_events(
     return [e for e in items if isinstance(e, dict) and e.get("id")] if isinstance(items, list) else []
 
 
+def patch_event(
+    calendar_id: str,
+    event_id: str,
+    token: str,
+    description: str | None = None,
+    summary: str | None = None,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, Any]:
+    """Change an event's summary or description in place (a phone number that arrived later, 9 September 2026)."""
+    if not isinstance(event_id, str) or not event_id or len(event_id) > 255:
+        raise ValueError("event_id must contain 1-255 characters")
+    if not token or any(character in token for character in "\r\n"):
+        raise ValueError("MATON_API_KEY is missing or invalid")
+    body: dict[str, Any] = {}
+    if description is not None:
+        body["description"] = description[:2000]
+    if summary is not None:
+        body["summary"] = summary[:200]
+    if not body:
+        raise ValueError("nothing to change on the event")
+    url = EVENTS_URL.format(calendar=urllib.parse.quote(calendar_id, safe="")).replace(
+        "/events?", f"/events/{urllib.parse.quote(event_id, safe='')}?"
+    )
+    request = urllib.request.Request(
+        url, data=json.dumps(body, separators=(",", ":")).encode("utf-8"), method="PATCH",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    with opener(request, timeout=20) as response:
+        event = json.loads(response.read().decode("utf-8"))
+    if not isinstance(event, dict) or not event.get("id"):
+        raise ValueError("calendar provider returned an invalid event")
+    return event
+
+
 def delete_event(
     calendar_id: str,
     event_id: str,

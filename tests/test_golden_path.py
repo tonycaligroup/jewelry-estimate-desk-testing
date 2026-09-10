@@ -291,6 +291,15 @@ class World:
                  and calendar_query.parse_timestamp(e["end"]["dateTime"], "e") > lo]
         return self._after("calendar_list", found)
 
+    def patch_event(self, calendar_id, event_id, token, description=None, summary=None, opener=None) -> dict:
+        self._service("calendar_patch")
+        event = self.calendar_events[event_id]
+        if description is not None:
+            event["description"] = description
+        if summary is not None:
+            event["summary"] = summary
+        return self._after("calendar_patch", event)
+
     def delete_event(self, calendar_id, event_id, token, opener=None) -> bool:
         self._service("calendar_delete")
         self.deleted_events.append(event_id)
@@ -574,6 +583,7 @@ class GoldenPathTests(unittest.TestCase):
             patch.object(artwork, "collect", side_effect=world.fake_collect),
             patch.object(calendar_query, "query_freebusy", side_effect=world.query_freebusy),
             patch.object(calendar_query, "create_event", side_effect=world.create_event),
+            patch.object(calendar_query, "patch_event", side_effect=world.patch_event),
             patch.object(calendar_query, "delete_event", side_effect=world.delete_event),
             patch.object(calendar_query, "list_events", side_effect=world.list_events),
         )
@@ -3338,6 +3348,66 @@ class CombinedIntentTests(SideBranchTests):
             self.assertEqual(len(world.calendar_events), 1, "the same event, not a second one")
             record = self.record(ws, self.only_estimate(ws))
             self.assertEqual(record["appointment_booked"]["calendar_event_id"], next(iter(world.calendar_events)))
+        self.run_branch(branch)
+
+
+class PhoneCallTests(SideBranchTests):
+    """The owner, 9 Sep: 'are you available for a call tomorrow at 3pm?' books a call, and the desk gets the number onto the invitation."""
+
+    SIGNATURE = "\n\nKind Regards,\nDavid Trujillo | Kolo\n2210 Broadway, Santa Monica, CA 90404\n213.431.9336 | david@koloai.com"
+
+    def _call_after_estimate(self, ws: Path, world: World, signature: str) -> tuple[dict, datetime]:
+        thread, _estimate_id = self._estimate_sent(ws, world)
+        wanted = next_weekday(1, 15, 0)
+        world.intents = ["appointment_request"]
+        world.requested = ([f"{wanted.strftime('%A')} at 3pm"], [local_key(wanted)])
+        world.customer_message("pc1", thread, f"This looks great, but I have one more question. Are you available for a call {wanted.strftime('%A')} at 3pm?{signature}")
+        self.tick(ws, world)
+        book = world.cards[-1]
+        self.assertEqual(book["kind"], "appointment_booking", book)
+        return book, wanted
+
+    def test_a_call_with_the_number_in_the_signature(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, wanted = self._call_after_estimate(ws, world, self.SIGNATURE)
+            self.assertEqual(book["payload"]["meeting_kind"], "call")
+            self.assertEqual(book["payload"]["phone"], "213.431.9336")
+            self.assertIn("phone call, 213.431.9336", book["title"])
+            self.execute(ws, world, book["payload"]["execute"], book)
+            event = next(iter(world.calendar_events.values()))
+            self.assertTrue(event["summary"].startswith("Kolo Jewelers: phone call"), event["summary"])
+            self.assertIn("Call the customer at 213.431.9336", event["description"])
+            prompt = [q for q in world.prompts if "Confirm the appointment" in q][-1]
+            self.assertIn("you will call them at 213.431.9336", prompt)
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["meeting"], {**record["meeting"], "kind": "call", "phone": "213.431.9336"})
+            self.assertEqual(record["customer_overrides"]["phone"], "213.431.9336", "the number reaches the Customers tab")
+        self.run_branch(branch)
+
+    def test_a_call_without_a_number_asks_for_one_and_the_reply_updates_the_invitation(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            book, wanted = self._call_after_estimate(ws, world, "\n\nDavid")
+            self.assertEqual(book["payload"]["meeting_kind"], "call")
+            self.assertNotIn("phone", book["payload"])
+            self.assertIn("phone call, number needed", book["title"])
+            self.execute(ws, world, book["payload"]["execute"], book)
+            event = next(iter(world.calendar_events.values()))
+            self.assertIn("number is to follow", event["description"])
+            prompt = [q for q in world.prompts if "Confirm the appointment" in q][-1]
+            self.assertIn("ask for the best number to reach them", prompt)
+            # The customer replies with the number: the invitation, the record, and the owner get it; nothing is sent.
+            world.intents = []
+            sent_before = len(world.sent)
+            world.customer_message("pc2", "thread-side", "You can reach me at (415) 555-0100. See you then!\n\nDavid")
+            summary = self.tick(ws, world)
+            self.assertEqual(len(world.sent), sent_before)
+            self.assertIn("Call the customer at 415.555.0100", next(iter(world.calendar_events.values()))["description"])
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["meeting"]["phone"], "415.555.0100")
+            self.assertEqual(record["customer_overrides"]["phone"], "415.555.0100")
+            notice = [n for n in world.notices if not n["file"] and "sent their number" in n["text"]]
+            self.assertEqual(len(notice), 1, world.notices[-3:])
+            self.assertEqual(self.claim(ws, "pc2")["status"], "processed")
         self.run_branch(branch)
 
 

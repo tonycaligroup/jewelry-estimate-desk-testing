@@ -180,7 +180,9 @@ KIND_BRIEFS = {
         "the facts say there is more than one piece, name each piece in a sentence and give the one total for all of them."
     ),
     "confirmation": (
-        "Confirm the appointment at exactly the time given (write the time exactly as provided). Say a calendar "
+        "Confirm the appointment at exactly the time given (write the time exactly as provided). If the facts say it "
+        "is a phone call, confirm the call rather than a visit: say you will call them at the number given, or, when "
+        "the facts say you do not have it, ask in one sentence for the best number to reach them. Say a calendar "
         "invitation is on its way to this address. Say what the meeting is for in a personal way: mention what "
         "they are bringing or planning if they said, and that you are looking forward to it. If the facts say "
         "the visit is to design the piece, say you look forward to designing their perfect piece together at the "

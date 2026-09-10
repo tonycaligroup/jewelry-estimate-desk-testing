@@ -10749,3 +10749,16 @@ class GatedPricingRulesTests(unittest.TestCase):
         self.assertEqual([m["suggested_key"] for m in missing], ["lab_grown_diamond_center_2_5ct"])
         self.assertIn("live quote", missing[0]["description"])
         self.assertEqual(cost_components.missing_rates({"specification": {**record["specification"], "stone_carat": 1.0}}, {"pricing": pricing}), [])
+
+
+class PhoneWordsTests(unittest.TestCase):
+    def test_a_call_a_visit_and_a_number(self) -> None:
+        self.assertEqual(estimate_record.meeting_kind_in_words("are you available for a call tomorrow at 3pm?"), "call")
+        self.assertEqual(estimate_record.meeting_kind_in_words("could I come in Friday at 2?"), "visit")
+        self.assertEqual(estimate_record.meeting_kind_in_words("can we do a quick zoom?"), "call")
+        self.assertIsNone(estimate_record.meeting_kind_in_words("Friday at 3pm works"))
+        self.assertEqual(estimate_record.phone_in_words("213.431.9336 | david@koloai.com"), "213.431.9336")
+        self.assertEqual(estimate_record.phone_in_words("call me at (415) 555-0100 please"), "415.555.0100")
+        self.assertEqual(estimate_record.phone_in_words("+1 310-555-0199"), "310.555.0199")
+        self.assertIsNone(estimate_record.phone_in_words("a 2.5 ct stone, size 6, 18k"), "carats and karats are not numbers to call")
+        self.assertIsNone(estimate_record.phone_in_words("order 20260909123 shipped"))

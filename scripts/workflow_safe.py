@@ -757,9 +757,13 @@ def _appointment_approval_details(
 ) -> dict[str, Any]:
     if not {"requested_times", "calendar_availability"} <= set(intent) or not set(intent) <= {
         "requested_times", "resolved_times", "calendar_availability", "availability_note", "mode", "outside_hours", "hours", "ask_for",
-        "ask_intro",
+        "ask_intro", "meeting_kind", "phone",
     }:
         raise ValueError("appointment intent contains missing or unsupported fields")
+    if intent.get("meeting_kind") is not None and intent["meeting_kind"] not in ("call", "visit"):
+        raise ValueError("meeting_kind must be call or visit")
+    if intent.get("phone") is not None and (not isinstance(intent["phone"], str) or not re.fullmatch(r"[\d.+ ()-]{7,20}", intent["phone"])):
+        raise ValueError("phone must be a phone number")
     if intent.get("ask_intro") is not None and (not isinstance(intent["ask_intro"], str) or not intent["ask_intro"].strip()
                                                  or len(intent["ask_intro"]) > 200):
         raise ValueError("ask_intro must be one short sentence")
@@ -833,6 +837,10 @@ def _appointment_approval_details(
         details["ask_for"] = [q.strip() for q in ask_for]  # the questions the approved email also asks
         if intent.get("ask_intro"):
             details["ask_intro"] = str(intent["ask_intro"]).strip()  # concierge: budget and timeframe, introduced as such
+    if intent.get("meeting_kind"):
+        details["meeting_kind"] = intent["meeting_kind"]  # a phone call or a visit (9 September 2026)
+    if intent.get("phone"):
+        details["phone"] = str(intent["phone"])
     if monitor_root is not None:
         common = {"estimate_id": record["estimate_id"], "message_id": message_id, "brief_id": "<Brief ID>"}
         if mode == "book":
@@ -2708,6 +2716,16 @@ RESCHEDULE_NOTE = (
     "If this time stops working for you, reply here and we will find another.\n\n{shop}\n"
 )
 
+CALL_CONFIRMATION_NOTE = (
+    "Hello,\n\nOur call is set: {when}. I will call you at {phone}; a calendar invitation is on its way to this "
+    "address so it lands on your calendar.\n\nWe will go over the design for {piece} together. If the time stops "
+    "working for you, reply here and we will find another.\n\n{shop}\n"
+)
+CALL_NUMBER_NOTE = (
+    "Hello,\n\nOur call is set: {when}. A calendar invitation is on its way to this address. What is the best "
+    "number to reach you at? Reply with it here and I will add it to the invitation.\n\nWe will go over the design "
+    "for {piece} together. If the time stops working for you, reply here and we will find another.\n\n{shop}\n"
+)
 CONFIRMATION_NOTE = (
     "Hello,\n\nYou are booked: {when} at {shop}. A calendar invitation is on its way to this address; "
     "please accept it so it lands on your calendar.\n\nWe will go over the design for {piece} together. "
@@ -2898,7 +2916,13 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     event_path = work_dir / "calendar-event.json"
     saved = read_object(event_path) if event_path.exists() else {}
+    is_call = approval.get("meeting_kind") == "call"
+    phone = str(approval.get("phone") or estimate_record.customer_phone(record) or "")
     description = f"Design consultation for {piece}. Estimate {args.estimate_id.upper()}."
+    if is_call:
+        # A phone call, not a visit (the owner, 9 September 2026): the number on the event, or a note that it is to follow.
+        description = (f"Phone call about {piece}. " + (f"Call the customer at {phone}." if phone else "The customer's number is to follow.")
+                       + f" Estimate {args.estimate_id.upper()}.")
     event = None
     if isinstance(saved, dict) and saved.get("desk_slot_start") == chosen["start"]:
         if saved.get("id"):
@@ -2928,7 +2952,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         write_private(event_path, {"desk_slot_start": chosen["start"], "started_at": datetime.now(timezone.utc).isoformat()})
         event = calendar_query.create_event(
             calendar_id, chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC",
-            f"{shop}: design consultation, {piece}"[:200], description,
+            (f"{shop}: phone call, {piece}" if is_call else f"{shop}: design consultation, {piece}")[:200], description,
             record["route"]["recipient"], token, **kwargs,
         )
         write_private(event_path, {**event, "desk_slot_start": chosen["start"]})
@@ -2941,13 +2965,19 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         kind = "reschedule"
     else:
         fixed = CONFIRMATION_NOTE.format(when=chosen["label"], shop=shop, piece=piece)
+        if is_call:
+            fixed = (CALL_CONFIRMATION_NOTE if phone else CALL_NUMBER_NOTE).format(when=chosen["label"], shop=shop, piece=piece, phone=phone)
         kind = "confirmation"
+    call_facts = {}
+    if is_call:
+        call_facts = {"this is a phone call, not a visit": (f"you will call them at {phone}; say so" if phone else
+                      "you do not have their number: ask for the best number to reach them, in one sentence")}
     prepared = prepared_email_path(approval_store_path(p["monitor_root"], args.estimate_id, args.message_id))
-    if kind == "confirmation" and prepared.exists() and chosen["label"] in prepared.read_text(encoding="utf-8"):
+    if kind == "confirmation" and prepared.exists() and chosen["label"] in prepared.read_text(encoding="utf-8") and not is_call:
         body, body_source = prepared.read_text(encoding="utf-8"), "prepared"
     else:
         body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
-            "piece": piece, "time_labels": [chosen["label"]], "shop name": shop,
+            "piece": piece, "time_labels": [chosen["label"]], "shop name": shop, **call_facts,
             "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
             **({"the visit": "the visit is to design your perfect piece together (write to the customer as you); never mention an estimate or a quote"}
                if record.get("status") == "awaiting_specs" else {}),
@@ -2985,6 +3015,8 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         "confirmation_message_id": delivery["id"],
         "confirmation_thread_id": delivery["threadId"],
     })
+    if is_call or phone:
+        booked = estimate_record.note_meeting(p["record_root"], args.estimate_id, "call" if is_call else None, phone or None)
     mirror_record(booked, work_dir / "current-record.json")
     _supersede_reject_question(p, args.estimate_id, args.message_id, "the card was approved and the time booked")
     if partner is not None:
@@ -3794,6 +3826,30 @@ def finalize_post_estimate(args: argparse.Namespace) -> dict[str, Any]:
             kolo_safe.tell_owner(args.monitor_root, f"{who} accepted the estimate for {piece}. Nothing more for the desk to send; the next step is yours.", runner)
         except Exception:  # noqa: BLE001
             pass
+    meeting = record.get("meeting") if isinstance(record.get("meeting"), dict) else {}
+    if meeting.get("kind") == "call" and not meeting.get("phone"):
+        # The number the call was waiting for (9 September 2026): onto the record, the invitation, and the owner's screen.
+        try:
+            paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
+            message = read_object(Path(paths["gmail_message"]))
+            number = estimate_record.phone_in_words(gmail_text.body_text(message, limit=4000))
+        except (OSError, ValueError):
+            number = None
+        if number:
+            record = estimate_record.note_meeting(args.record_root, args.estimate_id, "call", number)
+            booked = record.get("appointment_booked") if isinstance(record.get("appointment_booked"), dict) else {}
+            try:
+                profile_path = getattr(args, "shop_profile", None) or (workspace_of(args.monitor_root) / "estimate-desk" / "shop-profile.json")
+                calendar_id = (read_object(Path(profile_path)).get("scheduling") or {}).get("calendar")
+                if calendar_id and booked.get("calendar_event_id"):
+                    calendar_query.patch_event(calendar_id, str(booked["calendar_event_id"]), gateway_token.load_token(),
+                                               description=f"Phone call about {piece}. Call the customer at {number}. Estimate {args.estimate_id.upper()}.")
+            except Exception:  # noqa: BLE001 - the number is on the record either way
+                pass
+            try:
+                kolo_safe.tell_owner(args.monitor_root, f"{who} sent their number for the call: {number}. It is on the invitation and the Customers tab.", runner)
+            except Exception:  # noqa: BLE001
+                pass
     actionable = set(intents) & {"rendering_request", "appointment_request"}
     if not actionable:
         finish_processed(

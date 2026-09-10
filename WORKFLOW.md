@@ -456,6 +456,16 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 9 September 2026 (unpublished): a phone call is booked as a call
+  ("are you available for a call tomorrow at 3pm?"): the card, the calendar
+  event, and the confirmation say so; the customer's number is read from
+  anything they wrote (a signature counts) and put on the invitation, and
+  when the desk has none the confirmation asks for the best number; a reply
+  carrying it goes onto the invitation, the record, the Customers tab, and
+  one line to the owner, with nothing sent back (6.7). The customer's own
+  scheduling sentences ride along with the reading's quotes, so "a call
+  tomorrow at 3pm" books 3pm rather than offering times (live: the reading
+  returned "tomorrow").
 - Built 9 September 2026 (unpublished): the rate card is the desk's fields
   with the jeweler's numbers, blank until they fill it: a "Rates" tab (the
   Value column theirs, read back every tick, journaled, a bad cell named

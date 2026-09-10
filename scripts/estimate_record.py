@@ -2027,6 +2027,52 @@ def set_one_time_rate(root: Path, estimate_id: str, rate_kind: str, rate_key: st
 
 
 CUSTOMER_FIELDS = ("name", "phone", "notes")
+PHONE_RE = re.compile(r"(?<!\d)(?<!\d\.)(?:\+?1[ .-]?)?\(?(\d{3})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)(?!\.\d)")
+_CALL_RE = re.compile(r"(?i)\b(?:phone|call|zoom|video|facetime|google meet|teams|ring me|give me a ring)\b")
+_VISIT_RE = re.compile(r"(?i)\b(?:in person|come (?:in|by|over)|stop by|drop by|swing by|visit|at the shop|at your shop|your store|the store)\b")
+
+
+def phone_in_words(text: str) -> str | None:
+    """The first phone number in the text (a signature counts), as digits with dots: 213.431.9336."""
+    match = PHONE_RE.search(str(text or ""))
+    return ".".join(match.groups()) if match else None
+
+
+def meeting_kind_in_words(own_words: str) -> str | None:
+    """'call' when they ask for a phone or video call, 'visit' when they ask to come in, else None."""
+    text = str(own_words or "")
+    if _CALL_RE.search(text) and not _VISIT_RE.search(text):
+        return "call"
+    if _VISIT_RE.search(text):
+        return "visit"
+    return None
+
+
+def note_meeting(root: Path, estimate_id: str, kind: str | None, phone: str | None) -> dict[str, Any]:
+    """What the booked meeting is (a call, a visit) and the number to call, kept beside the booking."""
+    path = record_path(root, estimate_id)
+    with record_lock(root):
+        record = read_object(path)
+        meeting = dict(record.get("meeting") or {})
+        if kind:
+            meeting["kind"] = kind
+        if phone:
+            meeting["phone"] = phone
+        meeting["at"] = datetime.now(timezone.utc).isoformat()
+        record["meeting"] = meeting
+        if phone:
+            overrides = dict(record.get("customer_overrides") or {})
+            if not overrides.get("phone"):
+                overrides["phone"] = phone
+                record["customer_overrides"] = {**overrides, "at": meeting["at"]}
+        write_object(path, record)
+        return record
+
+
+def customer_phone(record: dict[str, Any] | None) -> str:
+    override = (record or {}).get("customer_overrides") if isinstance((record or {}).get("customer_overrides"), dict) else {}
+    meeting = (record or {}).get("meeting") if isinstance((record or {}).get("meeting"), dict) else {}
+    return str(override.get("phone") or meeting.get("phone") or "")
 
 
 def save_customer_overrides(root: Path, estimate_id: str, values: dict[str, Any]) -> dict[str, Any]:
@@ -3116,7 +3162,7 @@ def record_appointment_approval_requested(
     # The owner's card also carries the piece, the proposed time, and a note
     # about availability; they are display fields, not binding ones.
     optional = {"piece", "proposed_time", "availability_note", "execute", "execute_on_reject", "reject_code", "outside_hours", "hours",
-                "ask_for", "ask_intro"}  # ask_for: the questions the approved offer email also asks (8 September 2026)
+                "ask_for", "ask_intro", "meeting_kind", "phone"}  # ask_for: the questions the approved offer email also asks (8 September 2026)
     if (
         not isinstance(approval, dict)
         or not required <= set(approval)

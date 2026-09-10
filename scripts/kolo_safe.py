@@ -354,6 +354,8 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
     )
     if booking and options:
         when = str(options[0].get("label") or options[0].get("start"))[:120]
+        if details.get("meeting_kind") == "call":
+            when += f" (phone call, {details['phone']})" if details.get("phone") else " (phone call, number needed)"
         rows["Time"] = when
         rows["Approve means"] = f"Book {when} on your calendar, invite the customer, and confirm in their email thread."
         rows["Reject means"] = reject

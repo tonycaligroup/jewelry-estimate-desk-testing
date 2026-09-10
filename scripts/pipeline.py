@@ -675,6 +675,13 @@ def appointment_intent(
         asked, resolved = judged["requested_times"], judged.get("resolved_times", [])
     except judge.JudgmentError:
         asked, resolved = [], []
+    # The customer's own scheduling sentences ride along with the model's quotes (live, 9 September 2026: "a call
+    # tomorrow at 3pm" came back as "tomorrow" and the desk offered times instead of booking 3pm).
+    own_sentences = estimate_record.scheduling_sentences(" ".join(
+        reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or [] if m.get("claimed")))
+    for sentence in own_sentences:
+        if sentence[:160] not in asked and len(asked) < 5:
+            asked.append(sentence[:160])
     try:
         from zoneinfo import ZoneInfo as _Zone
 
@@ -682,6 +689,20 @@ def appointment_intent(
     except (KeyError, ValueError, OSError):
         pass
     intent: dict[str, Any] = {"requested_times": asked, "resolved_times": resolved, "calendar_availability": []}
+    # A phone call or a visit, from the message being handled; the number from anywhere they wrote it (a signature counts).
+    claimed_words = " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or [] if m.get("claimed"))
+    kind = estimate_record.meeting_kind_in_words(claimed_words)
+    if kind:
+        intent["meeting_kind"] = kind
+    phone = next((estimate_record.phone_in_words(str(m.get("body") or "")) for m in reversed(digest.get("messages") or [])
+                  if m.get("sent_by") == "customer" and estimate_record.phone_in_words(str(m.get("body") or ""))), None)
+    if not phone and estimate_id:
+        try:
+            phone = estimate_record.customer_phone(estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))) or None
+        except (OSError, ValueError):
+            phone = None
+    if phone:
+        intent["phone"] = phone
     if not scheduling.get("calendar") or not slots.parse_windows(scheduling):
         intent["availability_note"] = "no calendar or declared windows configured"
         return intent
