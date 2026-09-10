@@ -43,6 +43,7 @@ faked, and six side branches beside it.
 | Test pod install | git checkout at `<workspace>/skills/jewelry-estimate-desk-testing` |
 | Living platform notes | `KOLO-SKILL-PLAYBOOK.md` (Kolo capabilities, all verified or marked) |
 | Design record | `ARCHITECTURE.md` (batches 1-6 at the end), `WORKFLOW.md` (business rules) |
+| Known issues | `KNOWN-ISSUES.md` (every defect seen live, the rule that replaced it, the version; and what is still open) |
 | Record and phrases | `RECORD-SCHEMA.md` (every key on the estimate record, who writes it, when); `scripts/words.py` (the customer-phrase rules in one table with the live phrases that shaped them; `python3 scripts/words.py` runs it) |
 
 ## Packaging for the team marketplace
