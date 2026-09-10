@@ -470,6 +470,8 @@ class World:
                     "fine_lettering": False, "notes": "signet with the customer's logo"}
         if "You write customer emails for" in prompt:
             return {"body": self.customer_email(prompt)}
+        if prompt.startswith("POINTS AT THE PAST"):
+            return {"refers_to_earlier": str(self.spec.get("refers_to_earlier") or "")}
         raise AssertionError("unexpected model prompt: " + prompt[:300])
 
     def quantities(self, prompt: str) -> dict:
@@ -3264,6 +3266,34 @@ class PriorPieceTests(SideBranchTests):
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
             self.assertIn("platinum", world.cards[-1]["title"].lower())
+        self.run_branch(branch)
+
+    def test_the_models_judgement_finds_the_piece_when_no_rule_does(self) -> None:
+        """The owner, 10 Sep: judgement is the model's, the rule is the floor. 'Those blue ones from the spring' matches no rule."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_sapphire"] = 300.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            earlier = {"piece_type": "pair of earrings", "earring_style": "stud", "metal": "white gold", "metal_karat": "14k", "metal_color": "white",
+                       "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_carat_basis": "each", "stone_shape": "round",
+                       "setting_style": "four-prong", "center_stone": "yes"}
+            _thread, first_id = self._estimate_sent(ws, world, spec=earlier, text="A pair of stud earrings, round lab-grown sapphires 1.5 ct each, "
+                                                    "four-prong, 14k white gold. Estimate please.\n\nTony")
+            words = "Those blue ones from the spring, could I get a set for my sister too?"
+            self.assertFalse(estimate_record.refers_to_an_earlier_conversation(words), "no rule reads this; the model does")
+            world.spec = {"piece_type": "earrings", "refers_to_earlier": "Those blue ones from the spring"}
+            world.customer_message("mj1", "thread-blue-ones", words + "\n\nTony", subject="For my sister")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            body = world.sent[-1]["body"]
+            self.assertIn("sapphire stud earrings", body)
+            self.assertRegex(body, r"(?i)the piece you have in mind")
+            new_id = next(i for i in (path.stem for path in (ws / "estimate-desk" / "records").glob("jed-*.json")) if i != first_id)
+            record = self.record(ws, new_id)
+            self.assertEqual(record["prior_piece"]["estimate_id"], first_id)
+            self.assertNotIn("refers_to_earlier", record["specification"], "the judgement never rides on the record")
         self.run_branch(branch)
 
     def test_nothing_on_file_welcomes_them_back_and_asks_for_a_reminder_or_a_photo(self) -> None:

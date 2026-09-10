@@ -1289,12 +1289,20 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
         and decision.get("reason_code") == "identity_has_active_estimate_on_another_thread"
         and not getattr(args, "force_new_inquiry", False)
         and len(messages) == 1
-        and (estimate_record.refers_to_a_prior_piece(gmail_text.body_text(message, limit=4000))
-             or estimate_record.refers_to_an_earlier_conversation(gmail_text.body_text(message, limit=4000)))
     ):
         # "The pendant you made for me, but smaller": a new piece after one on file, not the same piece continued
-        # (the jeweler, 9 September 2026); the owner is not asked which.
-        args.force_new_inquiry = True
+        # (the jeweler, 9 September 2026); the owner is not asked which. The rules are the floor; when none reads it,
+        # the model judges the one email (the owner, 10 September 2026).
+        body = gmail_text.body_text(message, limit=4000)
+        past = estimate_record.refers_to_a_prior_piece(body) or estimate_record.refers_to_an_earlier_conversation(body)
+        if not past:
+            try:
+                past = bool(judge.points_at_the_past(body, getattr(args, "model", None), getattr(args, "judge_runner", subprocess.run),
+                                                     getattr(args, "openclaw", None)))
+            except judge.JudgmentError:
+                past = False
+        if past:
+            args.force_new_inquiry = True
     if (
         decision["decision"] == "manual_review"
         and decision.get("reason_code") == "identity_has_active_estimate_on_another_thread"

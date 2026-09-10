@@ -880,6 +880,10 @@ def process_claim(
         specification = judged["specification"]
     else:
         specification = judge.extract_specification(digest, model, judge_runner, openclaw, known=known, photos=photos)["specification"]
+    # The model's judgement that they point at something from before (the owner, 10 September 2026: judgement is the
+    # model's, the rule is the floor); it decides the lookup below and never rides on the record.
+    specification = dict(specification)
+    model_says_earlier = bool(str(specification.pop("refers_to_earlier", "") or "").strip())
     specification = estimate_record.carry_prior_facts(record, specification)
     specification = estimate_record.merge_known_facts(record, specification)
     specification = estimate_record.settle_center_stone(
@@ -896,7 +900,7 @@ def process_claim(
     # "maybe in the 2 to 3 ct range": the top of the range is priced and the range is the assumption, never a question.
     specification = estimate_record.settle_carat_range(specification, handled_words)
     made_before = estimate_record.refers_to_a_prior_piece(handled_words)
-    talked_before = estimate_record.refers_to_an_earlier_conversation(handled_words)
+    talked_before = estimate_record.refers_to_an_earlier_conversation(handled_words) or model_says_earlier
     if initiating and (made_before or talked_before) and not record.get("prior_piece"):
         # "An exact replica of the pendant you made for me", "the emerald earrings we talked about earlier, but with
         # sapphires": the piece on file is the base and nothing on it is asked (the jeweler, 9 September 2026). Found in

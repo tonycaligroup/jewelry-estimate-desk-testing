@@ -36,7 +36,7 @@ SPEC_KEYS = (
     "accent_stone_color", "accent_stone_clarity", "finger_size", "dimensions",
     "setting_style", "finish", "engraving", "event_date", "budget",
     "customer_supplied_materials", "certificate", "reference_images",
-    "scheduling_intent", "notes", "pieces",
+    "scheduling_intent", "refers_to_earlier", "notes", "pieces",
 )
 TRIAGE_KINDS = {
     "estimate_request", "not_a_quote_request", "vendor_or_marketing",
@@ -361,6 +361,32 @@ def known_clause(known: dict[str, Any] | None) -> str:
     )
 
 
+def points_at_the_past(text: str, model: str | None = None, runner: Runner = subprocess.run, openclaw: str | None = None) -> str:
+    """The customer's own words when a first email points at something this shop already has with them; "" otherwise.
+
+    Asked only when the sender has an estimate on another thread and no rule
+    settled it (the owner, 10 September 2026: judgement is the model's, the
+    rule is the floor).
+    """
+    def check(value: dict[str, Any]) -> dict[str, Any]:
+        words = value.get("refers_to_earlier", "")
+        if words is None:
+            words = ""
+        if not isinstance(words, str):
+            raise ValueError("refers_to_earlier must be text")
+        return {"refers_to_earlier": words.strip()[:200]}
+
+    prompt = (
+        "POINTS AT THE PAST. Read one customer email to a custom-jewelry shop. Answer with one JSON object: "
+        '{"refers_to_earlier": "..."}. Put the customer\'s own words in refers_to_earlier when the email points at something '
+        "this shop already has with them: a piece the shop made or sold them, an estimate or quote they received, or a design "
+        'they discussed before ("remember those sapphire earrings?", "another pair like the ones I got", "the ring you did for '
+        'my wife", "same as last time"). Use "" for a photo, a website, an attachment, an heirloom, another jeweler\'s work, or a '
+        "fresh idea. Nothing else in the object.\n\nEMAIL:\n" + str(text or "")[:4000]
+    )
+    return ask_json(prompt, check, model, runner, openclaw)["refers_to_earlier"]
+
+
 def extract_specification(
     digest: dict[str, Any],
     model: str | None = None,
@@ -407,6 +433,10 @@ def extract_specification(
         "visit, or bring something to the shop (\"can we meet next week\", \"I can come by Friday\"), or asks to move or "
         "reschedule a meeting, or proposes a day and time (\"something came up, any chance we can do Friday at 4pm?\"); "
         "omit it when they do not ask to meet. "
+        "refers_to_earlier is the customer's own words when the message being handled points at something this shop already "
+        "has with them: a piece the shop made or sold them, an estimate or quote they received, or a design they discussed "
+        "before (\"remember those sapphire earrings?\", \"another pair like the ones I got\", \"the ring you did for my wife\", "
+        "\"same as last time\"); never for a photo, a website, an attachment, an heirloom, or another jeweler's work; omit it otherwise. "
         "customer_supplied_materials names anything the customer already owns and wants used (\"my mother's "
         "diamond\", \"reset my stone\", \"my own gold\"); when the stone is theirs, still fill stone_type and any "
         "shape or size they gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "
@@ -476,6 +506,10 @@ def triage_and_extract(
         "scheduling_intent is the customer's own words when the message being handled asks to meet, come in, "
         "visit, or bring something to the shop, or asks to move or reschedule a meeting, or proposes a day and time "
         "(\"something came up, any chance we can do Friday at 4pm?\"); omit it when they do not ask to meet. "
+        "refers_to_earlier is the customer's own words when the message being handled points at something this shop already "
+        "has with them: a piece the shop made or sold them, an estimate or quote they received, or a design they discussed "
+        "before (\"remember those sapphire earrings?\", \"another pair like the ones I got\", \"the ring you did for my wife\", "
+        "\"same as last time\"); never for a photo, a website, an attachment, an heirloom, or another jeweler's work; omit it otherwise. "
         "customer_supplied_materials names anything the customer already owns and wants used (\"my mother's "
         "diamond\", \"reset my stone\"); when the stone is theirs, still fill stone_type and any shape or size they "
         "gave (stone_carat holds its carat weight or millimetre size), and never ask or invent its grade. "

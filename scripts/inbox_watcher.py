@@ -370,6 +370,9 @@ def run_inline_claim(
                 message_id=message_id,
                 shop_profile=p["shop_profile"],
                 runner=runner,
+                judge_runner=judge_runner,
+                openclaw=openclaw,
+                model=pipeline.settings(workspace / "estimate-desk").get("model"),
             )
         )
         if result.get("next_action") == "done":
