@@ -184,7 +184,7 @@ def question_lines(missing: list[str], specification: dict[str, Any] | None = No
 UNDERSTANDING_LINE = "Just so I have your vision right: you are after {vision}. Tell me if any of that is off."
 
 
-REMIND_QUESTION = "could you remind me a little about the piece we made for you, or send a photo if you have one handy?"
+REMIND_QUESTION = "could you remind me a little about the piece, or send a photo if you have one handy?"
 
 
 def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None,
@@ -903,7 +903,7 @@ def process_claim(
         # the desk's own records, its facts ride along beneath the new words. A piece the shop made is described back
         # to the customer, never its costs, and confirmed before it is priced; one the desk cannot find gets a warm
         # welcome back and a request to remind us about it, or a photo (the owner, 10 September 2026). The owner is
-        # never asked. An earlier conversation not on file is read afresh.
+        # never asked. "Remember those sapphire earrings?" is the same (live, 9 September 2026: asked everything again).
         prior = estimate_record.find_prior_piece(p["record_root"], (record.get("route") or {}).get("recipient"),
                                                  specification.get("piece_type"), exclude=estimate_id)
         if prior:
@@ -913,8 +913,8 @@ def process_claim(
             ledger.absorb(desk, estimate_id, carried, message_id, "", "", default_source="prior")
             record = estimate_record.mark_prior_piece(p["record_root"], estimate_id, {
                 "on_file": True, "estimate_id": prior["estimate_id"], "carried": sorted(carried),
-                "basis": "made" if made_before else "estimate", "confirm": "asked" if made_before else "not_needed"})
-        elif made_before:
+                "basis": "made" if made_before else "estimate", "confirm": "asked"})
+        else:
             record = estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"on_file": False, "welcome_back": message_id})
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.

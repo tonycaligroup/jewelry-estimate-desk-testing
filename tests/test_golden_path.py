@@ -3202,9 +3202,18 @@ class PriorPieceTests(SideBranchTests):
                                    "I'd like the exact same thing, but with lab grown sapphires. Same size, all other details the same.\n\n"
                                    "Can I get an idea what that would cost?\n\nAnthony", subject="More earrings")
             summary = self.tick(ws, world)
-            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            # The owner, 10 Sep: the piece the desk thinks it knows is said back and confirmed before any price.
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
             self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" in n["text"]], [], "no question to the owner, same or new")
-            self.assertEqual(len(world.sent), 1, "no questions to the customer")
+            self.assertEqual(len(world.sent), 2, "one email: the piece said back, is that the one")
+            confirm = world.sent[-1]["body"]
+            self.assertIn("after the design we discussed before", confirm)
+            self.assertRegex(confirm, r"(?i)the piece you have in mind")
+            self.assertNotRegex(confirm, r"(?i)carat weight|studs, hoops|karat", "nothing on file is asked")
+            world.customer_message("tb1b", "thread-more-earrings", "Yes, exactly those.\n\nAnthony", subject="Re: More earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(len(world.sent), 2, "no more questions")
             new_id = next(i for i in (path.stem for path in (ws / "estimate-desk" / "records").glob("jed-*.json")) if i != first_id)
             spec = self.record(ws, new_id)["specification"]
             self.assertEqual((spec["stone_type"], spec["stone_origin"]), ("sapphire", "lab-grown"), "the new words win")
@@ -3217,6 +3226,44 @@ class PriorPieceTests(SideBranchTests):
             self.assertTrue(title.startswith("Price approval"), title)
             self.assertIn("sapphires", title)
             self.assertNotIn("emerald", title)
+        self.run_branch(branch)
+
+    def test_remember_those_earrings_finds_the_pair_on_file_and_asks_only_if_that_is_the_one(self) -> None:
+        """Live 9 Sep: 'Hey remember those sapphire earrings? ... everything the same but in platinum' was asked four questions."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_sapphire"] = 300.0
+            profile["pricing"]["metal_per_gram"]["platinum"] = 45.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            earlier = {"piece_type": "pair of earrings", "earring_style": "stud", "metal": "white gold", "metal_karat": "14k", "metal_color": "white",
+                       "stone_type": "sapphire", "stone_origin": "lab-grown", "stone_carat": 1.5, "stone_carat_basis": "each", "stone_shape": "round",
+                       "setting_style": "four-prong", "center_stone": "yes"}
+            _thread, first_id = self._estimate_sent(ws, world, spec=earlier, text="A pair of stud earrings, round lab-grown sapphires 1.5 ct each, "
+                                                    "four-prong, 14k white gold. Estimate please.\n\nTony")
+            world.spec = {"piece_type": "earrings", "stone_type": "sapphire", "metal": "platinum"}
+            world.customer_message("se1", "thread-new-sapphire", "Hey remember those sapphire earrings?\nI want to make a pair for my mom, everything "
+                                   "the same but in platinum. Can you let me know how much that would be?\n\nTony", subject="New sapphire earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "the owner is not asked")
+            body = world.sent[-1]["body"]
+            self.assertIn("sapphire stud earrings", body)
+            self.assertIn("in platinum", body)
+            self.assertNotIn("white platinum", body, "the old metal's colour does not ride along")
+            self.assertRegex(body, r"(?i)the piece you have in mind")
+            self.assertNotRegex(body, r"(?i)carat weight|studs, hoops|stone shape|What look do you have", "nothing on file is asked")
+            new_id = next(i for i in (path.stem for path in (ws / "estimate-desk" / "records").glob("jed-*.json")) if i != first_id)
+            record = self.record(ws, new_id)
+            self.assertEqual(record["prior_piece"]["estimate_id"], first_id)
+            self.assertEqual(record["prior_piece"]["confirm"], "asked")
+            spec = record["specification"]
+            self.assertEqual((spec["metal"], spec["stone_carat"], spec["earring_style"], spec["setting_style"]), ("platinum", 1.5, "stud", "four-prong"))
+            world.customer_message("se2", "thread-new-sapphire", "Yes those!\n\nTony", subject="Re: New sapphire earrings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertIn("platinum", world.cards[-1]["title"].lower())
         self.run_branch(branch)
 
     def test_nothing_on_file_welcomes_them_back_and_asks_for_a_reminder_or_a_photo(self) -> None:

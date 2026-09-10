@@ -1909,13 +1909,50 @@ EARLIER_CONVERSATION_RE = re.compile(
     r"(?i)\b(?:(?:we|you)\s+(?:talked|spoke|discussed|chatted|went over)\s+(?:about\s+)?(?:[^.?!\n]{0,40}?\b)?(?:earlier|before|previously|last (?:week|month|time|year)|the other day|a while (?:ago|back))\b|"
     r"you\s+(?:quoted|estimated|priced)\s+(?:me|us|for me|for us)?\b|(?:the|your)\s+(?:estimate|quote|price|number)\s+you\s+(?:sent|gave|emailed)\b|"
     r"(?:from|in)\s+(?:my|our|the|your)\s+(?:earlier|previous|last|other)\s+(?:email|emails|inquiry|estimate|quote|conversation|thread|message)\b|"
-    r"(?:we|you)\s+(?:talked|spoke|discussed|went over)\s+(?:about\s+)?(?:the|this|that|these|those|my|our)\b)"
+    r"(?:we|you)\s+(?:talked|spoke|discussed|went over)\s+(?:about\s+)?(?:the|this|that|these|those|my|our)\b|"
+    r"(?:do you |you )?remember\s+(?:the|those|these|that|my|our|when|how)\b|"
+    r"(?:the same|just like|like|same as|as)\s+(?:last time|before|the last (?:one|ones|pair|time)|the ones? (?:you|we))\b)"
 )
 
 
+_PAST_CUE_RE = re.compile(
+    r"(?i)\b(?:remember|recall|again|last time|before|previous(?:ly)?|earlier|prior|original(?:ly)?|the other day|"
+    r"a while (?:ago|back)|(?:years?|months?|weeks?) ago|last (?:year|month|week|spring|summer|fall|winter|christmas)|"
+    r"you (?:did|made|built|sent|quoted|priced|designed|sold|showed)|from you|another (?:one|pair|set|ring|band|pendant|necklace|bracelet)|"
+    r"one more|a second (?:one|pair|ring)|matching|same as|(?:just )?like the (?:ones?|pair|last)|the usual|the ones? (?:I|we) (?:got|bought|ordered|had))\b"
+)
+_PIECE_WORD_RE = re.compile(
+    r"(?i)\b(?:rings?|bands?|pendants?|necklaces?|bracelets?|earrings?|studs|hoops|drops|piece|pieces|pair|chain|set|order|estimate|quote|design)\b"
+)
+_NOT_THE_PAST_RE = re.compile(
+    r"(?i)\b(?:website|site|photo|picture|pictured|attached|image|link|instagram|pinterest|catalog|online|below|above|here|"
+    r"(?:another|a different|other|some other) (?:jeweler|jeweller|shop|store)|by a jewel+er|elsewhere|somewhere else|inherited|heirloom|"
+    r"passed down|grandmother|grandfather|grandma|grandpa|great-)\b"
+)
+_STANDALONE_PAST_RE = re.compile(r"(?i)\b(?:same as (?:last time|before)|like (?:last time|before)|as before|the usual)\b")
+
+
 def refers_to_an_earlier_conversation(own_words: str) -> bool:
-    """The customer points at an estimate or a conversation the desk already has ("the earrings we talked about earlier")."""
-    return bool(EARLIER_CONVERSATION_RE.search(str(own_words or "")))
+    """The customer points at something the desk already has: an estimate, a conversation, a piece from before.
+
+    "The earrings we talked about earlier", "remember those sapphire earrings?",
+    "another pair like the ones I got", "same as last time but in rose gold".
+    A sentence that names a piece and a cue to the past counts; a sentence that
+    points at a photo, a website or an attachment does not (that is a new
+    idea, not our history). The owner, 10 September 2026: the whole family,
+    not one phrase.
+    """
+    text = str(own_words or "")
+    if EARLIER_CONVERSATION_RE.search(text):
+        return True
+    for sentence in _SENTENCE_RE.split(text):
+        if _NOT_THE_PAST_RE.search(sentence):
+            continue
+        if _STANDALONE_PAST_RE.search(sentence):
+            return True
+        if _PAST_CUE_RE.search(sentence) and _PIECE_WORD_RE.search(sentence):
+            return True
+    return False
 
 
 def refers_to_a_prior_piece(own_words: str) -> bool:
@@ -1996,6 +2033,13 @@ def prior_piece_facts(prior_spec: dict[str, Any], current: dict[str, Any], own_w
         carried[key] = value
     new_size = any(_present((current or {}).get(k)) and (not own_words or ledger.source_of((current or {}).get(k), own_words, "")[0] == "customer")
                    for k in ("stone_dimensions", "stone_carat"))
+    new_metal = _present((current or {}).get("metal")) and (not own_words or ledger.source_of((current or {}).get("metal"), own_words, "")[0] == "customer") \
+        and str((current or {}).get("metal") or "").strip().lower() != str((prior_spec or {}).get("metal") or "").strip().lower()
+    if new_metal:
+        # "Everything the same but in platinum": the old metal's colour and karat do not ride along (live, 9 September
+        # 2026: "white platinum").
+        for key in ("metal_color", "metal_karat"):
+            carried.pop(key, None)
     if new_size:
         # A new size in their words: the old carat and size do not ride along.
         carried.pop("stone_carat", None)
