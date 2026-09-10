@@ -451,6 +451,10 @@ in the implementation.
 Known gaps between this document and the current implementation, to be
 closed by follow-up changes:
 
+- Built 10 September 2026 (unpublished): when a sender with an open estimate
+  starts a new thread, the owner may answer "unrelated" as well as "same" or
+  "new". The desk closes only that parked email, sends nothing, creates no
+  estimate, and leaves the sender's existing estimate untouched.
 - Cards are binary (6 September 2026): approve or reject, the edit option
   is withdrawn. Every approval is executed by the desk from the audit
   trail, price cards included; the chat session runs nothing on an

@@ -4987,7 +4987,7 @@ class SameSenderTests(SideBranchTests):
             self.tick(ws, world)
             asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
             self.assertEqual(len(asked), 1, asked)
-            self.assertIn("same piece, or a new one", asked[-1]["text"])
+            self.assertIn("same piece, a new one, or unrelated to jewelry", asked[-1]["text"])
             self.assertEqual(self.claim(ws, "n1")["status"], "awaiting_owner")
             answered = self.answer(ws, "same")
             self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)

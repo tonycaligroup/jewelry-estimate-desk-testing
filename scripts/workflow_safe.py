@@ -1646,8 +1646,9 @@ def ask_same_sender(
         f"{who} wrote in a new email thread (\"{new_subject}\") but already has an open estimate "
         f"with us for {old_words}"
         + (f' ("{old_subject}", {existing.get("status", "open").replace("_", " ")})' if old_subject else "")
-        + ". Is this the same piece, or a new one? Reply \"same\" and I will carry that estimate on in the new "
-        "thread, or \"new\" and I will quote it as a separate estimate."
+        + ". Is this the same piece, a new one, or unrelated to jewelry? Reply \"same\" and I will carry that "
+        "estimate on in the new thread, \"new\" and I will quote it as a separate estimate, or \"unrelated\" "
+        "and I will close only this email without sending anything."
     )
     root = owner_questions.questions_root(args.monitor_root)
     _created, question = owner_questions.create_decision(
@@ -2353,6 +2354,13 @@ def answer_decision(
         work_dir = Path(reopened["work_paths"]["work_dir"])
         write_private(work_dir / "intake-result.json", intake_result)
         result.update(_hand_to_tick(p, message_id))
+        return result
+    if question["kind"] == "same_sender" and outcome == "unrelated":
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        _close_parked_claim(p, message_id, "owner_decided_unrelated")
+        result["claim"] = "owner_decided_unrelated"
+        result["next_action"] = "done"
         return result
     if question["kind"] == "same_sender" and outcome == "same":
         return _answer_same_piece(args, workspace, p, root, question)

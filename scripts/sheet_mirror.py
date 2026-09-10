@@ -292,7 +292,14 @@ def _records(workspace: Path) -> list[dict[str, Any]]:
 
 
 # Records the counter never needs: mail that turned out not to be a jewelry inquiry, tests, mistakes, duplicates.
-NEVER_LISTED = {"not_an_inquiry", "test_artifact", "created_in_error", "duplicate_of_another_thread", "superseded_by_another_estimate"}
+NEVER_LISTED = {
+    "not_an_inquiry",
+    "test_artifact",
+    "created_in_error",
+    "duplicate_of_another_thread",
+    "superseded_by_another_estimate",
+    "owner_decided_unrelated",
+}
 
 
 def listed(record: dict[str, Any]) -> bool:
