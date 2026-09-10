@@ -26,6 +26,7 @@ import shlex
 import subprocess
 import sys
 import unittest
+import urllib.parse
 import tempfile
 from datetime import datetime, timedelta, timezone
 from email import policy
@@ -2955,7 +2956,7 @@ class FakeSheet:
     def __call__(self, method: str, url: str, token: str, body=None, opener=None):
         self.calls.append((method, url))
         if method == "GET" and "/values/" in url:
-            tab = url.split("/values/", 1)[1].split("!")[0].strip("'")
+            tab = urllib.parse.unquote(url.split("/values/", 1)[1].split("!")[0]).strip("'")
             return {"values": [list(r) for r in self.grid.get(tab, [])]}
         if method == "GET":
             return {"spreadsheetId": "SHEET1", "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/SHEET1/edit", "properties": {"title": "test"},

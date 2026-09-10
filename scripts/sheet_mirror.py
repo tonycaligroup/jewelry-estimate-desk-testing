@@ -23,6 +23,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -77,6 +78,12 @@ def sheet_id_from(text: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9_-]{20,}", value):
         return value
     raise ValueError("give the spreadsheet's URL or its id")
+
+
+def range_url(sheet_id: str, tab: str, a1: str) -> str:
+    """The values URL for one tab range, with the tab name escaped: a space in 'Cost sheet' is a control character to
+    Python's HTTP client (live, 9 and 10 September 2026: every pull raised, and the push behind it never ran)."""
+    return f"{BASE_URL}/{sheet_id}/values/" + urllib.parse.quote(f"'{tab}'!{a1}", safe="!':")
 
 
 def _call(method: str, url: str, token: str, body: Any = None, opener: Opener | None = None, tries: int = 2) -> Any:
@@ -602,7 +609,7 @@ def push(workspace: Path, token: str | None = None, opener: Opener | None = None
 
 
 def _read_cost_tab(sheet_id: str, token: str, opener: Opener | None) -> list[list[Any]]:
-    got = _call("GET", f"{BASE_URL}/{sheet_id}/values/'{COST_TAB}'!A1:L5000", token, None, opener)
+    got = _call("GET", range_url(sheet_id, COST_TAB, "A1:L5000"), token, None, opener)
     values = got.get("values") if isinstance(got, dict) else None
     return values if isinstance(values, list) else []
 
@@ -735,7 +742,7 @@ def pull(workspace: Path, token: str | None = None, opener: Opener | None = None
 def _pull_customers(workspace: Path, sheet_id: str, token: str, opener: Opener | None, state: dict[str, Any]) -> dict[str, Any]:
     """Customer, Phone, and Notes typed on the Customers tab go onto the record; the other columns are ignored."""
     try:
-        got = _call("GET", f"{BASE_URL}/{sheet_id}/values/'Customers'!A1:K5000", token, None, opener)
+        got = _call("GET", range_url(sheet_id, "Customers", "A1:K5000"), token, None, opener)
     except OSError as exc:
         return {"read": False, "reason": str(exc)[:160]}
     values = got.get("values") if isinstance(got, dict) else None
@@ -772,7 +779,7 @@ def _pull_rates(workspace: Path, profile: dict[str, Any], sheet_id: str, token: 
                 state: dict[str, Any]) -> dict[str, Any]:
     """The Value column of the Rates tab into the profile: numbers only, journaled; a bad cell is one chat question."""
     try:
-        got = _call("GET", f"{BASE_URL}/{sheet_id}/values/'Rates'!A1:G2000", token, None, opener)
+        got = _call("GET", range_url(sheet_id, "Rates", "A1:G2000"), token, None, opener)
     except OSError as exc:
         return {"read": False, "reason": str(exc)[:160]}
     values = got.get("values") if isinstance(got, dict) else None

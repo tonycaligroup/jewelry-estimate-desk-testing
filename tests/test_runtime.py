@@ -7174,6 +7174,16 @@ class NoInventedMeetingTests(unittest.TestCase):
         self.assertFalse(estimate_record.asks_to_reschedule("See you Friday at 3pm!", booked=True))
         self.assertFalse(estimate_record.asks_to_reschedule("I can pick it up Friday at 4pm.", booked=True))
 
+    def test_a_sheet_range_url_has_no_spaces_and_the_real_client_accepts_it(self) -> None:
+        """Live 10 Sep: 'Cost sheet' in a GET URL raised "URL can't contain control characters" on every tick; no push since."""
+        import http.client
+        import sheet_mirror
+        url = sheet_mirror.range_url("SHEET1", "Cost sheet", "A1:L5000")
+        self.assertEqual(url, sheet_mirror.BASE_URL + "/SHEET1/values/'Cost%20sheet'!A1:L5000")
+        self.assertNotRegex(url, r"[\x00-\x20\x7f]")
+        http.client.HTTPConnection("localhost").putrequest("GET", url.split("://", 1)[-1].split("/", 1)[-1].join(["/", ""]))  # would raise InvalidURL on a space
+        self.assertEqual(sheet_mirror.range_url("S", "Rates", "A1:G2000"), sheet_mirror.BASE_URL + "/S/values/'Rates'!A1:G2000")
+
     def test_a_courtesy_note_is_only_courtesy(self) -> None:
         import estimate_record
         signature = "\n\nThank you,\nDavid Trujillo\nAtelier by Edward Avedis\n101 Wilshire Blvd.\nSanta Monica 90401\n(310) 810-3004"

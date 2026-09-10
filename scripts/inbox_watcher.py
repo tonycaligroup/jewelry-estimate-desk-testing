@@ -607,7 +607,10 @@ def tick(
         import sheet_mirror  # local import: keeps the watcher importable without the mirror's dependencies
 
         if time.monotonic() - started < max(60.0, cron_config.WATCHER_TIMEOUT_SECONDS - 60):
-            summary["sheet"] = sheet_mirror.pull(workspace)
+            try:
+                summary["sheet"] = sheet_mirror.pull(workspace)
+            except Exception as exc:  # noqa: BLE001 - a failing read never stops the write (live, 10 September 2026)
+                summary["sheet"] = {"pulled": False, "reason": str(exc)[:120]}
             summary["mirror"] = sheet_mirror.push(workspace)
     except Exception as exc:  # noqa: BLE001
         summary["mirror"] = {"pushed": False, "reason": str(exc)[:120]}
