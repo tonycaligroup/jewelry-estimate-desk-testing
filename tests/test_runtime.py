@@ -5886,16 +5886,29 @@ class GatewayTokenTests(unittest.TestCase):
             path.write_text("file-token\n", encoding="utf-8")
             os.chmod(path, 0o600)
             env = {"MATON_API_KEY_FILE": str(path), "MATON_API_KEY": "env-token"}
-            self.assertEqual(gateway_token.load_token(env), "file-token")
-            os.chmod(path, 0o640)
-            with self.assertRaisesRegex(ValueError, "group or others"):
-                gateway_token.load_token(env)
-            os.chmod(path, 0o600)
-            path.write_text("two words\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "usable token"):
-                gateway_token.load_token(env)
-            with self.assertRaisesRegex(ValueError, "does not exist"):
-                gateway_token.load_token({"MATON_API_KEY_FILE": str(Path(directory) / "missing")})
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path(directory) / "not-installed"):
+                self.assertEqual(gateway_token.load_token(env), "file-token")
+                os.chmod(path, 0o640)
+                with self.assertRaisesRegex(ValueError, "group or others"):
+                    gateway_token.load_token(env)
+                os.chmod(path, 0o600)
+                path.write_text("two words\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "usable token"):
+                    gateway_token.load_token(env)
+                with self.assertRaisesRegex(ValueError, "does not exist"):
+                    gateway_token.load_token({"MATON_API_KEY_FILE": str(Path(directory) / "missing")})
+
+    def test_desk_token_cannot_be_replaced_by_environment_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            desk_token = Path(directory) / "desk" / "maton-api-key"
+            stale_token = Path(directory) / "stale-maton-api-key"
+            stale_token.write_text("stale-token\n", encoding="utf-8")
+            os.chmod(stale_token, 0o600)
+            env = {"MATON_API_KEY_FILE": str(stale_token), "MATON_API_KEY": "also-stale"}
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", desk_token):
+                self.assertEqual(gateway_token.install_token_file({"MATON_API_KEY": "desk-token"}), desk_token)
+                self.assertEqual(desk_token.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(gateway_token.load_token(env), "desk-token")
 
     def test_environment_variable_is_only_a_fallback(self) -> None:
         with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path("/nonexistent/maton-api-key")):
@@ -6520,11 +6533,9 @@ class WatcherBindingTests(unittest.TestCase):
         }
 
     def test_command_binding_round_trips_and_rejects_drift(self) -> None:
-        self.assertTrue(
-            cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner").startswith(
-                ". ~/.koloclaw-env 2>/dev/null; python3 "
-            )
-        )
+        command = cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner")
+        self.assertTrue(command.startswith(cron_config.LITELLM_ENV_IMPORT + " python3 "))
+        self.assertNotIn("MATON_API_KEY", command)
         binding = cron_config.build_binding(self.live_command_job(), Path("/workspace"), ROOT)
         self.assertEqual(binding["payload"]["kind"], "command")
         self.assertNotIn("outputMaxBytes", binding["payload"])
@@ -10421,6 +10432,40 @@ class ConfirmTheVisionTests(unittest.TestCase):
         self.assertEqual(estimate_record.vision_in_words({"piece_type": "pendant", "reference_images": "from the photo: a bar pendant"}), "a pendant")
         self.assertIsNone(estimate_record.vision_in_words({**self.SPEC, "reference_images": ""}), "no photo, nothing to confirm")
         self.assertIsNone(estimate_record.vision_in_words({"pieces": [{"piece_type": "ring"}, {"piece_type": "band"}], "reference_images": "from the photo: x"}))
+
+    def test_fancy_diamond_color_is_the_stone_name_not_a_grade(self) -> None:
+        words = "Lab-grown yellow diamond stud earrings, just like the photo."
+        settled = estimate_record.settle_fancy_diamonds(
+            {"piece_type": "stud earrings", "stone_type": "diamond", "stone_origin": "lab-grown",
+             "stone_color": "yellow", "reference_images": "from the photo: yellow diamond studs"},
+            words,
+            "yellow diamond stud earrings",
+        )
+        self.assertEqual(settled["stone_type"], "yellow diamond")
+        self.assertNotIn("stone_color", settled)
+        self.assertIn("yellow diamond stud earrings", estimate_record.vision_in_words(settled))
+        key, candidates = cost_components_module.match_rate_key(
+            {"lab_grown_yellow_diamond": 500, "lab_grown_diamond": 200},
+            {"yellow diamond"},
+            {"lab", "grown", "yellow diamond"},
+        )
+        self.assertEqual(key, "lab_grown_yellow_diamond")
+        generic_key, _ = cost_components_module.match_rate_key(
+            {"lab_grown_diamond": 200},
+            {"yellow diamond"},
+            {"lab", "grown", "yellow diamond"},
+        )
+        self.assertIsNone(generic_key, "a fancy diamond never borrows the plain diamond rate")
+
+    def test_black_diamond_halo_is_an_accent_stone_name(self) -> None:
+        settled = estimate_record.settle_fancy_diamonds(
+            {"stone_type": "sapphire", "accent_stone_type": "diamond", "accent_stone_color": "black",
+             "accent_stones": "diamond halo"},
+            "a black diamond halo around the sapphire",
+        )
+        self.assertEqual(settled["accent_stone_type"], "black diamond")
+        self.assertEqual(settled["accent_stones"], "black diamond halo")
+        self.assertNotIn("accent_stone_color", settled)
 
     def test_the_photo_fills_the_style_and_the_setting_to_be_confirmed(self) -> None:
         photo = {"piece_type": "earrings", "stone_type": "sapphire", "reference_images": "from the photo: cushion halo studs"}

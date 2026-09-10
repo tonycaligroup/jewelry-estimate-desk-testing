@@ -751,6 +751,69 @@ STONE_WORDS_IN_TEXT = (
     "tennis", "eternity", "halo", "gemstone", "stones",
 )
 
+FANCY_DIAMOND_COLORS = (
+    "salt-and-pepper", "champagne", "cognac", "yellow", "pink", "blue",
+    "black", "brown", "green", "orange", "red", "grey",
+)
+
+
+def _fancy_diamond_color(stone_type: Any, grade: Any, evidence: str) -> str | None:
+    """Return a named fancy color only when it belongs to a diamond."""
+    kind = re.sub(r"[^a-z]+", " ", str(stone_type or "").lower()).strip()
+    if "diamond" not in kind:
+        return None
+    grade_words = re.sub(r"[^a-z]+", "-", str(grade or "").lower()).strip("-")
+    words = re.sub(r"[^a-z]+", " ", str(evidence or "").lower()).strip()
+    for color in FANCY_DIAMOND_COLORS:
+        aliases = {color, color.replace("-and-", " and "), color.replace("-", " ")}
+        normalized = color.replace("-", " ")
+        if normalized in kind or grade_words in aliases:
+            return color
+        for alias in aliases:
+            phrase = re.sub(r"[^a-z]+", " ", alias).strip()
+            if re.search(rf"\b{re.escape(phrase)}\b(?:\s+\w+){{0,2}}\s+diamonds?\b", words):
+                return color
+            if re.search(rf"\bdiamonds?\b(?:\s+\w+){{0,2}}\s+\b{re.escape(phrase)}\b", words):
+                return color
+    return None
+
+
+def settle_fancy_diamonds(specification: Any, customer_words: str = "", photo_words: str = "") -> Any:
+    """Make a fancy diamond color part of the stone name, never its grade.
+
+    The operation is deterministic and recursive for multi-piece requests. A
+    grade letter and ``colorless`` are deliberately not fancy colors.
+    """
+    if not isinstance(specification, dict):
+        return specification
+    settled = dict(specification)
+    evidence = " ".join((customer_words, photo_words, str(settled.get("reference_images") or "")))
+
+    def settle_stone(type_key: str, color_key: str, description_key: str | None = None) -> None:
+        description = str(settled.get(description_key) or "") if description_key else ""
+        stone_type = settled.get(type_key)
+        if not stone_type and "diamond" in description.lower():
+            stone_type = "diamond"
+        color = _fancy_diamond_color(stone_type, settled.get(color_key), " ".join((evidence, description)))
+        if not color:
+            return
+        name = f"{color} diamond"
+        settled[type_key] = name
+        settled.pop(color_key, None)
+        if description_key:
+            if description:
+                settled[description_key] = re.sub(r"(?<![a-z])diamonds?(?![a-z])", name, description,
+                                                   count=1, flags=re.IGNORECASE)
+            else:
+                settled[description_key] = f"{name} accents"
+
+    settle_stone("stone_type", "stone_color")
+    settle_stone("accent_stone_type", "accent_stone_color", "accent_stones")
+    if isinstance(settled.get("pieces"), list):
+        settled["pieces"] = [settle_fancy_diamonds(piece, customer_words, photo_words)
+                             if isinstance(piece, dict) else piece for piece in settled["pieces"]]
+    return settled
+
 
 def stones_in_words(specification: Any) -> bool:
     """Stones named anywhere the customer's words were kept, not only in stone_type.

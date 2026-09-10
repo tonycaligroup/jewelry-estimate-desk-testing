@@ -51,7 +51,8 @@ SPOT_METAL_WORDS = {
     "sterling": "silver",
     "palladium": "palladium",
 }
-STONE_WORDS = (
+STONE_WORDS = tuple(estimate_record.FANCY_DIAMOND_COLORS[index] + " diamond"
+                    for index in range(len(estimate_record.FANCY_DIAMOND_COLORS))) + (
     "sapphire", "diamond", "ruby", "emerald", "moissanite", "aquamarine",
     "morganite", "tanzanite", "amethyst", "topaz", "garnet", "opal", "pearl",
     "tourmaline", "spinel", "peridot", "citrine",
@@ -86,7 +87,11 @@ def _flatten(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
 
 
 def _tokens(text: str) -> set[str]:
-    return {token for token in re.split(r"[^a-z0-9]+", text.lower()) if token}
+    words = [token for token in re.split(r"[^a-z0-9]+", text.lower()) if token]
+    tokens = set(words)
+    for width in range(2, min(4, len(words)) + 1):
+        tokens.update(" ".join(words[index:index + width]) for index in range(len(words) - width + 1))
+    return tokens
 
 
 def _number(value: Any) -> float | None:
@@ -382,7 +387,7 @@ def _missing_rates_for_piece(specification: dict[str, Any], index: int, pricing:
             missing.append({
                 "rate_kind": "stones_per_carat",
                 "line": f"stone_lines[{index}]",
-                "suggested_key": "_".join([*origin, stone["stone_type"]]),
+                "suggested_key": "_".join([*origin, stone["stone_type"]]).replace("-", "_").replace(" ", "_"),
                 "description": " ".join(w for w in (words, stone["stone_type"]) if w),
                 "candidates": candidates,
             })

@@ -968,8 +968,9 @@ def process_claim(
     specification = estimate_record.settle_attachment_visuals(
         specification, spec_gate.missing_required_fields(specification, profile), image_attached
     )
-    ledger.migrate(desk, record)
     photo_evidence = " ".join(photos) or (estimate_record.ATTACHMENT_REFERENCE if image_attached else "")
+    specification = estimate_record.settle_fancy_diamonds(specification, handled_words, photo_evidence)
+    ledger.migrate(desk, record)
     ledger.absorb(desk, estimate_id, specification, message_id, handled_words, photo_evidence,
                   changeable=ledger.changeable_fields(record))
     specification = ledger.specification(desk, estimate_id, specification) or specification

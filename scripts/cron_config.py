@@ -27,12 +27,18 @@ WATCHER_TIMEOUT_SECONDS = 300
 # claim while the worker's run is still being torn down.
 WORKER_LEASE_SECONDS = 1020
 WORKER_NAME_PREFIX = "jed-worker-"
+LITELLM_ENV_IMPORT = (
+    "LITELLM_BASE_URL=\"$(. ~/.koloclaw-env 2>/dev/null; "
+    "printf '%s' \"$LITELLM_BASE_URL\")\"; export LITELLM_BASE_URL; "
+    "LITELLM_API_KEY=\"$(. ~/.koloclaw-env 2>/dev/null; "
+    "printf '%s' \"$LITELLM_API_KEY\")\"; export LITELLM_API_KEY;"
+)
 WATCHER_COMMAND_TEMPLATE = (
-    ". ~/.koloclaw-env 2>/dev/null; python3 <BASE_DIR>/scripts/inbox_watcher.py "
+    LITELLM_ENV_IMPORT + " python3 <BASE_DIR>/scripts/inbox_watcher.py "
     "--workspace <WORKSPACE> --base-dir <BASE_DIR> --owner-target <OWNER_TARGET>"
 )
 WATCHER_COMMAND_RE = re.compile(
-    r"^\. ~/\.koloclaw-env 2>/dev/null; python3 (/\S+)/scripts/inbox_watcher\.py "
+    "^" + re.escape(LITELLM_ENV_IMPORT) + r" python3 (/\S+)/scripts/inbox_watcher\.py "
     r"--workspace (/\S+) --base-dir (/\S+) --owner-target (\S+)$"
 )
 
