@@ -7720,7 +7720,7 @@ class InlinePipelineTests(unittest.TestCase):
             self.assertEqual(out["outcome"], "followup_sent")
             self.assertEqual(sorted(out["missing_required_fields"]), ["finger_size", "setting_style", "stone_cut"])
             self.assertEqual(out["missing_required_fields"][0], "finger_size", "the fields that move the price are asked first")
-            self.assertEqual(runner.call_count, 2)  # one call reads the inquiry, one writes back or prices
+            self.assertEqual(runner.call_count, 3)  # one reads, one writes, then the behavior checker reads the draft
             record = estimate_record.read_object(estimate_record.record_path(args.record_root, estimate_id))
             self.assertEqual(record["status"], "awaiting_specs")
             self.assertEqual(record["spec_gate_reply"]["status"], "sent")

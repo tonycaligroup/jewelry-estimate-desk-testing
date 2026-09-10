@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import activation_binding
+import behavior_check
 import estimate_record
 import inbox_claim
 import inbox_monitor
@@ -131,6 +132,8 @@ TITLE_PREFIX = ""  # "[REHEARSAL] " while rehearsal mode is on (rehearsal.apply)
 
 def approval_title(details: dict[str, Any], estimate_id: str) -> str:
     """'Price approval: a pendant in 14K yellow gold with a natural ruby 1 ct, $3,802.76'."""
+    if isinstance(details.get("filed_title"), str) and details["filed_title"].strip():
+        return details["filed_title"][:TITLE_LIMIT]
     review = details.get("owner_review") if isinstance(details.get("owner_review"), dict) else {}
     price = review.get("customer_price", details.get("proposed_price"))
     piece = _piece_words(details.get("specification"))
@@ -390,12 +393,25 @@ def appointment_card(details: dict[str, Any], estimate_id: str) -> tuple[dict[st
         rows["Reject means"] = reject
         title = f"{_sender_display(customer)} asked to meet about {piece}: {reason}. Reject, then tell me times."[:TITLE_LIMIT]
         reasoning = f"{customer} asked to meet ({asked_text}). {reason}."
+    check = behavior_check.owner_summary(details.get("behavior_check"))
+    if check:
+        rows["Behavior check"] = check
+        evidence = behavior_check.evidence_summary(details.get("behavior_check"))
+        if evidence:
+            rows["Behavior evidence"] = evidence
     title = (TITLE_PREFIX + title)[:TITLE_LIMIT]
+    if check:
+        suffix = f" CHECK: {check}"
+        title = title[:max(1, TITLE_LIMIT - len(suffix))].rstrip(" .;") + suffix
+    if isinstance(details.get("filed_title"), str) and details["filed_title"].strip():
+        title = details["filed_title"][:TITLE_LIMIT]
     return rows, reasoning, title
 
 
 def rendering_title(details: dict[str, Any]) -> str:
     """The rendering card's title: who, what, how the views checked, and the revision if any."""
+    if isinstance(details.get("filed_title"), str) and details["filed_title"].strip():
+        return details["filed_title"][:TITLE_LIMIT]
     piece = str(details.get("piece") or "their estimate")[:160]
     who = _sender_display(str(details.get("customer_email") or "")) or "the customer"
     revision = details.get("revision")
@@ -406,7 +422,12 @@ def rendering_title(details: dict[str, Any]) -> str:
         parts.append(f"Checker: {str(details['checker'])[:200]}")
     if details.get("revised"):
         parts.append(f"Revised: {str(details['revised'])[:160]}")
-    return (TITLE_PREFIX + ". ".join(parts) + ".")[:TITLE_LIMIT]
+    title = (TITLE_PREFIX + ". ".join(parts) + ".")[:TITLE_LIMIT]
+    check = behavior_check.owner_summary(details.get("behavior_check"))
+    if check:
+        suffix = f" CHECK: {check}"
+        title = title[:max(1, TITLE_LIMIT - len(suffix))].rstrip(" .;") + suffix
+    return title
 
 
 def build_request_rendering_approval(
@@ -436,6 +457,12 @@ def build_request_rendering_approval(
         "Reject means": "Nothing is sent; I ask you what should change, or say \"handle myself\".",
         "Estimate": estimate_id,
     }
+    check = behavior_check.owner_summary(details_object.get("behavior_check"))
+    if check:
+        rows["Behavior check"] = check
+        evidence = behavior_check.evidence_summary(details_object.get("behavior_check"))
+        if evidence:
+            rows["Behavior evidence"] = evidence
     return [
         "kolo", "request-approval", "--agent-id", agent_id,
         "--action", rendering_title(details_object),

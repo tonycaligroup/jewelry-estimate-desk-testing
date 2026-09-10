@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import approval_guard
+import behavior_check
 import brief_registry
 import activation_binding
 import calendar_query
@@ -707,6 +708,7 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
         estimate_record.validate_approval_request(
             args.record_root, args.estimate_id, args.message_id, approval
         )
+        approval["filed_title"] = kolo_safe.approval_title(approval, args.estimate_id)
         write_private(args.approval_request, approval)
     if approval_existed:
         estimate_record.validate_approval_request(
@@ -739,6 +741,7 @@ def request_approval(args: argparse.Namespace) -> dict[str, Any]:
             {"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id, "estimate",
             facts, fixed, estimate_work_dir(args.monitor_root, args.estimate_id, args.message_id) / "customer-reply.txt",
             _digest_from_work(paths, args.message_id, profile), getattr(args, "judge_runner", subprocess.run),
+            behavior_delivery="chat", owner_runner=getattr(args, "runner", subprocess.run),
         )
     except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
         pass
@@ -877,7 +880,7 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         approval = read_object(args.appointment_approval)
         expected = _appointment_approval_details(record, args.message_id, intent, args.monitor_root)
         # The reject code is added after the first write; it is not binding.
-        if {k: v for k, v in approval.items() if k != "reject_code"} != expected:
+        if {k: v for k, v in approval.items() if k not in {"reject_code", "behavior_check", "filed_title"}} != expected:
             raise ValueError("existing appointment approval binding changed")
     else:
         approval = _appointment_approval_details(record, args.message_id, intent, args.monitor_root)
@@ -913,14 +916,14 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
                            "confirmation", {"piece": piece, "time_labels": [when], "shop name": shop, **before},
                            CONFIRMATION_NOTE.format(when=when, shop=shop, piece=piece), prepared_email_path(store), digest,
-                           getattr(args, "runner", subprocess.run))
+                           getattr(args, "runner", subprocess.run), behavior_card=approval, behavior_delivery="card")
         elif options:
             labels = [o.get("label") or o["start"] for o in options]
             facts, fixed = _offer_facts(approval, piece, labels, shop, estimate_record.vision_in_words(
                 record.get("specification"), on_file=estimate_record.prior_basis(record)))
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
                            "offer", {**facts, **before}, fixed, prepared_email_path(store), digest,
-                           getattr(args, "runner", subprocess.run))
+                           getattr(args, "runner", subprocess.run), behavior_card=approval, behavior_delivery="card")
     except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
         pass
     # The reject row names a code; a reply with that code and a plan reaches
@@ -948,6 +951,10 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
             token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
             inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "appointment_next_question")
         return record
+    _rows, _reasoning, filed_title = kolo_safe.appointment_card(approval, args.estimate_id)
+    approval["filed_title"] = filed_title
+    write_private(args.appointment_approval, approval)
+    write_private(store, approval)
     _created, dormant = owner_questions.create_decision(
         qroot, "appointment_next", args.estimate_id, args.message_id,
         _appointment_next_text(record, approval),
@@ -2451,7 +2458,9 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
     approval_path = Path(paths["work_dir"]) / "rendering-approval.json"
     suffix = f":r{revision}" if revision > 1 else ""
     action_key = f"rendering_approval:{args.estimate_id}:{args.message_id}{suffix}"
-    if approval_path.exists() and read_object(approval_path) != details:
+    if approval_path.exists() and {
+        k: v for k, v in read_object(approval_path).items() if k not in {"behavior_check", "filed_title"}
+    } != details:
         existing = read_object(approval_path)
         claim_state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, args.message_id))
         carded = (claim_state.get("external_actions") or {}).get(action_key) is not None
@@ -2479,9 +2488,12 @@ def request_rendering_approval(args: argparse.Namespace) -> dict[str, Any]:
             {"piece": piece, "shop name": (profile.get("shop") or {}).get("name") or "the shop"},
             RENDERING_NOTE.format(piece=piece, shop=(profile.get("shop") or {}).get("name") or "the shop"),
             Path(paths["customer_reply"]), _digest_from_work(paths, args.message_id, profile), runner,
+            behavior_card=details, behavior_delivery="card",
         )
     except Exception:  # noqa: BLE001 - the executor drafts if this did not happen
         pass
+    details["filed_title"] = kolo_safe.rendering_title(details)
+    write_private(approval_path, details)
     labels: dict[int, str] = {}
     try:
         report = read_object(Path(paths["work_dir"]) / "rendering-report.json")
@@ -3239,6 +3251,77 @@ def _answer_appointment_next(args: argparse.Namespace, workspace: Path, p: dict[
     result.update({"outcome": "offer_card_filed", "options": [o["label"] for o in options[:3]], "piece": piece})
     return result
 
+def _behavior_context(record: dict[str, Any], digest: dict[str, Any], kind: str, facts: dict[str, Any]) -> dict[str, Any]:
+    """Only the evidence the second reader needs; this is not another reading pass."""
+    messages = []
+    for message in (digest.get("messages") or [])[-8:]:
+        if isinstance(message, dict):
+            messages.append({
+                "sent_by": message.get("sent_by"),
+                "claimed": bool(message.get("claimed")),
+                "date": str(message.get("date") or "")[:80],
+                "subject": str(message.get("subject") or "")[:200],
+                "body": str(message.get("body") or "")[:4000],
+            })
+    return {
+        "selected_email_kind": kind,
+        "facts_given_to_writer": facts,
+        "record": {
+            "estimate_id": record.get("estimate_id"),
+            "status": record.get("status"),
+            "specification": record.get("specification"),
+            "appointment_booked": record.get("appointment_booked"),
+            "route": record.get("route"),
+            "prior_basis": estimate_record.prior_basis(record),
+        },
+        "conversation": messages,
+    }
+
+
+def _check_customer_draft(
+    p: dict[str, Path], record: dict[str, Any], message_id: str, kind: str, facts: dict[str, Any],
+    digest: dict[str, Any], body: str, source: str, target: Path, model: str | None, judge_runner: Any,
+    openclaw: str | None, behavior_delivery: str, owner_runner: Any = subprocess.run,
+) -> dict[str, Any] | None:
+    """Persist one shadow check and optionally show a factual finding to the owner."""
+    safe_kind = re.sub(r"[^a-z0-9_-]+", "-", kind.lower())
+    artifact = target.with_name(f"{target.stem}-behavior-check-{safe_kind}.json")
+    context = _behavior_context(record, digest, kind, facts)
+    evidence: dict[str, Any] = {
+        "schema_version": behavior_check.SCHEMA_VERSION,
+        "prompt_version": behavior_check.PROMPT_VERSION,
+        "model": model or judge.DEFAULT_MODEL,
+        "estimate_id": record.get("estimate_id"),
+        "source_message_id_sha256": estimate_record.sha256_text(message_id),
+        "draft_sha256": behavior_check.sha256_text(body),
+        "context_sha256": behavior_check.sha256_text(json.dumps(context, ensure_ascii=False, sort_keys=True)),
+        "email_kind": kind,
+        "draft_source": source,
+        "delivery": behavior_delivery,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        result = behavior_check.evaluate(context, body, model, judge_runner, openclaw)
+        evidence.update({"status": "checked", "result": result})
+    except Exception as exc:  # noqa: BLE001 - a shadow checker never changes delivery
+        evidence.update({"status": "error", "error": str(exc)[:300]})
+        write_private(artifact, evidence)
+        return None
+    write_private(artifact, evidence)
+    summary = behavior_check.owner_summary(result)
+    if behavior_delivery == "chat" and summary:
+        who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "")) or "the customer"
+        try:
+            kolo_safe.tell_owner(
+                p.get("monitor_root"),
+                f"Behavior check, Estimate ID {record.get('estimate_id')}, {kind} draft for {who}: {summary}.",
+                runner=owner_runner,
+            )
+        except Exception:  # noqa: BLE001 - the persisted check remains the evidence
+            pass
+    return result
+
+
 def _draft_customer_email(p: dict[str, Path], record: dict[str, Any], message_id: str, kind: str,
                           facts: dict[str, Any], fallback: str, args: argparse.Namespace) -> tuple[str, str]:
     """Write the email for this thread, or fall back to the fixed text."""
@@ -3257,10 +3340,17 @@ def _draft_customer_email(p: dict[str, Path], record: dict[str, Any], message_id
     except Exception:  # noqa: BLE001 - a missing thread only costs the draft its context
         digest = {"messages": []}
     try:
-        return customer_mail.draft(kind, facts, digest, profile, fallback, switch.get("model"), judge_runner, openclaw,
-                                   customer_name=estimate_record.customer_first_name(record))
+        body, source = customer_mail.draft(kind, facts, digest, profile, fallback, switch.get("model"), judge_runner, openclaw,
+                                           customer_name=estimate_record.customer_first_name(record))
     except Exception:  # noqa: BLE001 - the fixed text always goes out
-        return fallback, "fallback"
+        body, source = fallback, "fallback"
+    if source != "fallback":
+        target = estimate_work_dir(p["monitor_root"], record["estimate_id"], message_id) / "customer-reply.txt"
+        _check_customer_draft(
+            p, record, message_id, kind, facts, digest, body, source, target, switch.get("model"), judge_runner,
+            openclaw, "chat", getattr(args, "runner", subprocess.run),
+        )
+    return body, source
 
 
 def estimate_work_dir(monitor_root: Path, estimate_id: str, message_id: str | None) -> Path:
@@ -3274,7 +3364,9 @@ def prepared_email_path(store: Path) -> Path:
 
 
 def _prepare_email(p: dict[str, Path], record: dict[str, Any], message_id: str, kind: str, facts: dict[str, Any],
-                   fallback: str, target: Path, digest: dict[str, Any] | None, runner: Any) -> str:
+                   fallback: str, target: Path, digest: dict[str, Any] | None, runner: Any,
+                   behavior_card: dict[str, Any] | None = None, behavior_delivery: str = "chat",
+                   owner_runner: Any = subprocess.run) -> str:
     """Write the customer email at filing time so approval only sends (seconds, not a draft)."""
     import inbox_watcher  # local import: inbox_watcher imports this module
     import pipeline  # local import: pipeline imports this module
@@ -3294,6 +3386,13 @@ def _prepare_email(p: dict[str, Path], record: dict[str, Any], message_id: str, 
         os.chmod(target, 0o600)
     except OSError:
         pass
+    if source != "fallback":
+        result = _check_customer_draft(
+            p, record, message_id, kind, facts, digest or {"messages": []}, body, source, target,
+            switch.get("model"), runner, inbox_watcher.default_openclaw(), behavior_delivery, owner_runner,
+        )
+        if behavior_card is not None and result is not None:
+            behavior_card["behavior_check"] = result
     return source
 
 
