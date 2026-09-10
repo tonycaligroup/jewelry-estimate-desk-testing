@@ -31,6 +31,7 @@ QUESTIONS = {
     "stone_carat_basis": "for the pair, is the carat weight you gave the weight of each stone, or the total for both?",
     "prior_piece": "is that the piece you have in mind? If not, remind me a little about it, or send a photo if you have one handy.",
 }
+PRIOR_PIECE_WITH_IMAGE_QUESTION = "is that the piece you have in mind? If not, remind me a little about it."
 
 _SIZE_RE = re.compile(r"\bsize\s*(?:of\s*)?(\d{1,2}(?:\.\d)?|\d{1,2}\s*[½¼¾]|\d{1,2}\s*1/2)\b", re.I)
 _SIZE_RE2 = re.compile(r"\b(\d{1,2}(?:\.\d)?)\s*(?:ring\s*)?size\b", re.I)

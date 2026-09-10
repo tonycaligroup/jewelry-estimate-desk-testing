@@ -24,7 +24,7 @@ import estimate_record
 
 import image_provider  # noqa: E402 - sibling module
 
-DEFAULT_MODEL = "litellm-fireworks/qwen-3-7-plus"
+DEFAULT_MODEL = image_provider.QWEN_3_7_CLI_MODEL
 CALL_TIMEOUT_SECONDS = 90
 PROMPT_LIMIT = 60_000
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -731,15 +731,23 @@ def draft_followup(
     customer_name: str = "",
     meeting_booked: bool = False,
     welcome_back: bool = False,
+    image_attached: bool = False,
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing; a photo's vision is confirmed first."""
     import gmail_text  # local import: gmail_text does not depend on this module
 
     sender = (str(customer_name or "").strip().split() or [""])[0].strip(",.") or gmail_text.sender_first_name(digest)
-    welcome = ("They refer to a piece from before (one the shop made for them, or one you discussed) and nothing about it is on "
-               "file: open by welcoming them back warmly (never say you cannot find it or have no record), and make the first "
-               "question the one asking them to remind you a little about the piece, or to send a photo if they have one. "
-               if welcome_back else "")
+    welcome = (
+        "They refer to a piece from before (one the shop made for them, or one you discussed) and nothing about it is on "
+        "file: open by welcoming them back warmly (never say you cannot find it or have no record), and make the first "
+        "question the one asking them to remind you a little about the piece. The customer already attached an image, so "
+        "never ask them to send or resend a photo. "
+        if welcome_back and image_attached else
+        "They refer to a piece from before (one the shop made for them, or one you discussed) and nothing about it is on "
+        "file: open by welcoming them back warmly (never say you cannot find it or have no record), and make the first "
+        "question the one asking them to remind you a little about the piece, or to send a photo if they have one. "
+        if welcome_back else ""
+    )
     closing = welcome + ("A meeting with them is already booked: close by saying anything they are unsure of can be settled when you "
                "meet, and do not invite them to come by or to set up a time. " if meeting_booked else
                "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. ")

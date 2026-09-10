@@ -53,7 +53,7 @@ def validate_profile(data: Any) -> dict[str, Any]:
             for key in ("vision_model", "image_model"):
                 value = rendering_block.get(key)
                 if value is not None and not re.match(r"^[a-z0-9_.-]+/[A-Za-z0-9_.:-]+$", str(value)):
-                    errors.append(f"rendering.{key} must be provider/model, for example litellm/kolo-best-available")
+                    errors.append(f"rendering.{key} must be provider/model, for example litellm-fireworks/qwen-3-7-plus")
             provider = rendering_block.get("provider")
             if provider is not None and provider not in ("auto", "direct", "cli"):
                 errors.append("rendering.provider must be auto, direct, or cli")

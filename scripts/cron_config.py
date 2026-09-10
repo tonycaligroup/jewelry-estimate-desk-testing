@@ -10,12 +10,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import image_provider
 
-# Worker model. glm-5-3 ran about one tool call per minute with the full
-# SKILL.md in context and timed out at 900 s on a two-review claim (3 Sep
-# 2026). Qwen 3.7 Plus is the pod default and honors the explicit thinking
-# setting below.
-MODEL = "litellm-fireworks/qwen-3-7-plus"
+
+# Compatibility name for older worker-job bindings. The current watcher is
+# a model-free command job; inference launched by it uses this same shared
+# Qwen 3.7 default through judge and rendering.
+MODEL = image_provider.QWEN_3_7_CLI_MODEL
 JOB_NAME = "jed-inbox-monitor"
 TIMEOUT_SECONDS = 900
 # The watcher is code, not a model: it polls, claims, classifies, routes,

@@ -167,11 +167,15 @@ def _one_metal_question(missing: list[str]) -> list[tuple[str, str]]:
     return out
 
 
-def question_lines(missing: list[str], specification: dict[str, Any] | None = None) -> list[str]:
+def question_lines(
+    missing: list[str], specification: dict[str, Any] | None = None, image_attached: bool = False
+) -> list[str]:
     """The plain questions for what is missing, one per detail, as a customer reads them; the metal is one question."""
     asks = []
     for name, question in _one_metal_question(missing)[:8]:
         if reading_check.is_confirm(name):
+            if image_attached and name == reading_check.PREFIX + "prior_piece":
+                question = reading_check.PRIOR_PIECE_WITH_IMAGE_QUESTION
             asks.append(question)
             continue
         index, _field = estimate_record.split_field_name(name)
@@ -185,6 +189,7 @@ UNDERSTANDING_LINE = "Just so I have your vision right: you are after {vision}. 
 
 
 REMIND_QUESTION = "could you remind me a little about the piece, or send a photo if you have one handy?"
+REMIND_WITH_IMAGE_QUESTION = "could you remind me a little about the piece?"
 
 
 def customer_image_attached(thread: dict[str, Any], mailbox: str | None) -> bool:
@@ -283,15 +288,17 @@ def _send_followup(
         record_now, specification = {}, {}
     understanding = estimate_record.vision_in_words(specification, on_file=estimate_record.prior_basis(record_now))
     prior_info = record_now.get("prior_piece") if isinstance(record_now.get("prior_piece"), dict) else {}
-    welcome_back = bool(prior_info.get("welcome_back")) and not prior_info.get("on_file") and initiating and not image_attached
-    questions = question_lines(missing, specification)
+    welcome_back = bool(prior_info.get("welcome_back")) and not prior_info.get("on_file") and initiating
+    remind_question = REMIND_WITH_IMAGE_QUESTION if image_attached else REMIND_QUESTION
+    questions = question_lines(missing, specification, image_attached=image_attached)
     if welcome_back:
-        questions = [REMIND_QUESTION] + questions
+        questions = [remind_question] + questions
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
                                        shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding,
                                        questions=questions, customer_name=estimate_record.customer_first_name(record_now),
-                                       meeting_booked=bool(record_now.get("appointment_booked")), welcome_back=welcome_back)
+                                       meeting_booked=bool(record_now.get("appointment_booked")), welcome_back=welcome_back,
+                                       image_attached=image_attached)
         draft_source = "model"
     except judge.JudgmentError as exc:
         if exc.transient:
@@ -299,7 +306,7 @@ def _send_followup(
         # The model could not write a proper question twice; a plain one
         # still moves the inquiry, and the owner sees nothing odd.
         drafted = {"body": plain_followup(missing, shop_name, specification, understanding,
-                                          lead_questions=[REMIND_QUESTION] if welcome_back else None)}
+                                          lead_questions=[remind_question] if welcome_back else None)}
         draft_source = "fallback"
     body_path = Path(paths["customer_reply"])
     body_path.parent.mkdir(parents=True, exist_ok=True)
