@@ -25,11 +25,9 @@ from urllib.request import Request, urlopen
 
 BASE_URL_VAR = "LITELLM_BASE_URL"
 API_KEY_VAR = "LITELLM_API_KEY"
-QWEN_3_7_MODEL = "qwen-3-7-plus"
-QWEN_3_7_CLI_MODEL = "litellm-fireworks/qwen-3-7-plus"
 DEFAULT_IMAGE_MODEL = "gpt-image-2"
-DEFAULT_VISION_MODEL = QWEN_3_7_CLI_MODEL
-DIRECT_VISION_MODEL = QWEN_3_7_MODEL  # vision-capable (platform facts, 4 Sep 2026)
+DEFAULT_VISION_MODEL = "kolo-best-available"  # the CLI's alias
+DIRECT_VISION_MODEL = "qwen-3-7-plus"  # what the proxy knows; vision-capable (platform facts, 4 Sep 2026)
 CLI_ALIASES = ("kolo-best-available",)
 
 
@@ -199,7 +197,7 @@ def describe(image: Path, prompt: str, model: str | None = None, timeout: float 
 
 
 CHAT_TIMEOUT_SECONDS = 60
-DEFAULT_CHAT_MODEL = QWEN_3_7_MODEL
+DEFAULT_CHAT_MODEL = "qwen-3-7-plus"
 
 
 def chat(prompt: str, model: str | None = None, timeout: float | None = None, temperature: float = 0.0,

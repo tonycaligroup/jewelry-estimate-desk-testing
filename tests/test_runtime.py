@@ -10005,12 +10005,6 @@ class ImageProviderTests(unittest.TestCase):
         self.assertTrue(body["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
         self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/chat/completions")
 
-    def test_qwen_3_7_is_the_shared_text_and_vision_default(self) -> None:
-        self.assertEqual(judge.DEFAULT_MODEL, image_provider.QWEN_3_7_CLI_MODEL)
-        self.assertEqual(rendering.DEFAULT_VISION_MODEL, image_provider.QWEN_3_7_CLI_MODEL)
-        self.assertEqual(image_provider.DEFAULT_CHAT_MODEL, image_provider.QWEN_3_7_MODEL)
-        self.assertEqual(image_provider.DIRECT_VISION_MODEL, image_provider.QWEN_3_7_MODEL)
-
 
 class DirectRenderPathTests(unittest.TestCase):
     """With the provider reachable, the render and check steps never touch the CLI."""

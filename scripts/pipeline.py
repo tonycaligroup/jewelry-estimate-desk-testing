@@ -200,10 +200,13 @@ def customer_image_attached(thread: dict[str, Any], mailbox: str | None) -> bool
 
 
 def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None,
-                   understanding: str | None = None, lead_questions: list[str] | None = None) -> str:
+                   understanding: str | None = None, lead_questions: list[str] | None = None,
+                   image_attached: bool = False) -> str:
     asks = list(lead_questions or [])
     for name, question in _one_metal_question(missing)[:8]:
         if reading_check.is_confirm(name):
+            if image_attached and name == reading_check.PREFIX + "prior_piece":
+                question = reading_check.PRIOR_PIECE_WITH_IMAGE_QUESTION
             asks.append(question)
             continue
         index, _field = estimate_record.split_field_name(name)
@@ -306,7 +309,8 @@ def _send_followup(
         # The model could not write a proper question twice; a plain one
         # still moves the inquiry, and the owner sees nothing odd.
         drafted = {"body": plain_followup(missing, shop_name, specification, understanding,
-                                          lead_questions=[remind_question] if welcome_back else None)}
+                                          lead_questions=[remind_question] if welcome_back else None,
+                                          image_attached=image_attached)}
         draft_source = "fallback"
     body_path = Path(paths["customer_reply"])
     body_path.parent.mkdir(parents=True, exist_ok=True)

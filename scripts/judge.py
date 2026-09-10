@@ -24,7 +24,7 @@ import estimate_record
 
 import image_provider  # noqa: E402 - sibling module
 
-DEFAULT_MODEL = image_provider.QWEN_3_7_CLI_MODEL
+DEFAULT_MODEL = "litellm-fireworks/qwen-3-7-plus"
 CALL_TIMEOUT_SECONDS = 90
 PROMPT_LIMIT = 60_000
 Runner = Callable[..., subprocess.CompletedProcess[str]]
