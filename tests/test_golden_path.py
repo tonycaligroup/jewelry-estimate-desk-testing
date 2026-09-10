@@ -713,8 +713,8 @@ class GoldenPathTests(unittest.TestCase):
         self.assertEqual([q["kind"] for q in open_questions], ["missing_rate"])
         rate_key = open_questions[0]["rate"]["rate_key"]
 
-        # 3. The owner answers in words; the answer is quick, the next tick prices and files the brief.
-        answered = self.answer(ws, "600")
+        # 3. The owner answers in words ("save": for the card, not just this estimate); the next tick prices and files the brief.
+        answered = self.answer(ws, "save 600")
         self.assertEqual(answered["value"], 600.0, answered)
         self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)
         summary = self.tick(ws, world)
@@ -2778,8 +2778,8 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
 
 
 class ConciergeModeTests(SideBranchTests):
-    """The jeweler, 9 Sep: acknowledge, confirm the vision, ask budget and timeframe, book the call; the owner gathers the
-    details; one card carries the price and the renderings; one email carries both."""
+    """The jeweler, 9 Sep: acknowledge, confirm the vision, ask budget and timeframe, book the call. The owner, 10 Sep:
+    that is all the desk does in concierge mode; the owner writes and sends the estimate."""
 
     def _concierge(self, ws: Path) -> None:
         self._profile_with_rates(ws)
@@ -2790,13 +2790,8 @@ class ConciergeModeTests(SideBranchTests):
         profile["pricing"]["stones_per_carat"]["lab_grown_diamond_melee"] = 600.0
         profile_path.write_text(json.dumps(profile), encoding="utf-8")
 
-    @staticmethod
-    def _code(text: str) -> str:
-        match = re.search(r"desk-answer ([0-9A-F]{6})", text)
-        assert match, text
-        return match.group(1)
-
-    def test_the_call_first_then_the_owners_details_then_one_card_with_the_renderings(self) -> None:
+    def test_the_call_first_then_the_facts_on_the_sheet_and_no_price_from_the_desk(self) -> None:
+        """The owner, 10 Sep: concierge books the call; the owner writes and sends the estimate. The desk never prices."""
         def branch(ws: Path, world: World) -> None:
             self._concierge(ws)
             thread = "thread-concierge"
@@ -2813,9 +2808,8 @@ class ConciergeModeTests(SideBranchTests):
             self.assertEqual(offer["payload"]["ask_for"], ["Do you have a budget in mind, even a rough range?", "Is there a date you would like it by?"],
                              "budget and timeframe, never the specification")
             self.assertEqual(offer["payload"]["ask_intro"], pipeline.CONCIERGE_ASK_INTRO)
-            standing = [n for n in world.notices if not n["file"] and "After your call or visit" in n["text"]]
-            self.assertEqual(len(standing), 1, world.notices)
-            code = self._code(standing[0]["text"])
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "no standing question to the owner")
+            self.assertEqual([q["kind"] for q in self.questions(ws, "open") if not q.get("dormant")], [])
             self.assertEqual(world.sent, [], "nothing to the customer before the card")
             self.execute(ws, world, offer["payload"]["execute"], offer)
             body = world.sent[-1]["body"]
@@ -2837,43 +2831,24 @@ class ConciergeModeTests(SideBranchTests):
             self.execute(ws, world, book["payload"]["execute"], book)
             self.assertEqual(len(world.calendar_events), 1)
             self.assertEqual(len(world.sent), 2)
-            self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards), "no price before the owner's details")
-            # A thanks in between changes nothing.
+            # A thanks, then details after the visit: read for facts, nothing sent, nothing priced, no question to the owner.
             world.spec = {k: v for k, v in world.spec.items() if k != "scheduling_intent"}
             world.customer_message("cm3", thread, "Great, see you then!\n\nAnthony", subject="Re: Sapphire earrings")
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["noted"], summary)
-            self.assertEqual(len(world.sent), 2)
-            # After the visit: the owner's details, in chat.
-            answered = self.answer(ws, f"desk-answer {code} lab grown sapphires, round, 2.5 ct each, 14k white gold, halo")
-            self.assertEqual(answered["decision"], "details_given", answered)
-            self.assertEqual(answered["facts"]["metal_karat"], 14)
-            self.assertEqual(answered.get("pipeline"), "queued_for_tick", answered)
-            renders_before = len(world.renders)
+            world.spec = {**world.spec, "metal": "white gold", "metal_karat": "14k", "metal_color": "white", "stone_origin": "lab-grown",
+                          "setting_style": "halo", "earring_style": "stud"}
+            world.customer_message("cm4", thread, "Lovely meeting you. As discussed: 14k white gold, lab grown, halo studs.\n\nAnthony",
+                                   subject="Re: Sapphire earrings")
             summary = self.tick(ws, world)
-            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "approval_requested")], summary)
-            self.assertGreater(len(world.renders), renders_before, "the design was rendered")
-            previews = [n for n in world.notices if n["file"]]
-            self.assertEqual(len(previews), 2, "the owner saw both views before the card")
-            self.assertIn("The price card follows", previews[-1]["text"])
-            price_card = world.cards[-1]
-            self.assertTrue(str(price_card["title"]).startswith("Price approval"), price_card["title"])
-            self.assertIn("2 renderings attached", price_card["title"])
-            self.assertIn("view 1 passed", price_card["title"])
-            self.assertEqual(len(world.sent), 2, "one card, nothing sent yet")
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["noted"], summary)
+            self.assertEqual(len(world.sent), 2, "the desk sends nothing more")
+            self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards), "the desk never prices in concierge mode")
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "the owner is not asked for details")
             record = self.record(ws, estimate_id)
-            self.assertEqual(record["status"], "pending_approval")
-            self.assertEqual(len(record["concierge"]["renderings"]), 2)
-            self.assertEqual(record["specification"]["metal_karat"], 14)
-            world.approve(price_card)
-            summary = self.tick(ws, world)
-            self.assertEqual(summary["approvals"][0]["result"]["outcome"], "estimate_sent", summary)
-            estimate_mail = world.sent[-1]
-            self.assertEqual(len(estimate_mail["attachments"]), 2, "the renderings went with the estimate")
-            estimate_prompt = [q for q in world.prompts if "Send the customer their estimate" in q][-1]
-            self.assertIn("renderings attached: 2 views of the design, for guidance only", estimate_prompt)
-            self.assertIn("meeting booked", estimate_prompt)
-            self.assertEqual(self.record(ws, estimate_id)["status"], "estimate_sent")
+            self.assertEqual(record["status"], "awaiting_specs")
+            self.assertEqual(record["specification"]["metal_karat"], "14k", "the facts are on the record for the sheet")
+            self.assertNotIn("asked", record["concierge"])
         self.run_branch(branch)
 
     def test_a_customer_who_wants_a_number_gets_one_acknowledgement_and_the_owner_a_nudge(self) -> None:
@@ -2889,7 +2864,7 @@ class ConciergeModeTests(SideBranchTests):
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
             offer = world.cards[-1]
             self.execute(ws, world, offer["payload"]["execute"], offer)
-            code = self._code([n for n in world.notices if not n["file"] and "After your call or visit" in n["text"]][-1]["text"])
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "no standing question to the owner")
             world.spec = {**world.spec, "engraving": "our logo", "budget": "under 2000"}
             world.customer_message("cn2", thread, "I'd rather not come in, could you just send me a price? Budget under 2000, with our logo on the face.\n\nPat")
             summary = self.tick(ws, world)
@@ -2897,28 +2872,17 @@ class ConciergeModeTests(SideBranchTests):
             self.assertIn("work up the estimate", world.sent[-1]["body"])
             self.assertNotIn("?", world.sent[-1]["body"].split("\n\n", 1)[1].split("\n\n")[0], "no question in the acknowledgement")
             nudge = [n for n in world.notices if not n["file"] and "would rather have a number" in n["text"]][-1]["text"]
-            self.assertIn(f"desk-answer {code}", nudge)
+            self.assertNotIn("desk-answer", nudge)
             self.assertIn("Still unknown", nudge)
+            self.assertIn("yours to write and send", nudge)
             self.assertEqual(self.claim(ws, "cn2")["status"], "processed")
-            # A second push does not send a second acknowledgement.
+            # A second push does not send a second acknowledgement, and nothing is ever priced.
             world.customer_message("cn3", thread, "Any update on the price?\n\nPat")
             summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["noted"], summary)
             self.assertEqual(len(world.sent), 2)
-            # "price it" with a gap: the owner is told what is still missing, nothing is priced.
-            answered = self.answer(ws, f"desk-answer {code} price it")
-            self.assertEqual(answered["decision"], "price_it", answered)
-            summary = self.tick(ws, world)
-            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "details_still_missing")], summary)
-            gap = [n for n in world.notices if not n["file"] and "Still missing" in n["text"]][-1]["text"]
-            self.assertIn("setting style", gap)
+            self.assertEqual([q["kind"] for q in self.questions(ws, "open") if not q.get("dormant")], [])
             self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards))
-            # The owner fills the gap; the desk renders and prices.
-            answered = self.answer(ws, f"desk-answer {self._code(gap)} bead set")
-            self.assertEqual(answered["decision"], "details_given", answered)
-            summary = self.tick(ws, world)
-            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "approval_requested")], summary)
-            self.assertTrue(str(world.cards[-1]["title"]).startswith("Price approval"))
         self.run_branch(branch)
 
     def test_auto_mode_is_unchanged(self) -> None:
@@ -2997,21 +2961,62 @@ class CostSheetReadBackTests(ConciergeModeTests):
         state.write_text(json.dumps({"tabs": list(sheet_mirror.TABS)}), encoding="utf-8")
         return FakeSheet()
 
-    def test_a_block_marked_ready_prices_with_the_owners_numbers_and_a_draft_is_kept(self) -> None:
+    def _auto(self, ws: Path) -> None:
+        profile_path = ws / "estimate-desk" / "shop-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile["desk"]["mode"] = "auto"
+        profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+    def test_a_block_marked_ready_in_concierge_mode_is_left_to_the_owner(self) -> None:
+        """The owner, 10 Sep: in concierge mode the desk never prices, not from chat and not from the sheet."""
         import sheet_mirror
 
         def branch(ws: Path, world: World) -> None:
             sheet = self._with_sheet(ws)
             with patch.object(sheet_mirror, "_call_once", sheet), patch.object(sheet_mirror.gateway_token, "load_token", return_value="tok"):
-                thread = "thread-sheet"
                 world.spec = {"piece_type": "pair of earrings", "earring_style": "stud", "stone_type": "sapphire", "stone_origin": "lab-grown",
                               "stone_carat": 2.5, "stone_carat_basis": "each", "stone_shape": "round", "center_stone": "yes", "setting_style": "halo",
                               "metal": "white gold", "metal_karat": "14k", "metal_color": "white"}
                 world.requested = ([], [])
-                world.customer_message("cs1", thread, "Sapphire halo studs, 2.5 ct each, 14k white gold. Could you give me an estimate?\n\nAnthony",
+                world.customer_message("cc1", "thread-sheet-c", "Sapphire halo studs, 2.5 ct each, 14k white gold. Could you give me an estimate?\n\nAnthony",
+                                       subject="Sapphire studs")
+                self.tick(ws, world)
+                estimate_id = self.only_estimate(ws)
+                block = sheet.block(estimate_id)
+                self.assertEqual(block[0][9], "pending")
+                block[0][9] = "ready"
+                for row in block[1:]:
+                    if row[3] == "metal":
+                        row[5] = "5.5"
+                summary = self.tick(ws, world)
+                self.assertEqual(summary["sheet"]["ready"], [], "not acted on")
+                self.assertEqual(summary["sheet"]["drafts"], [estimate_id], "but kept")
+                told = [n for n in world.notices if not n["file"] and "concierge mode the desk does not price" in n["text"]]
+                self.assertEqual(len(told), 1, world.notices)
+                summary = self.tick(ws, world)
+                self.assertEqual(len([n for n in world.notices if not n["file"] and "concierge mode the desk does not price" in n["text"]]), 1, "said once")
+                self.assertEqual(sheet.block(estimate_id)[0][9], "ready", "the block stays the owner's")
+                self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards))
+                self.assertEqual([l for l in self.record(ws, estimate_id)["sheet_draft"]["lines"] if l["line"] == "metal"][0]["quantity"], "5.5")
+        self.run_branch(branch)
+
+    def test_a_block_marked_ready_prices_with_the_owners_numbers_and_a_draft_is_kept(self) -> None:
+        import sheet_mirror
+
+        def branch(ws: Path, world: World) -> None:
+            sheet = self._with_sheet(ws)
+            self._auto(ws)
+            with patch.object(sheet_mirror, "_call_once", sheet), patch.object(sheet_mirror.gateway_token, "load_token", return_value="tok"):
+                thread = "thread-sheet"
+                # Auto mode, one detail still open (the setting): the desk asks it, and the owner works the block meanwhile.
+                world.spec = {"piece_type": "pair of earrings", "earring_style": "stud", "stone_type": "sapphire", "stone_origin": "lab-grown",
+                              "stone_carat": 2.5, "stone_carat_basis": "each", "stone_shape": "round", "center_stone": "yes",
+                              "metal": "white gold", "metal_karat": "14k", "metal_color": "white"}
+                world.requested = ([], [])
+                world.customer_message("cs1", thread, "Sapphire studs, 2.5 ct each, 14k white gold. Could you give me an estimate?\n\nAnthony",
                                        subject="Sapphire studs")
                 summary = self.tick(ws, world)
-                self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+                self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
                 self.assertTrue(summary["mirror"].get("pushed"), summary["mirror"])
                 estimate_id = self.only_estimate(ws)
                 block = sheet.block(estimate_id)
@@ -3028,6 +3033,7 @@ class CostSheetReadBackTests(ConciergeModeTests):
                 header = block[0]
                 header[10] = "halo studs, bezel backs"
                 lines["metal"][5] = "5.5"
+                cards_before = len(world.cards)
                 summary = self.tick(ws, world)
                 self.assertEqual(summary["sheet"]["drafts"], [estimate_id], summary["sheet"])
                 self.assertEqual(summary["sheet"]["ready"], [])
@@ -3035,7 +3041,7 @@ class CostSheetReadBackTests(ConciergeModeTests):
                 self.assertEqual(record["sheet_draft"]["details"], "halo studs, bezel backs")
                 self.assertEqual([l for l in record["sheet_draft"]["lines"] if l["line"] == "metal"][0]["quantity"], "5.5")
                 self.assertEqual(sheet.block(estimate_id)[0][10], "halo studs, bezel backs", "the desk did not overwrite the owner's block")
-                self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards))
+                self.assertEqual(len(world.cards), cards_before, "a draft prices nothing")
                 # Then marks it ready with the numbers: the desk prices from them.
                 block = sheet.block(estimate_id)
                 block[0][9] = "ready"
@@ -3044,10 +3050,10 @@ class CostSheetReadBackTests(ConciergeModeTests):
                         row[5] = "3"
                 summary = self.tick(ws, world)
                 self.assertEqual([r["estimate_id"] for r in summary["sheet"]["ready"]], [estimate_id], summary["sheet"])
-                self.assertEqual(summary["sheet"]["ready"][0]["step"], "price_and_render")
+                self.assertEqual(summary["sheet"]["ready"][0]["step"], "price_from_record")
                 self.assertEqual(self.record(ws, estimate_id)["owner_quantities"]["finished_grams"], 5.5)
                 summary = self.tick(ws, world)
-                self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_and_render", "approval_requested")], summary)
+                self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_from_record", "approval_requested")], summary)
                 price_card = world.cards[-1]
                 self.assertTrue(str(price_card["title"]).startswith("Price approval"), price_card["title"])
                 self.assertIn("5.5g", price_card["title"].replace(" ", ""), "the owner's grams, not the model's")
@@ -3087,11 +3093,25 @@ class PriorPieceTests(SideBranchTests):
                           "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "center_stone": "yes"}
             world.customer_message("pp1", "thread-replica", self.REPLICA, subject="Blue Topaz Pendant")
             summary = self.tick(ws, world)
-            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            # The owner, 10 Sep: the desk says the piece back (never its cost) and asks if that is the one, before any price.
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
             self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" in n["text"]], [], "the owner is not asked")
-            self.assertEqual(len(world.sent), 1, "no questions to the customer")
+            self.assertEqual(len(world.sent), 2, "one email: the piece described back, and is that the one")
+            confirm = world.sent[-1]["body"]
+            self.assertIn("after the piece we made for you", confirm)
+            self.assertIn("topaz", confirm.lower())
+            self.assertRegex(confirm, r"(?i)the piece you have in mind")
+            self.assertNotRegex(confirm, r"\$\d", "never the cost")
+            self.assertNotRegex(confirm, r"(?i)natural or lab-grown|setting style", "nothing on file is asked")
             new_id = next(i for i in (path.stem for path in (ws / "estimate-desk" / "records").glob("jed-*.json")) if i != first_id)
+            self.assertEqual(self.record(ws, new_id)["prior_piece"]["confirm"], "asked")
+            # "Yes, that's the one": priced, nobody asked anything more.
+            world.customer_message("pp1b", "thread-replica", "Yes, that's the one!\n\nDavid", subject="Re: Blue Topaz Pendant")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(len(world.sent), 2, "no more questions")
             record = self.record(ws, new_id)
+            self.assertEqual(record["prior_piece"]["confirm"], "pp1b")
             spec = record["specification"]
             self.assertEqual(spec["stone_origin"], "lab-grown", "carried from the piece on file")
             self.assertEqual(spec["setting_style"], "bezel with four prongs")
@@ -3144,63 +3164,38 @@ class PriorPieceTests(SideBranchTests):
             self.assertNotIn("emerald", title)
         self.run_branch(branch)
 
-    def test_nothing_on_file_asks_the_owner_whose_details_price_it(self) -> None:
+    def test_nothing_on_file_welcomes_them_back_and_asks_for_a_reminder_or_a_photo(self) -> None:
+        """The owner, 10 Sep: no question to the owner; the desk is friendly and asks them to remind us, or for a photo."""
         def branch(ws: Path, world: World) -> None:
             self._topaz_profile(ws)
             world.spec = {"piece_type": "pendant", "stone_type": "blue topaz", "stone_dimensions": "15mm x 12mm", "stone_shape": "oval",
                           "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "center_stone": "yes"}
             world.customer_message("pp2", "thread-replica-2", self.REPLICA, subject="Blue Topaz Pendant", sender="David Trujillo <david@example.net>")
             summary = self.tick(ws, world)
-            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
-            self.assertEqual(world.sent, [], "nothing to the customer before the owner's word")
-            question = [n for n in world.notices if not n["file"]][-1]["text"]
-            self.assertIn("David Trujillo says you made a pendant", question)
-            self.assertIn("not on file", question)
-            self.assertEqual(self.claim(ws, "pp2")["status"], "awaiting_owner")
-            answered = self.answer(ws, "lab grown blue topaz, oval, 14k yellow gold, bezel")
-            self.assertEqual(answered["decision"], "details_given", answered)
-            self.assertEqual(answered["facts"]["stone_origin"], "lab-grown")
-            self.assertEqual(answered["facts"]["setting_style"], "bezel")
-            summary = self.tick(ws, world)
-            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
-            record = self.record(ws, self.only_estimate(ws))
-            self.assertEqual(record["specification"]["stone_origin"], "lab-grown")
-            self.assertEqual(record["specification"]["setting_style"], "bezel")
-            self.assertTrue(record["prior_piece"]["on_file"])
-            self.assertEqual(len(world.sent), 0, "the price card comes before any email")
-            self.assertIn("lab-grown", world.cards[-1]["title"].lower())
-        self.run_branch(branch)
-
-    def test_not_on_file_falls_back_to_the_plain_questions(self) -> None:
-        def branch(ws: Path, world: World) -> None:
-            self._topaz_profile(ws)
-            world.spec = {"piece_type": "pendant", "stone_type": "blue topaz", "stone_dimensions": "15mm x 12mm", "stone_shape": "oval",
-                          "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "center_stone": "yes"}
-            world.customer_message("pp3", "thread-replica-3", self.REPLICA, subject="Blue Topaz Pendant", sender="David Trujillo <david@example.net>")
-            self.tick(ws, world)
-            answered = self.answer(ws, "not on file")
-            self.assertEqual(answered["decision"], "not_on_file", answered)
-            summary = self.tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "the owner is never asked")
+            self.assertEqual([q["kind"] for q in self.questions(ws, "open") if not q.get("dormant")], [])
             body = world.sent[-1]["body"]
-            self.assertRegex(body, r"(?i)natural or lab-grown")
+            self.assertRegex(body, r"(?i)remind me a little about the piece")
+            self.assertRegex(body, r"(?i)photo")
+            self.assertRegex(body, r"(?i)natural or lab-grown", "what is still needed is asked in the same email")
             self.assertNotRegex(body, r"(?i)carat weight", "sized in millimetres: the carat is never asked")
+            self.assertNotRegex(body, r"(?i)no record|cannot find|can't find|nothing on file")
+            prompt = [q for q in world.prompts if "missing details listed below" in q or "asking only for what is still missing" in q][-1]
+            self.assertIn("welcoming them back", prompt)
             record = self.record(ws, self.only_estimate(ws))
             self.assertFalse(record["prior_piece"]["on_file"])
-            self.assertEqual(record["missing_required_fields"], ["setting_style", "stone_origin"], "no photo, nothing on file: asked plainly")
-        self.run_branch(branch)
-
-    def test_handle_myself_leaves_the_repeat_customer_to_the_owner(self) -> None:
-        def branch(ws: Path, world: World) -> None:
-            self._topaz_profile(ws)
-            world.spec = {"piece_type": "pendant", "stone_type": "blue topaz", "center_stone": "yes"}
-            world.customer_message("pp4", "thread-replica-4", self.REPLICA, subject="Blue Topaz Pendant")
-            self.tick(ws, world)
-            answered = self.answer(ws, "handle myself")
-            self.assertEqual(answered["decision"], "handle_myself", answered)
-            self.assertEqual(self.claim(ws, "pp4")["status"], "manual_review")
-            self.assertEqual(self.record(ws, self.only_estimate(ws))["status"], "dormant")
-            self.assertEqual(world.sent, [])
+            self.assertEqual(record["prior_piece"]["welcome_back"], "pp2")
+            self.assertEqual(self.claim(ws, "pp2")["status"], "processed")
+            # Their answer, with a photo: read like any other reply; priced when complete.
+            world.spec = {**world.spec, "stone_origin": "lab-grown", "setting_style": "bezel",
+                          "reference_images": "from the photo: an oval blue topaz pendant in a bezel"}
+            world.customer_message("pp2b", "thread-replica-2", "Of course! Here is a photo. It was a lab grown topaz in a bezel.\n\nDavid",
+                                   subject="Re: Blue Topaz Pendant", attachments=("pendant.jpg",), sender="David Trujillo <david@example.net>")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            self.assertEqual(len(world.sent), 1, "the price card comes before any further email")
+            self.assertIn("lab-grown", world.cards[-1]["title"].lower())
         self.run_branch(branch)
 
 
@@ -3251,6 +3246,52 @@ class OneTimeRateAnswerTests(SideBranchTests):
             self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_from_record", "approval_requested")], summary)
             self.assertIn("x $500.00", world.cards[-1]["title"])
             self.assertEqual(self.record(ws, self.only_estimate(ws))["one_time_rates"], {"stones_per_carat": {"lab_grown_ruby": 500.0}})
+            self.assertEqual(self.questions(ws, "open"), [], "'once' is an answer; nothing more is asked")
+        self.run_branch(branch)
+
+    def test_a_bare_number_prices_now_and_asks_whether_to_save_it(self) -> None:
+        """The owner, 10 Sep: never guess that a number is for keeps; ask, and hold nothing up."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {"piece_type": "pendant", "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "stone_type": "ruby",
+                          "stone_origin": "lab-grown", "stone_carat": 1.0, "stone_shape": "round", "setting_style": "bezel", "center_stone": "yes"}
+            world.customer_message("br1", "thread-bare", "A 14k yellow gold pendant with a 1 ct round lab-grown ruby, bezel set. Estimate please.\n\nPat")
+            self.tick(ws, world)
+            asked = [n for n in world.notices if not n["file"]][-1]["text"]
+            self.assertIn('"save 450"', asked)
+            self.assertIn('"use 450 once"', asked)
+            self.assertIn("ask whether to save it", asked)
+            answered = self.answer(ws, "500")
+            self.assertEqual(answered["value"], 500.0, answered)
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            self.assertNotIn("lab_grown_ruby", profile["pricing"]["stones_per_carat"], "not saved on a guess")
+            follow = [q for q in self.questions(ws, "open")]
+            self.assertEqual([q["kind"] for q in follow], ["rate_save"])
+            self.assertIn("Save 500 per carat", follow[0]["text"])
+            self.assertIn('Reply "save" or "once"', follow[0]["text"])
+            summary = self.tick(ws, world)
+            self.assertEqual([(i.get("step"), i["outcome"]) for i in summary["inline"]], [("price_from_record", "approval_requested")], summary)
+            self.assertIn("x $500.00", world.cards[-1]["title"], "priced without waiting for the answer")
+            answered = self.answer(ws, "save")
+            self.assertEqual(answered["decision"], "save", answered)
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["pricing"]["stones_per_carat"]["lab_grown_ruby"], 500.0)
+            self.assertEqual(self.questions(ws, "open"), [])
+        self.run_branch(branch)
+
+    def test_save_450_goes_straight_to_the_card(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            world.spec = {"piece_type": "pendant", "metal": "yellow gold", "metal_karat": "14k", "metal_color": "yellow", "stone_type": "ruby",
+                          "stone_origin": "lab-grown", "stone_carat": 1.0, "stone_shape": "round", "setting_style": "bezel", "center_stone": "yes"}
+            world.customer_message("sv1", "thread-save", "A 14k yellow gold pendant with a 1 ct round lab-grown ruby, bezel set. Estimate please.\n\nPat")
+            self.tick(ws, world)
+            answered = self.answer(ws, "save 450")
+            self.assertEqual(answered["value"], 450.0, answered)
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["pricing"]["stones_per_carat"]["lab_grown_ruby"], 450.0)
+            self.assertEqual(self.questions(ws, "open"), [], "no follow-up: they said save")
+            self.assertNotIn("one_time_rates", self.record(ws, self.only_estimate(ws)))
         self.run_branch(branch)
 
 

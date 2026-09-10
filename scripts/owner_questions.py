@@ -28,9 +28,9 @@ from typing import Any, Callable
 
 SCHEMA_VERSION = 1
 QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed",
-                  "stuck_claim", "price_next", "rendering_next", "out_of_scope", "prior_piece", "details_needed"}
+                  "stuck_claim", "price_next", "rendering_next", "out_of_scope", "rate_save"}
 DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim",
-                  "price_next", "rendering_next", "out_of_scope", "prior_piece", "details_needed"}
+                  "price_next", "rendering_next", "out_of_scope", "rate_save"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -72,16 +72,9 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "price_given": ("file at", "file it at", "quote", "price it at", "make it", "go with", "send it at", "at"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },
-    "prior_piece": {
-        "details_given": ("carat", "ct", "karat", "gold", "platinum", "silver", "natural", "lab", "oval", "round", "grams"),
-        "not_on_file": ("not on file", "nothing on file", "no record", "no file", "don't have", "do not have", "can't find", "cannot find",
-                        "not found", "no idea", "ask them"),
-        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
-    },
-    "details_needed": {
-        "details_given": ("carat", "ct", "karat", "gold", "platinum", "silver", "natural", "lab", "oval", "round", "grams", "size"),
-        "price_it": ("price it", "price as is", "go ahead", "use what you have", "what you have", "proceed", "quote it"),
-        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
+    "rate_save": {
+        "save": ("save", "yes", "add it", "add", "keep", "keep it", "to the card", "on the card", "for the future", "permanent", "always"),
+        "once": ("once", "no", "one time", "one-time", "this estimate", "just this", "don't save", "do not save", "not now", "this time only"),
     },
     "out_of_scope": {
         "quote": ("quote", "quote it", "estimate", "estimate it", "price it", "go ahead", "yes", "custom", "make it", "read it"),
@@ -355,7 +348,7 @@ def missing_rate_text(question: dict[str, Any], reminder: bool = False) -> str:
     lines = [
         f"{who} asked for a quote on {piece}. I do not have a {unit} price for "
         f"{rate['description']} on your rate card. What price {unit} should I use?",
-        f'Reply with just the number, for example "use 450", to add it to your rate card, or "use 450 once" for this estimate only. '
+        f'Reply "save 450" to add it to your rate card, or "use 450 once" for this estimate only. A bare number prices this estimate and I will ask whether to save it. '
         f"(Question {reference(question['question_id'])}, estimate "
         f"{question['estimate_id'].upper()})",
     ]
@@ -477,16 +470,6 @@ def match_option(question: dict[str, Any], answer: str) -> str:
     if question.get("kind") == "rendering_next" and "handle_myself" not in hits and (answer or "").strip():
         # Any other words are the change the owner wants rendered.
         return "change_given"
-    if question.get("kind") == "details_needed" and "handle_myself" not in hits and "price_it" not in hits:
-        import estimate_record  # local import: estimate_record imports this module
-
-        if estimate_record.owner_facts_in_words(answer):
-            return "details_given"  # the owner typed the details from the visit
-    if question.get("kind") == "prior_piece" and "handle_myself" not in hits and "not_on_file" not in hits:
-        import estimate_record  # local import: estimate_record imports this module
-
-        if estimate_record.owner_facts_in_words(answer):
-            return "details_given"  # the owner typed the piece's details
     if question.get("kind") == "price_next" and "handle_myself" not in hits and parse_owner_price(answer) is not None:
         # The owner typed a price: "$2,300" or "file it at 2300".
         return "price_given"

@@ -167,13 +167,12 @@ location and collect:
    `retailer`; never offer a wholesale or trade mode.
 4a. How the desk works the conversation, stored as `desk.mode`. The default
    is `concierge`: the first email acknowledges, confirms the vision, asks
-   only budget and timeframe, and offers a call or a visit; the owner gathers
-   the details at the visit and types them in chat in reply to the desk's
-   standing question ("desk-answer <code> ..."); the desk then renders the
-   design and files one price card with the renderings; approving it sends
-   the estimate with the renderings attached. `auto` is the opt-in: the desk
-   asks the details by email and prices from the replies. Offer both in one
-   sentence; a shop that does not choose gets concierge.
+   only budget and timeframe, and offers a call or a visit; the desk books it
+   and stops there. The owner writes and sends the estimate themselves; what
+   the customer said is on the Customers and Cost sheet tabs. `auto` is the
+   opt-in: the desk asks the details by email, prices from the replies, and
+   sends the approved estimate. Offer both in one sentence; a shop that does
+   not choose gets concierge.
 5. Pricing model: cost-plus multiplier or target margin. For cost-plus, convert
    `25%` to `1.25` and confirm `$1,000 cost → $1,250 quote`. For target margin,
    store the decimal margin and confirm the resulting example price.

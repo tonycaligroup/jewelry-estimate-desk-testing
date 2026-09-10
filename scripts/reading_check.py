@@ -29,6 +29,7 @@ QUESTIONS = {
     "stone_origin": "could you confirm whether you would like a lab-grown or a natural stone?",
     "customer_stone": "you mentioned a stone of your own; could you confirm you would like us to set that stone rather than supply one?",
     "stone_carat_basis": "for the pair, is the carat weight you gave the weight of each stone, or the total for both?",
+    "prior_piece": "is that the piece you have in mind? If not, remind me a little about it, or send a photo if you have one handy.",
 }
 
 _SIZE_RE = re.compile(r"\bsize\s*(?:of\s*)?(\d{1,2}(?:\.\d)?|\d{1,2}\s*[½¼¾]|\d{1,2}\s*1/2)\b", re.I)

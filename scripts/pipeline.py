@@ -184,9 +184,12 @@ def question_lines(missing: list[str], specification: dict[str, Any] | None = No
 UNDERSTANDING_LINE = "Just so I have your vision right: you are after {vision}. Tell me if any of that is off."
 
 
+REMIND_QUESTION = "could you remind me a little about the piece we made for you, or send a photo if you have one handy?"
+
+
 def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None,
-                   understanding: str | None = None) -> str:
-    asks = []
+                   understanding: str | None = None, lead_questions: list[str] | None = None) -> str:
+    asks = list(lead_questions or [])
     for name, question in _one_metal_question(missing)[:8]:
         if reading_check.is_confirm(name):
             asks.append(question)
@@ -272,17 +275,23 @@ def _send_followup(
     except (OSError, ValueError):
         record_now, specification = {}, {}
     understanding = estimate_record.vision_in_words(specification, on_file=estimate_record.prior_basis(record_now))
+    prior_info = record_now.get("prior_piece") if isinstance(record_now.get("prior_piece"), dict) else {}
+    welcome_back = bool(prior_info.get("welcome_back")) and not prior_info.get("on_file") and initiating
+    questions = question_lines(missing, specification)
+    if welcome_back:
+        questions = [REMIND_QUESTION] + questions
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
                                        shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding,
-                                       questions=question_lines(missing, specification), customer_name=estimate_record.customer_first_name(record_now),
-                                       meeting_booked=bool(record_now.get("appointment_booked")))
+                                       questions=questions, customer_name=estimate_record.customer_first_name(record_now),
+                                       meeting_booked=bool(record_now.get("appointment_booked")), welcome_back=welcome_back)
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
         # The model could not write a proper question twice; a plain one
         # still moves the inquiry, and the owner sees nothing odd.
-        drafted = {"body": plain_followup(missing, shop_name, specification, understanding)}
+        drafted = {"body": plain_followup(missing, shop_name, specification, understanding,
+                                          lead_questions=[REMIND_QUESTION] if welcome_back else None)}
     body_path = Path(paths["customer_reply"])
     body_path.parent.mkdir(parents=True, exist_ok=True)
     body_path.write_text(drafted["body"] + "\n", encoding="utf-8")
@@ -882,8 +891,10 @@ def process_claim(
     if initiating and (made_before or talked_before) and not record.get("prior_piece"):
         # "An exact replica of the pendant you made for me", "the emerald earrings we talked about earlier, but with
         # sapphires": the piece on file is the base and nothing on it is asked (the jeweler, 9 September 2026). Found in
-        # the desk's own records, its facts ride along beneath the new words; a piece the shop made that is not on
-        # file goes to the owner's books before anything is sent; an earlier conversation not on file is read afresh.
+        # the desk's own records, its facts ride along beneath the new words. A piece the shop made is described back
+        # to the customer, never its costs, and confirmed before it is priced; one the desk cannot find gets a warm
+        # welcome back and a request to remind us about it, or a photo (the owner, 10 September 2026). The owner is
+        # never asked. An earlier conversation not on file is read afresh.
         prior = estimate_record.find_prior_piece(p["record_root"], (record.get("route") or {}).get("recipient"),
                                                  specification.get("piece_type"), exclude=estimate_id)
         if prior:
@@ -891,11 +902,11 @@ def process_claim(
             specification = {**specification, **carried}  # the piece on file outranks the reading's guesses; their words won above
             ledger.migrate(desk, record)
             ledger.absorb(desk, estimate_id, carried, message_id, "", "", default_source="prior")
-            record = estimate_record.mark_prior_piece(p["record_root"], estimate_id,
-                                                      {"on_file": True, "estimate_id": prior["estimate_id"], "carried": sorted(carried)})
+            record = estimate_record.mark_prior_piece(p["record_root"], estimate_id, {
+                "on_file": True, "estimate_id": prior["estimate_id"], "carried": sorted(carried),
+                "basis": "made" if made_before else "estimate", "confirm": "asked" if made_before else "not_needed"})
         elif made_before:
-            asked = workflow_safe.ask_prior_piece(_namespace(p, message_id, estimate_id, runner=command_runner), record, specification)
-            return {"outcome": "awaiting_owner", "question_id": asked.get("question_id"), "next": "done"}
+            record = estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"on_file": False, "welcome_back": message_id})
     # The message being handled decides a meeting request in code: a
     # reschedule ("can we do Friday at 4pm?") is a meeting, not a questionnaire.
     specification = estimate_record.settle_scheduling_intent(specification, handled_words, record)
@@ -923,8 +934,17 @@ def process_claim(
     if disagreements:
         workflow_safe.write_private(Path(paths["work_dir"]) / "reading-check.json", {"disagreements": disagreements})
         missing = missing + [d["name"] for d in disagreements if d["name"] not in missing]
+    prior_info = record.get("prior_piece") if isinstance(record.get("prior_piece"), dict) else {}
+    if prior_info.get("confirm") == "asked":
+        if initiating:
+            # The piece the shop made, described back in the vision line: "is that the piece you have in mind?" comes
+            # before any price, with whatever else is still needed (the owner, 10 September 2026).
+            missing = missing + [reading_check.PREFIX + "prior_piece"]
+        else:
+            # Their reply stands, whatever it said: a correction or a photo already won above, in their own words.
+            record = estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"confirm": message_id})
     workflow_safe.write_private(review_path, {"specification": specification, "missing_required_fields": missing})
-    if estimate_record.desk_mode(profile) == "concierge" and not (record.get("concierge") or {}).get("details"):
+    if estimate_record.desk_mode(profile) == "concierge":
         return _concierge_reply(p, message_id, estimate_id, record, specification, missing, digest, handled_words, initiating,
                                 paths, profile, model, judge_runner, openclaw, command_runner, review_path)
     meeting_card = False
@@ -1027,15 +1047,16 @@ def _concierge_reply(
     profile: dict[str, Any], model: str | None, judge_runner: Runner, openclaw: str | None, command_runner: Runner,
     review_path: Path,
 ) -> dict[str, Any]:
-    """Concierge mode, before the owner's details (the jeweler, 9 September 2026): the desk books the call, never the questionnaire.
+    """Concierge mode (the jeweler, 9 September 2026; pared back by the owner, 10 September 2026): the desk books the
+    call, never the questionnaire, and never prices.
 
     The first email acknowledges, confirms the vision, asks budget and
-    timeframe, and offers times; a standing question waits for the owner's
-    details after the visit. A reply that picks a time gets the meeting
+    timeframe, and offers times. A reply that picks a time gets the meeting
     card. A reply that pushes for a number gets one acknowledgement and the
-    owner a nudge. Any other reply is read for facts and left alone. No
-    specification question ever reaches the customer, and nothing is priced
-    until the owner says so.
+    owner a nudge. Any other reply is read for facts and left alone; the
+    facts reach the Cost sheet and Customers tabs for the owner, who writes
+    and sends the estimate. No specification question ever reaches the
+    customer, and the desk files no price card in this mode.
     """
     # The review is on the record either way (the specification, what is still open); the rate is asked with the price.
     workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner, quiet=True))
@@ -1058,10 +1079,8 @@ def _concierge_reply(
             record_output=Path(paths["current_record"]), defer_finalize_for_rendering=False,
             runner=command_runner, judge_runner=judge_runner,
         ))
-        if initiating and not (record.get("concierge") or {}).get("asked"):
-            record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-            question = workflow_safe.ask_details_needed(p, record, message_id, command_runner)
-            estimate_record.mark_concierge(p["record_root"], estimate_id, asked=question["question_id"], offered=message_id)
+        if initiating and not (record.get("concierge") or {}).get("offered"):
+            estimate_record.mark_concierge(p["record_root"], estimate_id, offered=message_id)
         return {"outcome": "appointment_approval_requested", "before_estimate": True, "concierge": True,
                 "asks": list(intent.get("ask_for") or []), "next": "done"}
     if estimate_record.asks_for_estimate(handled_words) and not (record.get("concierge") or {}).get("acknowledged"):
@@ -1077,78 +1096,16 @@ def _concierge_reply(
         body_path.write_text(body.rstrip("\n") + "\n", encoding="utf-8")
         workflow_safe.send_acknowledgement(p, record, message_id, body_path.read_text(encoding="utf-8"), command_runner)
         who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "the customer"))
-        code = owner_questions.reference((record.get("concierge") or {}).get("asked") or "") if (record.get("concierge") or {}).get("asked") else ""
         still = "; ".join(describe_missing(specification, missing)) if missing else "nothing"
         kolo_safe.tell_owner(p["monitor_root"], f"{who} would rather have a number than a visit; I told them you will work up the estimate "
-                             f"and get back to them. My reading: {piece}. Still unknown: {still}."
-                             + (f" Reply \"desk-answer {code}\" with the details (or \"price it\") and I will price and render it." if code else ""),
+                             f"and get back to them. My reading: {piece}. Still unknown: {still}. In concierge mode the estimate is "
+                             "yours to write and send; what they told me is on the Cost sheet and Customers tabs.",
                              command_runner)
         return {"outcome": "acknowledged", "next": "done"}
     # Budget, a date, thanks: the facts are on the record; nothing to send, nothing to ask.
     token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
     kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
     return {"outcome": "noted", "next": "done"}
-
-
-def price_and_render(
-    workspace: Path, message_id: str, estimate_id: str,
-    model: str | None = None, judge_runner: Runner = subprocess.run, command_runner: Runner = subprocess.run,
-    openclaw: str | None = None, deadline: float | None = None,
-) -> dict[str, Any]:
-    """After the owner's details (concierge mode): render the design, then price it, one card carrying both.
-
-    The views are rendered first (one tick per view through the CLI, all at
-    once directly) and shown to the owner in chat; the price card then names
-    them and approving it sends the estimate with the renderings attached.
-    A detail still missing goes back to the owner as the same question.
-    """
-    desk = workspace / "estimate-desk"
-    p = {"monitor_root": desk / "inbox-monitor", "claim_root": desk / "inbox-claims", "record_root": desk / "records",
-         "shop_profile": desk / "shop-profile.json"}
-    paths = inbox_monitor.prepare_claim_work(p["monitor_root"], p["claim_root"], message_id)
-    if not Path(paths["gmail_thread"]).exists():
-        import gateway_token  # local import; only needed on a replay
-        import gmail_fetch
-
-        gmail_fetch.fetch_claimed(p["monitor_root"], p["claim_root"], message_id, gateway_token.load_token())
-    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-    profile = workflow_safe.read_object(p["shop_profile"])
-    specification = record.get("specification") or {}
-    missing = spec_gate.missing_required_fields(specification, profile)
-    if missing:
-        workflow_safe.ask_details_needed(p, record, message_id, command_runner, still_missing=missing)
-        estimate_record.mark_concierge(p["record_root"], estimate_id, details=False)
-        workflow_safe.finish_processed(p["monitor_root"], p["claim_root"], p["record_root"], message_id)
-        return {"outcome": "details_still_missing", "missing": missing, "next": "done"}
-    work_dir = Path(paths["work_dir"])
-    report_path = work_dir / "rendering-report.json"
-    if report_path.exists() and not (work_dir / PROGRESS_FILE).exists():
-        report = workflow_safe.read_object(report_path)
-        renderings = [{"slot": int(v["slot"]), "path": str(v.get("image") or ""),
-                       "checker": "passed" if v.get("passed") else ("not machine-checked" if v.get("unchecked") else "failed " + ", ".join(v.get("failed") or []))}
-                      for v in report.get("views") or []]
-    else:
-        rendered = render_step(p, message_id, estimate_id, record, paths, openclaw or judge.default_openclaw(), command_runner,
-                               model=model, judge_runner=judge_runner, deadline=deadline, card=False)
-        if rendered.get("outcome") != "rendered":
-            return rendered
-        renderings = list(rendered.get("renderings") or [])
-        who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "the customer"))
-        piece = owner_questions.summary_of_piece(specification) if specification else "their piece"
-        for item in renderings:
-            try:
-                kolo_safe.send_owner_preview(p["monitor_root"], f"Rendering {item['slot']} of {len(renderings)} for {who}'s {piece} "
-                                             f"({item['checker']}). The price card follows; approve it to send the estimate with these attached.",
-                                             Path(item["path"]), runner=command_runner)
-            except Exception:  # noqa: BLE001 - the card still names the views
-                pass
-    review_path = work_dir / "review.json"
-    workflow_safe.write_private(review_path, {"specification": specification, "missing_required_fields": []})
-    reviewed = workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner))
-    if reviewed.get("next") != "price":
-        return {"outcome": reviewed.get("outcome", "done"), "next": "done"}
-    return _price_after_review(p, message_id, estimate_id, specification, reviewed, model, judge_runner, openclaw, command_runner,
-                               renderings=[r for r in renderings if Path(str(r.get("path") or "")).is_file()])
 
 
 INVENTORY_REPLY_LIMIT = 2

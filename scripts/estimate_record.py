@@ -713,9 +713,10 @@ def record_thread_review(
                 and record["status"] == "awaiting_specs"
                 and (
                     (existing.get("outcome") == "specs_complete" and not followup_sent(record, source_message_id))
-                    # Concierge mode: the owner's details after the visit review the same email again; the
-                    # offer's review is replaced, nothing was priced on it (9 September 2026).
+                    # The owner's numbers from the cost sheet review the same email again; the earlier review
+                    # (a question sent, nothing priced) is replaced (9 and 10 September 2026).
                     or bool((record.get("concierge") or {}).get("details"))
+                    or bool((record.get("sheet_draft") or {}).get("acted_hash"))
                 )
             ):
                 # Nothing was sent or priced on the earlier reading; a fresh
@@ -2015,6 +2016,8 @@ def prior_basis(record: dict[str, Any] | None) -> bool | str:
     prior = (record or {}).get("prior_piece") if isinstance((record or {}).get("prior_piece"), dict) else {}
     if not prior.get("on_file"):
         return False
+    if prior.get("basis") in ("made", "estimate"):
+        return str(prior["basis"])
     return "made" if prior.get("owner") == "details" else "estimate"
 
 
@@ -2023,7 +2026,9 @@ def mark_prior_piece(root: Path, estimate_id: str, info: dict[str, Any]) -> dict
     path = record_path(root, estimate_id)
     with record_lock(root):
         record = read_object(path)
-        record["prior_piece"] = {"on_file": bool(info.get("on_file")), **{k: v for k, v in info.items() if k != "on_file"}}
+        existing = record.get("prior_piece") if isinstance(record.get("prior_piece"), dict) else {}
+        on_file = bool(info.get("on_file", existing.get("on_file")))
+        record["prior_piece"] = {**existing, "on_file": on_file, **{k: v for k, v in info.items() if k != "on_file"}}
         write_object(path, record)
         return record
 
@@ -2176,8 +2181,11 @@ def owner_supplies_facts(root: Path, estimate_id: str, facts: dict[str, Any]) ->
         if record.get("status") != "awaiting_specs":
             raise ValueError("only an estimate still awaiting specifications can take the owner's details")
         specification = dict(record.get("specification") or {})
-        specification.update({k: v for k, v in facts.items() if _present(v)})
+        given = {k: v for k, v in facts.items() if _present(v)}
+        specification.update(given)
         record["specification"] = specification
+        # What the owner supplied is no longer missing (the cost sheet's Details cell, 10 September 2026).
+        record["missing_required_fields"] = [f for f in (record.get("missing_required_fields") or []) if f not in given]
         write_object(path, record)
         return record
 

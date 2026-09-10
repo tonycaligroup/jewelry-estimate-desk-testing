@@ -345,8 +345,8 @@ def _hand_to_tick(p: dict[str, Path], message_id: str, step: str | None = None, 
         write_private(Path(paths["work_dir"]) / NEXT_STEP_FILE, {"action": step, "estimate_id": estimate_id})
     inbox_claim.mark_inline(p["claim_root"], message_id, token, True)
     inbox_claim.release_lease(p["claim_root"], message_id, token)
-    return {"pipeline": "queued_for_tick", "note": "the next tick " + ({"price_from_record": "prices it", "resend_followup": "asks the customer again",
-                                                                          "price_and_render": "renders it and prices it; one card follows"}.get(step or "", "reads and prices it"))}
+    return {"pipeline": "queued_for_tick", "note": "the next tick " + ({"price_from_record": "prices it", "resend_followup": "asks the customer again"}
+                                                                         .get(step or "", "reads and prices it"))}
 
 
 def _answer_same_piece(args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path,
@@ -1815,79 +1815,6 @@ def ask_out_of_scope(args: argparse.Namespace, note: str) -> dict[str, Any]:
     return question
 
 
-def ask_details_needed(p: dict[str, Path], record: dict[str, Any], message_id: str, runner: Any,
-                       still_missing: list[str] | None = None) -> dict[str, Any]:
-    """Concierge mode: the standing question the owner answers after the call or the visit (the jeweler, 9 September 2026).
-
-    Dormant (no reminders: a visit may be a week away), delivered once with
-    its code; the answer prices and renders. Asked again, with what is still
-    missing, when the owner's details left a gap.
-    """
-    root = owner_questions.questions_root(p["monitor_root"])
-    who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "the customer"))
-    piece = owner_questions.summary_of_piece(record.get("specification")) if record.get("specification") else "their piece"
-    gap = ""
-    if still_missing:
-        import pipeline  # local import: pipeline imports this module
-
-        gap = " Still missing: " + "; ".join(pipeline.describe_missing(record.get("specification") or {}, still_missing)) + "."
-    text = (
-        f"After your call or visit with {who} about {piece}, reply here with the piece's details (the stone and origin, its size or "
-        f"carat, the metal and karat, the setting) and I will price it, render it, and file one card.{gap} "
-        "Or say \"price it\" to use what I have, or \"handle myself\"."
-    )
-    suffix = f"#gap{len(still_missing)}" if still_missing else ""
-    created, question = owner_questions.create_decision(
-        root, "details_needed", record["estimate_id"], f"{message_id}{suffix}", text, {"still_missing": list(still_missing or [])},
-        dormant=True,
-    )
-    question = _attach_answer_command(root, p["monitor_root"], question)
-    if created:
-        owner_questions.deliver(root, question, runner=runner, extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
-    return question
-
-
-def _answer_details_needed(args: argparse.Namespace, p: dict[str, Path], root: Path, question: dict[str, Any],
-                           outcome: str) -> dict[str, Any]:
-    """The owner's details after the visit: the estimate is priced and rendered from them, one card, one email."""
-    message_id = _question_message_id(question)
-    estimate_id = question["estimate_id"]
-    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "details_needed", "decision": outcome}
-    if outcome == "handle_myself":
-        try:
-            estimate_record.retire(p["record_root"], estimate_id, "owner_handles_thread", "the owner handles this thread after the visit")
-        except ValueError:
-            pass
-        if question["status"] == "open":
-            owner_questions.record_decision(root, question, args.answer, outcome)
-        result["note"] = "the desk leaves this thread to the owner"
-        return result
-    record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-    if record.get("status") != "awaiting_specs":
-        raise ValueError(f"estimate {estimate_id} is {record.get('status')}; the details question is over")
-    if outcome == "details_given":
-        facts = estimate_record.owner_facts_in_words(args.answer, record.get("specification") or {})
-        if not facts:
-            raise ValueError("no details found in the answer; give the stone, its size or carat, the metal and karat, or say \"price it\"")
-        estimate_record.owner_supplies_facts(p["record_root"], estimate_id, facts)
-        try:
-            import ledger  # local import: the ledger never imports this module
-
-            ledger.add_facts(workspace_of(p["monitor_root"]) / "estimate-desk", estimate_id, [
-                {"field": k, "piece": None, "stone": ledger.stone_of(k), "value": v, "source": "owner", "gmail_message_id": message_id,
-                 "span": str(args.answer)[:200]} for k, v in facts.items()])
-        except Exception:  # noqa: BLE001 - the record carries the facts; the ledger catches up on the re-read
-            pass
-        result["facts"] = facts
-    estimate_record.mark_concierge(p["record_root"], estimate_id, details=True, details_answer=str(args.answer)[:200])
-    if question["status"] == "open":
-        owner_questions.record_decision(root, question, args.answer, outcome)
-    # The offer's claim finished long ago; it is reopened on purpose and the tick renders and prices the record.
-    inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], 1, allow_processed=True)
-    result.update(_hand_to_tick(p, message_id, "price_and_render", estimate_id))
-    return result
-
-
 def send_acknowledgement(p: dict[str, Path], record: dict[str, Any], message_id: str, body: str, runner: Any) -> dict[str, Any]:
     """Concierge mode: the one email that says the owner will work up the estimate; journaled, then the claim is complete."""
     import gateway_token  # local import; only needed when sending
@@ -1959,91 +1886,10 @@ def act_on_sheet_ready(workspace: Path, record: dict[str, Any], draft: dict[str,
             pass
     quantities = draft_quantities(draft)
     estimate_record.mark_sheet_draft_acted(p["record_root"], estimate_id, str(draft.get("hash") or ""), quantities)
-    profile = read_object(p["shop_profile"])
-    concierge = estimate_record.desk_mode(profile) == "concierge"
-    if concierge:
-        estimate_record.mark_concierge(p["record_root"], estimate_id, details=True, details_answer="from the cost sheet")
     inbox_monitor.reopen_item(p["monitor_root"], message_id, p["claim_root"], 1, allow_processed=True)
-    step = "price_and_render" if concierge else "price_from_record"
+    step = "price_from_record"
     handed = _hand_to_tick(p, message_id, step, estimate_id)
     return {"facts": facts, "quantities": quantities, "step": step, **handed}
-
-
-def ask_prior_piece(args: argparse.Namespace, record: dict[str, Any], specification: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The customer says the shop made the piece and the desk has nothing on file: the owner's books decide.
-
-    The jeweler's rule (9 September 2026): a piece on file is never asked
-    about; one the desk cannot find goes to the owner before anything is
-    sent. "Details" price the new piece from the owner's words; "not on
-    file" makes the desk ask the customer what it still needs (with or
-    without a photo); "handle myself" leaves the thread to the owner.
-    """
-    token = inbox_claim.authoritative_claim_token(args.claim_root, args.message_id)
-    who = _customer_name(args.monitor_root, args.claim_root, args.message_id)
-    spec = specification or record.get("specification") or {}
-    piece = owner_questions.summary_of_piece(spec) if spec else "a piece"
-    snippet = _reply_snippet(args)
-    text = (
-        f"{who} says you made {piece} for them before"
-        + (f' ("{snippet}")' if snippet else "")
-        + ", and the desk has nothing on file for it. Reply with the original's details (stone and origin, its shape and size or "
-        "carat, the metal and karat) and I will price the new one from them; or \"not on file\" and I will ask them what I still "
-        "need; or \"handle myself\"."
-    )
-    root = owner_questions.questions_root(args.monitor_root)
-    _created, question = owner_questions.create_decision(
-        root, "prior_piece", args.estimate_id, args.message_id, text, {"piece": piece[:160]},
-    )
-    question = _attach_answer_command(root, args.monitor_root, question)
-    if _created:
-        question = owner_questions.deliver(
-            root, question, runner=getattr(args, "runner", subprocess.run),
-            extra_args=kolo_safe.owner_channel_args(args.monitor_root),
-        )
-    inbox_monitor.park_item(args.monitor_root, args.message_id, args.claim_root, token, "prior_piece_question")
-    return question
-
-
-def _answer_prior_piece(args: argparse.Namespace, p: dict[str, Path], root: Path, question: dict[str, Any],
-                        outcome: str) -> dict[str, Any]:
-    """The owner's word on a piece the desk could not find: details, not on file, or handle myself."""
-    message_id = _question_message_id(question)
-    estimate_id = question["estimate_id"]
-    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "prior_piece", "decision": outcome}
-    if outcome == "handle_myself":
-        if _claim_parked(p, message_id):
-            _close_parked_claim(p, message_id, "owner_decided_handle_myself")
-        try:
-            estimate_record.retire(p["record_root"], estimate_id, "owner_handles_thread", "the owner handles this repeat customer's thread")
-        except ValueError:
-            pass
-        if question["status"] == "open":
-            owner_questions.record_decision(root, question, args.answer, outcome)
-        result["note"] = "the desk leaves this thread to the owner"
-        return result
-    if outcome == "details_given":
-        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-        facts = estimate_record.owner_facts_in_words(args.answer, record.get("specification") or {})
-        if not facts:
-            raise ValueError("no details found in the answer; give the stone, its size or carat, and the metal, or say \"not on file\"")
-        estimate_record.owner_supplies_facts(p["record_root"], estimate_id, facts)
-        try:
-            import ledger  # local import: the ledger never imports this module
-
-            ledger.add_facts(workspace_of(p["monitor_root"]) / "estimate-desk", estimate_id, [
-                {"field": k, "piece": None, "stone": ledger.stone_of(k), "value": v, "source": "owner", "gmail_message_id": message_id,
-                 "span": str(args.answer)[:200]} for k, v in facts.items()])
-        except Exception:  # noqa: BLE001 - the record carries the facts; the ledger catches up on the re-read
-            pass
-        estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"on_file": True, "owner": "details", "facts": sorted(facts)})
-        result["facts"] = facts
-    else:
-        estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"on_file": False, "owner": "not_on_file"})
-    if question["status"] == "open":
-        owner_questions.record_decision(root, question, args.answer, outcome)
-    _resume_parked_claim(p, message_id)
-    result.update(_hand_to_tick(p, message_id))
-    return result
 
 
 def ask_followup_stalled(args: argparse.Namespace, record: dict[str, Any], repeated: list[str]) -> dict[str, Any]:
@@ -2215,11 +2061,9 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
         )
     value = owner_questions.parse_amount(args.answer)
     question = owner_questions.record_answer(root, question, args.answer, value)
-    if re.search(r"(?i)\b(?:once|one[- ]time|just this (?:one|time|estimate|job)|this (?:estimate|job|one) only)\b", str(args.answer or "")):
-        # "use 450 once": this estimate only, the card untouched (the owner, 9 September 2026).
-        estimate_record.set_one_time_rate(p["record_root"], question["estimate_id"], question["rate"]["rate_kind"],
-                                          question["rate"]["rate_key"], value)
-    else:
+    once = re.search(r"(?i)\b(?:once|one[- ]time|just this (?:one|time|estimate|job)|this (?:estimate|job|one) only)\b", str(args.answer or ""))
+    save = re.search(r"(?i)\b(?:save|add(?: it)? to|keep|permanent|for the future|on the card|to the card)\b", str(args.answer or ""))
+    if save and not once:
         owner_questions.save_rate(
             p["shop_profile"],
             question["rate"]["rate_kind"],
@@ -2227,6 +2071,13 @@ def answer_question(args: argparse.Namespace) -> dict[str, Any]:
             value,
             owner_questions.answer_provenance(question),
         )
+    else:
+        # "use 450 once": this estimate only, the card untouched (the owner, 9 September 2026). A bare number is
+        # used the same way, and the owner is asked whether to save it; nothing waits on that answer.
+        estimate_record.set_one_time_rate(p["record_root"], question["estimate_id"], question["rate"]["rate_kind"],
+                                          question["rate"]["rate_key"], value)
+        if not once:
+            _ask_rate_save(args, p, root, question, value)
     message_id = _question_message_id(question)
     estimate_id = question["estimate_id"]
     import cron_config  # local import keeps module import order unchanged
@@ -2425,6 +2276,36 @@ def _close_parked_claim(p: dict[str, Path], message_id: str, reason: str) -> Non
     inbox_monitor.resolve_manual_review(p["monitor_root"], item["gmail_message_id_sha256"])
 
 
+def _ask_rate_save(args: argparse.Namespace, p: dict[str, Path], root: Path, question: dict[str, Any], value: float) -> dict[str, Any]:
+    """A bare number answered the missing-rate question: it priced this estimate; is it for the future too?"""
+    rate = question["rate"]
+    unit = owner_questions.RATE_KINDS[rate["rate_kind"]]
+    text = (f"Save {value:g} {unit} for {rate['description']} to your rate card for the future? Reply \"save\" or \"once\". "
+            f"(Estimate {question['estimate_id'].upper()} is priced with it either way.)")
+    created, follow = owner_questions.create_decision(
+        root, "rate_save", question["estimate_id"], f"{question['gmail_message_id']}#save:{rate['rate_key']}", text,
+        {"rate_kind": rate["rate_kind"], "rate_key": rate["rate_key"], "value": value, "description": rate["description"]},
+    )
+    follow = _attach_answer_command(root, p["monitor_root"], follow)
+    if created:
+        follow = owner_questions.deliver(root, follow, runner=getattr(args, "runner", subprocess.run),
+                                         extra_args=kolo_safe.owner_channel_args(p["monitor_root"]))
+    return follow
+
+
+def _answer_rate_save(args: argparse.Namespace, p: dict[str, Path], root: Path, question: dict[str, Any], outcome: str) -> dict[str, Any]:
+    """Save or once: the rate card gains the number, or stays as it was. Nothing else moves."""
+    context = question.get("context") or {}
+    result: dict[str, Any] = {"outcome": "answered", "question_id": question["question_id"], "kind": "rate_save", "decision": outcome}
+    if outcome == "save":
+        owner_questions.save_rate(p["shop_profile"], str(context["rate_kind"]), str(context["rate_key"]), float(context["value"]),
+                                  owner_questions.answer_provenance(question))
+        result["saved"] = {"rate_kind": context["rate_kind"], "rate_key": context["rate_key"], "value": float(context["value"])}
+    if question["status"] == "open":
+        owner_questions.record_decision(root, question, args.answer, outcome)
+    return result
+
+
 def answer_decision(
     args: argparse.Namespace, workspace: Path, p: dict[str, Path], root: Path, question: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2469,10 +2350,8 @@ def answer_decision(
         write_private(work_dir / OWNER_SAYS_ESTIMATE_FILE, {"question_id": question["question_id"], "answer": str(args.answer)[:200]})
         result.update(_hand_to_tick(p, message_id))
         return result
-    if question["kind"] == "prior_piece":
-        return _answer_prior_piece(args, p, root, question, outcome)
-    if question["kind"] == "details_needed":
-        return _answer_details_needed(args, p, root, question, outcome)
+    if question["kind"] == "rate_save":
+        return _answer_rate_save(args, p, root, question, outcome)
     if question["kind"] == "unclear_reply" and outcome in {"design_change", "second_piece"}:
         return _answer_design_change(args, workspace, p, root, question, outcome)
     if question["kind"] == "appointment_next":

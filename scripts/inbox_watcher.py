@@ -351,14 +351,6 @@ def run_inline_claim(
         elif step == "resend_followup":
             done = pipeline.resend_followup(workspace, base_dir, message_id, estimate_id, model=switch.get("model"),
                                             judge_runner=judge_runner, command_runner=runner, openclaw=openclaw)
-        elif step == "price_and_render":
-            tick_started = summary.get("tick_started")
-            deadline = (tick_started + cron_config.WATCHER_TIMEOUT_SECONDS - TICK_MARGIN_SECONDS) if tick_started else None
-            done = pipeline.price_and_render(workspace, message_id, estimate_id, model=switch.get("model"),
-                                             judge_runner=judge_runner, command_runner=runner, openclaw=openclaw, deadline=deadline)
-            if done.get("outcome") == "rendering_in_progress":
-                # The step file stays: the next tick renders the next view and then prices.
-                return _rendering_continues(p, message_id, claim_token, done, summary, started, calls_before)
         else:
             raise ValueError(f"unknown next step {step!r}")
         step_path.unlink(missing_ok=True)

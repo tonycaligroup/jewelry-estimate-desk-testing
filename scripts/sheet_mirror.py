@@ -701,6 +701,19 @@ def pull(workspace: Path, token: str | None = None, opener: Opener | None = None
             estimate_record.save_sheet_draft(root, estimate_id, draft)
             result["drafts"].append(estimate_id)
         if draft["status"] == "ready" and current.get("acted_hash") != draft["hash"]:
+            if estimate_record.desk_mode(profile) == "concierge":
+                # Concierge mode (the owner, 10 September 2026): the desk never prices; the block is the owner's
+                # workbench and stays as typed. Said once per edit.
+                if remembered.get("told") != draft["hash"]:
+                    known[estimate_id] = {**remembered, "told": draft["hash"]}
+                    try:
+                        kolo_safe.tell_owner(Path(workspace) / "estimate-desk" / "inbox-monitor",
+                                             f"The cost sheet block for {_display(str((record.get('route') or {}).get('recipient') or ''))} "
+                                             "is marked ready, and in concierge mode the desk does not price: your numbers are saved on the "
+                                             "block for your own estimate.")
+                    except Exception:  # noqa: BLE001
+                        pass
+                continue
             import workflow_safe  # local import: workflow_safe imports this module
 
             try:

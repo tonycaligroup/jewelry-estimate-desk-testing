@@ -22,8 +22,8 @@ Writer names are the `estimate_record` function, with the command that calls it:
 | `spec_gate_reply` | `{status: "sent", provider_message_id, thread_id, awaiting_specs}` | `record_spec_gate_sent` (execute) | the first questions email went out |
 | `followup_replies` | append-only `{status, provider_message_id, thread_id, awaiting_specs}` | `record_followup_sent` (execute) | each later questions email |
 | `inventory_inquiry` | `{since_gmail_message_id, note, marked_at}` | `mark_inventory_inquiry` (tick) | the customer asked for a ready-made piece; the desk offers a visit instead of pricing |
-| `prior_piece` | `{on_file, estimate_id?, facts?, owner?, ...}` | `mark_prior_piece` (tick; execute on the owner's details answer) | "you made this for me": the piece on file, or the owner's answer, is the base |
-| `concierge` | `{mode, asked, offered, details, renderings, ...}` | `mark_concierge` (tick, execute) | concierge mode: what was asked, the owner's details, the renderings attached |
+| `prior_piece` | `{on_file, estimate_id?, carried?, basis: made\|estimate, confirm: asked\|not_needed\|<message id>, welcome_back?}` | `mark_prior_piece` (tick) | "you made this for me": the piece on file is described back and confirmed by the customer; nothing on file gets a welcome back and a request for a reminder or photo |
+| `concierge` | `{offered, acknowledged?, acknowledged_provider_message_id?}` | `mark_concierge` (tick, execute) | concierge mode: the offer went out, the one acknowledgement was sent; the desk prices nothing in this mode |
 | `meeting` | `{kind: "visit"\|"call", phone?, at}` | `note_meeting` (execute) | a booking with a phone call, and the number the customer gave |
 | `customer_overrides` | `{name?, phone?, notes?, ..., at}` | `save_customer_overrides` (sheet); `note_meeting` for the phone | the owner edited the Customers tab; a customer wrote their number |
 | `times_offered` | append-only `{provider_message_id, options: [{start, end, label}], ...}` | `record_times_offered` (execute) | an offer-times brief went out |

@@ -110,22 +110,22 @@ halts all outbound work immediately until that owner says to resume.
 ## 6. The lifecycle, message by message
 
 The desk works in one of two modes, chosen at setup (`desk.mode`), concierge
-by default. In **concierge** mode the desk gets the conversation to a call
-or a visit and the owner gathers the specification: the first email
-acknowledges, confirms the vision from a photo when there is one, asks only
-budget and timeframe, and offers times (one card); a reply that picks a time
-gets the booking card; a reply that pushes for a number gets one
+by default. **Concierge** is for a shop not ready to let the desk price: the
+desk gets the conversation to a call or a visit and then stops. The first
+email acknowledges, confirms the vision from a photo when there is one, asks
+only budget and timeframe, and offers times (one card); a reply that picks a
+time gets the booking card; a reply that pushes for a number gets one
 acknowledgement ("I will work up the estimate and get back to you") and the
-owner a nudge; every other reply is read for facts and left alone. After the
-visit the owner types the details in chat in reply to the desk's standing
-question; the desk renders the design, shows the views, and files one price
-card naming them; approving it sends the estimate with the renderings
-attached, for guidance only. No specification question ever reaches the
-customer in concierge mode, and nothing is priced until the owner says so
-("price it" uses what the desk has). In **auto** mode the desk asks the
-details by email and prices from the replies, as 6.2 to 6.5 describe.
-Everything else (cards, the ledger, the sheet, bookings, renderings on
-request, repeat pieces, "I don't know") is the same in both.
+owner a nudge; every other reply is read for facts and left alone. What the
+customer said reaches the Customers and Cost sheet tabs as pending, for the
+owner's reference. The desk files no price card, sends no estimate and no
+renderings, and asks the owner for no details in this mode; the owner writes
+and sends the estimate from their own mailbox. A Cost sheet block marked
+ready in concierge mode is kept as typed and the owner is told once that the
+desk does not price (a future release may). In **auto** mode the desk asks
+the details by email and prices from the replies, as 6.2 to 6.5 describe.
+Everything else (cards, the ledger, the sheet, bookings, repeat pieces, "I
+don't know") is the same in both.
 
 ### 6.1 A new inquiry arrives
 
@@ -834,3 +834,5 @@ closed by follow-up changes:
   to this document.
 - The rules that read a customer's own words (meeting sentences, 'I don't know', a piece the shop made, an earlier conversation, pair carats, millimetre sizes, phone numbers, call or visit, periods of days, technical questions, greeting the right person) are listed in one table, `scripts/words.py`, each with the live phrases from tester threads it must keep reading right; `tests/test_words.py` runs every phrase. A tester's new phrasing becomes a row there before a rule changes (10 September 2026). The estimate record itself is described key by key in `RECORD-SCHEMA.md`, checked against the code by `tests/test_record_schema.py`.
 - A meeting is a visit unless the customer asks for a call in words (phone, call, zoom, video); a phone number in a signature is kept for the Customers tab and the invitation but never turns a visit into a call, and a visit's confirmation may never say the shop will call them (the guard rejects the draft). 'Bring them in' and 'show you' are visit words. After a meeting is booked, a courtesy note ('See you tomorrow!', 'Thanks, looking forward to it', with or without a signature) sends nothing: the claim is done, the facts stay on the record, the rest is settled at the meeting. When a later message does need questions, the questions email says the rest can be settled when you meet and does not invite them to come by. Live, 9 September 2026 (David): a visit was confirmed as 'I'll call you at (310) 810-3004', then 'See you tomorrow!' got a questionnaire that invited him to come by.
+
+- Pared back, 10 September 2026 (the owner): concierge mode books the call or visit and stops; the standing details question, the chat details path ("desk-answer"), the render-and-price step and the estimate send are gone from concierge (auto mode is unchanged). A repeat customer whose piece is on file ("the pendant you made for me") is told the piece back in words, never its cost ("after the piece we made for you"), and asked "is that the piece you have in mind?" before anything is priced, with whatever else is still needed in the same email; their reply stands, a correction or a photo wins. A piece the desk cannot find gets a warm welcome back and the first question asks them to remind us a little about it, or send a photo; the owner is never asked. "The earrings we talked about earlier" still carries the earlier estimate silently. A missing rate is answered "save 450" (to the rate card), "use 450 once" (this estimate only), or a bare number: the bare number prices this estimate and the desk asks once, "save" or "once", holding nothing up.

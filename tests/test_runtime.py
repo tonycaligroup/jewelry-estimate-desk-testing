@@ -9260,8 +9260,9 @@ class OwnerQuestionTests(unittest.TestCase):
                 q["text"],
                 "Tony Lomelino asked for a quote on a pendant in 14K white gold with a "
                 "lab-grown sapphire 0.75 ct. I do not have a per carat price for lab-grown "
-                "sapphire on your rate card. What price per carat should I use? Reply with "
-                'just the number, for example "use 450", to add it to your rate card, or "use 450 once" for this estimate only. '
+                "sapphire on your rate card. What price per carat should I use? Reply "
+                '"save 450" to add it to your rate card, or "use 450 once" for this estimate only. A bare number prices this '
+                'estimate and I will ask whether to save it. '
                 f"(Question {owner_questions.reference(q['question_id'])}, estimate JED-0123456789ABCDEF)",
             )
             again, same = owner_questions.create_missing_rate(
