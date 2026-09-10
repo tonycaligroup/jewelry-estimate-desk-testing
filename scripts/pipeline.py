@@ -298,11 +298,12 @@ def _send_followup(
     body_path.parent.mkdir(parents=True, exist_ok=True)
     body_path.write_text(drafted["body"] + "\n", encoding="utf-8")
     if draft_source != "fallback":
+        evidence_target = workflow_safe.estimate_work_dir(p["monitor_root"], estimate_id, message_id) / "customer-reply.txt"
         workflow_safe._check_customer_draft(
             p, record_now, message_id, "questions",
             {"missing_required_fields": missing, "questions": questions, "understanding": understanding,
              "meeting_booked": bool(record_now.get("appointment_booked"))},
-            digest, drafted["body"], draft_source, body_path, model, judge_runner, openclaw, "chat", command_runner,
+            digest, drafted["body"], draft_source, evidence_target, model, judge_runner, openclaw, "chat", command_runner,
         )
     workflow_safe.send_spec_followup(_namespace(
         p, message_id, estimate_id,

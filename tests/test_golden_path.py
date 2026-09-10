@@ -692,8 +692,8 @@ class GoldenPathTests(unittest.TestCase):
         ))
         summary = self.tick(ws, world)
         self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
-        self.assertEqual(len(world.prompts), 2, "a new inquiry costs two model calls: one to read it, one to write back")
-        self.assertEqual(summary["inline"][0]["model_calls"], 2, summary)
+        self.assertEqual(len(world.prompts), 3, "a new inquiry costs three model calls: read, write, then behavior check")
+        self.assertEqual(summary["inline"][0]["model_calls"], 3, summary)
         self.assertIn("tick_seconds", summary["timing"])
         self.assertEqual(len(world.sent), 1)
         self.assertIn("?", world.sent[0]["body"])
@@ -2314,9 +2314,12 @@ class BehaviorCheckerGoldenTests(GoldenPathTests):
             world.customer_message("bc-q1", "thread-behavior-questions", "Could you quote a 14k yellow gold signet ring?\n\nPat")
             summary = self.tick(ws, world)
             self.assertEqual([item["outcome"] for item in summary["inline"]], ["followup_sent"], summary)
-            artifacts = list((ws / "estimate-desk").glob("**/customer-reply-behavior-check-questions.json"))
-            self.assertEqual(len(artifacts), 1, artifacts)
-            self.assertEqual(json.loads(artifacts[0].read_text(encoding="utf-8"))["status"], "checked")
+            estimate_id = self.only_estimate(ws)
+            artifact = workflow_safe.estimate_work_dir(
+                ws / "estimate-desk" / "inbox-monitor", estimate_id, "bc-q1"
+            ) / "customer-reply-behavior-check-questions.json"
+            self.assertTrue(artifact.is_file(), artifact)
+            self.assertEqual(json.loads(artifact.read_text(encoding="utf-8"))["status"], "checked")
         self.run_case(case)
 
     def test_flag_reaches_price_chat_and_appointment_card(self) -> None:
@@ -2338,7 +2341,7 @@ class BehaviorCheckerGoldenTests(GoldenPathTests):
             self.assertEqual([item["outcome"] for item in summary["inline"]], ["approval_requested"], summary)
             estimate_id = self.only_estimate(ws)
             chat = [notice["text"] for notice in world.notices if not notice["file"]]
-            self.assertTrue(any(estimate_id in text and "wrong_meeting_type" in text for text in chat), chat)
+            self.assertTrue(any(f"Estimate ID {estimate_id}" in text and "wrong_meeting_type" in text for text in chat), chat)
             price_artifacts = list((ws / "estimate-desk").glob("**/customer-reply-behavior-check-estimate.json"))
             self.assertEqual(len(price_artifacts), 1, price_artifacts)
             self.assertEqual(json.loads(price_artifacts[0].read_text(encoding="utf-8"))["status"], "checked")
