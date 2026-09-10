@@ -1827,7 +1827,7 @@ NOT_A_VISIT_RE = re.compile(
 )
 RESCHEDULE_RE = re.compile(
     r"(?i)\b(?:reschedul\w*|something came up|can(?:no|')t make|(?:move|push|change) (?:it|our|the|my|that)\b|"
-    r"(?:a )?different (?:day|time)|another (?:day|time)|instead)\b"
+    r"(?:a )?different (?:day|time)|another (?:day|time)|instead|my mistake|wrong (?:day|time|date)|meant to say|mixed (?:up|that up))\b"
 )
 # Picking or accepting a time the shop offered: "the second one works", "Wednesday is fine", "2pm works".
 ACCEPTS_TIME_RE = re.compile(
@@ -2664,10 +2664,25 @@ def scheduling_sentences(own_words: str) -> list[str]:
     return found
 
 
-def asks_to_reschedule(own_words: str) -> bool:
-    """The customer is moving a meeting they already have ("something came up... can we do Friday at 4pm?")."""
+_ASKS_FOR_TIME_RE = re.compile(r"(?i)^\W*(?:can|could|would|will|is it possible|any chance|how about|what about|are you (?:free|available|open))\b")
+
+
+def asks_to_reschedule(own_words: str, booked: bool = False) -> bool:
+    """The customer is moving a meeting they already have ("something came up... can we do Friday at 4pm?").
+
+    With a meeting booked, a question that names a time is the meeting
+    moving, whatever the words around it (live, 9 September 2026: "My
+    mistake, I have the wrong day. Can we do Monday at 3pm?" got the
+    questionnaire). A statement of the booked time ("See you Friday at 3pm")
+    is not.
+    """
     text = str(own_words or "")
-    return bool(RESCHEDULE_RE.search(text)) and bool(scheduling_sentences(text))
+    sentences = scheduling_sentences(text)
+    if not sentences:
+        return False
+    if RESCHEDULE_RE.search(text):
+        return True
+    return booked and any(s.rstrip().endswith("?") or _ASKS_FOR_TIME_RE.match(s) for s in sentences)
 
 
 # A day named without a clock time: "Monday", "next Tuesday", "the 14th", "next week", "tomorrow morning".

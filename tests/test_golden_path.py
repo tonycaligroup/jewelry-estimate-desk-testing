@@ -2682,6 +2682,45 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.assertNotIn("inviting them to come by the shop", prompt)
         self.run_branch(branch)
 
+    def test_the_wrong_day_after_a_booking_is_a_reschedule_not_a_questionnaire(self) -> None:
+        """Live 9 Sep: 'My mistake, I have the wrong day. Can we do Monday at 3pm?' after a booking got seven questions."""
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-wrong-day"
+            friday = next_weekday(1, 15, 0)
+            while friday.weekday() != 4:
+                friday += timedelta(days=1)
+            monday = friday + timedelta(days=3)
+            world.spec = {"piece_type": "engagement ring", "event_date": "in the next couple of months",
+                          "scheduling_intent": "Can I make an appointment to come in on Friday at 3pm?"}
+            world.intents = ["appointment_request"]
+            world.requested = (["Friday at 3pm"], [local_key(friday)])
+            world.customer_message("wd1", thread, "Hi,\nI need to get an engagement ring in the next couple months. Can I make an appointment "
+                                   "to come in on Friday at 3pm?\nBest,\nTony\n626-236-0266", subject="Engagement ring")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking", book)
+            self.execute(ws, world, book["payload"]["execute"], book)
+            self.assertEqual(len(world.calendar_events), 1)
+            self.assertEqual(len(world.sent), 1)
+            # The reading misses the meeting; the words are a question naming a time, with a booking on the record.
+            world.spec = {"piece_type": "engagement ring"}
+            world.intents = []
+            world.requested = (["Monday at 3pm"], [local_key(monday)])
+            world.customer_message("wd2", thread, "My mistake,\nI have the wrong day. Can we do Monday at 3pm?", subject="Re: Engagement ring")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertEqual(len(world.sent), 1, "no questionnaire for a reschedule")
+            move = world.cards[-1]
+            self.assertIn(move["kind"], ("appointment_offer", "appointment_booking"), move["payload"])
+            self.assertTrue(all(o["start"][:10] == monday.date().isoformat() for o in move["payload"]["calendar_availability"]),
+                            move["payload"]["calendar_availability"])
+            self.execute(ws, world, move["payload"]["execute"], move)
+            self.assertEqual(len(world.calendar_events), 1, "the old event is gone, the new one is in")
+            self.assertIn(monday.date().isoformat(), json.dumps(next(iter(world.calendar_events.values()))["start"]))
+            self.assertEqual(len(world.sent), 2)
+        self.run_branch(branch)
+
     def test_bare_earrings_without_a_photo_are_asked_studs_hoops_or_drops(self) -> None:
         """The owner, 9 Sep: 'a pair of earrings' with no photo rendered as drops for a customer who meant studs."""
         def branch(ws: Path, world: World) -> None:

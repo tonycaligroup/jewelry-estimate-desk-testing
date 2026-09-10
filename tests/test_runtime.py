@@ -7164,6 +7164,16 @@ class NoInventedMeetingTests(unittest.TestCase):
         visit_body = body.replace("I'll call you at (310) 810-3004, and a", "A")
         self.assertIn("bringing them in", customer_mail._check("confirmation", facts, "")({"body": visit_body})["body"])
 
+    def test_a_question_naming_a_time_after_a_booking_is_a_reschedule(self) -> None:
+        import estimate_record
+        self.assertTrue(estimate_record.asks_to_reschedule("My mistake,\nI have the wrong day. Can we do Monday at 3pm?", booked=True))
+        self.assertTrue(estimate_record.asks_to_reschedule("My mistake, I have the wrong day. Can we do Monday at 3pm?"))
+        self.assertTrue(estimate_record.asks_to_reschedule("Could we do Monday at 11 instead?"))
+        self.assertTrue(estimate_record.asks_to_reschedule("Any chance Friday at 4 works?", booked=True))
+        self.assertFalse(estimate_record.asks_to_reschedule("Can we do Monday at 3pm?"), "no booking: a request, not a move")
+        self.assertFalse(estimate_record.asks_to_reschedule("See you Friday at 3pm!", booked=True))
+        self.assertFalse(estimate_record.asks_to_reschedule("I can pick it up Friday at 4pm.", booked=True))
+
     def test_a_courtesy_note_is_only_courtesy(self) -> None:
         import estimate_record
         signature = "\n\nThank you,\nDavid Trujillo\nAtelier by Edward Avedis\n101 Wilshire Blvd.\nSanta Monica 90401\n(310) 810-3004"

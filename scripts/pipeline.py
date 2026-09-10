@@ -950,7 +950,7 @@ def process_claim(
     meeting_card = False
     if not missing and specification.get("scheduling_intent"):
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-        if not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words):
+        if not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words, booked=True):
             # The reply gave the last details and picked a time in one breath (live, 9 September 2026: the desk
             # priced and the estimate email claimed a meeting it never booked; then, with a rate missing, the
             # owner's question went out and no meeting card ever did). The meeting card is filed before the
@@ -980,7 +980,7 @@ def process_claim(
             kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
             return {"outcome": "noted", "next": "done"}
         if specification.get("scheduling_intent") and (
-            not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words)
+            not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words, booked=True)
         ):
             # Meeting first: a customer who asks to come in gets the meeting,
             # not a questionnaire. The details are settled at the meeting or
@@ -1062,7 +1062,7 @@ def _concierge_reply(
     workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner, quiet=True))
     record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
     wants_meeting = bool(specification.get("scheduling_intent")) and (
-        not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words))
+        not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words, booked=True))
     if initiating or wants_meeting:
         intent = appointment_intent(p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id)
         if initiating:
