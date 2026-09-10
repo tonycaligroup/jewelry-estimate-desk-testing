@@ -6520,6 +6520,11 @@ class WatcherBindingTests(unittest.TestCase):
         }
 
     def test_command_binding_round_trips_and_rejects_drift(self) -> None:
+        self.assertTrue(
+            cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner").startswith(
+                ". ~/.koloclaw-env 2>/dev/null; python3 "
+            )
+        )
         binding = cron_config.build_binding(self.live_command_job(), Path("/workspace"), ROOT)
         self.assertEqual(binding["payload"]["kind"], "command")
         self.assertNotIn("outputMaxBytes", binding["payload"])
