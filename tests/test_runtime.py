@@ -10574,6 +10574,27 @@ class EarlierConversationTests(unittest.TestCase):
             with self.subTest(words=words):
                 self.assertFalse(estimate_record.refers_to_an_earlier_conversation(words), words)
 
+    def test_prior_piece_words_normalize_only_known_jewelry_singulars_and_plurals(self) -> None:
+        for singular, plural in (("earring", "earrings"), ("stud", "studs"), ("hoop", "hoops"),
+                                 ("ring", "rings"), ("band", "bands")):
+            with self.subTest(singular=singular):
+                self.assertEqual(estimate_record._prior_piece_words(singular), estimate_record._prior_piece_words(plural))
+        self.assertTrue(estimate_record._prior_piece_words("earring").isdisjoint(estimate_record._prior_piece_words("ring")))
+
+    def test_an_attachment_settles_only_visual_questions_when_vision_fails(self) -> None:
+        missing = ["earring_style", "stone_shape", "stone_cut", "setting_style", "stone_origin", "stone_carat", "metal"]
+        settled = estimate_record.settle_attachment_visuals({"piece_type": "earrings"}, missing, image_attached=True)
+        self.assertEqual(
+            {field: settled[field] for field in ("earring_style", "stone_shape", "stone_cut", "setting_style")},
+            {field: "jeweler's choice" for field in ("earring_style", "stone_shape", "stone_cut", "setting_style")},
+        )
+        self.assertEqual(settled["reference_images"], estimate_record.ATTACHMENT_REFERENCE)
+        self.assertTrue(all(field not in settled for field in ("stone_origin", "stone_carat", "metal")))
+        still_missing = spec_gate.missing_required_fields(settled, {"defaults": {}})
+        self.assertTrue(all(field not in still_missing for field in ("earring_style", "stone_shape", "stone_cut", "setting_style")))
+        untouched = {"piece_type": "earrings"}
+        self.assertIs(estimate_record.settle_attachment_visuals(untouched, missing, image_attached=False), untouched)
+
 
 class CostSheetDraftTests(unittest.TestCase):
     """The owner, 9 Sep: the cost sheet is where the details go; the desk reads it back."""

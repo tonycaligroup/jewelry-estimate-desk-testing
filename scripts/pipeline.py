@@ -187,6 +187,13 @@ UNDERSTANDING_LINE = "Just so I have your vision right: you are after {vision}. 
 REMIND_QUESTION = "could you remind me a little about the piece, or send a photo if you have one handy?"
 
 
+def customer_image_attached(thread: dict[str, Any], mailbox: str | None) -> bool:
+    """The durable fact that the customer supplied an image, independent of its vision reading."""
+    import artwork  # local import: attachment retrieval is optional
+
+    return bool(artwork.image_parts(thread, mailbox))
+
+
 def plain_followup(missing: list[str], shop_name: str, specification: dict[str, Any] | None = None,
                    understanding: str | None = None, lead_questions: list[str] | None = None) -> str:
     asks = list(lead_questions or [])
@@ -265,7 +272,7 @@ def _send_followup(
     p: dict[str, Path], base_dir: Path, message_id: str, estimate_id: str,
     digest: dict[str, Any], missing: list[str], initiating: bool, paths: dict[str, str],
     profile: dict[str, Any], model: str | None, judge_runner: Runner, openclaw: str | None,
-    command_runner: Runner = subprocess.run, photos: list[str] | None = None,
+    command_runner: Runner = subprocess.run, photos: list[str] | None = None, image_attached: bool = False,
 ) -> dict[str, Any]:
     shop_name = (profile.get("shop") or {}).get("name") or "the shop"
     missing = prioritized(missing)
@@ -276,7 +283,7 @@ def _send_followup(
         record_now, specification = {}, {}
     understanding = estimate_record.vision_in_words(specification, on_file=estimate_record.prior_basis(record_now))
     prior_info = record_now.get("prior_piece") if isinstance(record_now.get("prior_piece"), dict) else {}
-    welcome_back = bool(prior_info.get("welcome_back")) and not prior_info.get("on_file") and initiating
+    welcome_back = bool(prior_info.get("welcome_back")) and not prior_info.get("on_file") and initiating and not image_attached
     questions = question_lines(missing, specification)
     if welcome_back:
         questions = [REMIND_QUESTION] + questions
@@ -818,6 +825,7 @@ def process_claim(
     thread = workflow_safe.read_object(Path(paths["gmail_thread"]))
     digest = gmail_text.thread_digest(thread, message_id, mailbox)
     record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+    image_attached = customer_image_attached(thread, mailbox)
 
     # Dead-spot guard: a review already said "ask", nothing was sent yet.
     pending = estimate_record.pending_followup(record, message_id)
@@ -833,6 +841,7 @@ def process_claim(
         return _send_followup(
             p, base_dir, message_id, estimate_id, digest, pending["missing_required_fields"],
             pending["initiating"], paths, profile, model, judge_runner, openclaw, command_runner,
+            image_attached=image_attached,
         )
 
     review_path = Path(paths["work_dir"]) / "review.json"
@@ -945,8 +954,12 @@ def process_claim(
     specification = estimate_record.settle_carat_basis(
         specification, " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
                                 if m.get("sent_by") == "customer"))
+    specification = estimate_record.settle_attachment_visuals(
+        specification, spec_gate.missing_required_fields(specification, profile), image_attached
+    )
     ledger.migrate(desk, record)
-    ledger.absorb(desk, estimate_id, specification, message_id, handled_words, " ".join(photos),
+    photo_evidence = " ".join(photos) or (estimate_record.ATTACHMENT_REFERENCE if image_attached else "")
+    ledger.absorb(desk, estimate_id, specification, message_id, handled_words, photo_evidence,
                   changeable=ledger.changeable_fields(record))
     specification = ledger.specification(desk, estimate_id, specification) or specification
     missing = spec_gate.missing_required_fields(specification, profile)
@@ -1052,6 +1065,7 @@ def process_claim(
         return _send_followup(
             p, base_dir, message_id, estimate_id, digest, reviewed["missing_required_fields"],
             reviewed["initiating"], paths, profile, model, judge_runner, openclaw, command_runner, photos=photos,
+            image_attached=image_attached,
         )
     if nxt == "price":
         # The meeting card, when the reply also picked a time, is already filed above; the price card follows
