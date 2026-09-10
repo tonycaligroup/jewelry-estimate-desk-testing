@@ -6520,6 +6520,11 @@ class WatcherBindingTests(unittest.TestCase):
         }
 
     def test_command_binding_round_trips_and_rejects_drift(self) -> None:
+        self.assertTrue(
+            cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner").startswith(
+                ". ~/.koloclaw-env 2>/dev/null; python3 "
+            )
+        )
         binding = cron_config.build_binding(self.live_command_job(), Path("/workspace"), ROOT)
         self.assertEqual(binding["payload"]["kind"], "command")
         self.assertNotIn("outputMaxBytes", binding["payload"])
@@ -10573,6 +10578,35 @@ class EarlierConversationTests(unittest.TestCase):
         for words in ("Can you make me earrings?", "I'd like something like the pendant on your site", "we talked about a budget of 5000 with my wife"):
             with self.subTest(words=words):
                 self.assertFalse(estimate_record.refers_to_an_earlier_conversation(words), words)
+
+    def test_prior_piece_words_normalize_only_known_jewelry_singulars_and_plurals(self) -> None:
+        for singular, plural in (("earring", "earrings"), ("stud", "studs"), ("hoop", "hoops"),
+                                 ("ring", "rings"), ("band", "bands")):
+            with self.subTest(singular=singular):
+                self.assertEqual(estimate_record._prior_piece_words(singular), estimate_record._prior_piece_words(plural))
+        self.assertTrue(estimate_record._prior_piece_words("earring").isdisjoint(estimate_record._prior_piece_words("ring")))
+
+    def test_an_attachment_settles_only_visual_questions_when_vision_fails(self) -> None:
+        missing = ["earring_style", "stone_shape", "stone_cut", "setting_style", "stone_origin", "stone_carat", "metal"]
+        settled = estimate_record.settle_attachment_visuals({"piece_type": "earrings"}, missing, image_attached=True)
+        self.assertEqual(
+            {field: settled[field] for field in ("earring_style", "stone_shape", "stone_cut", "setting_style")},
+            {field: "jeweler's choice" for field in ("earring_style", "stone_shape", "stone_cut", "setting_style")},
+        )
+        self.assertEqual(settled["reference_images"], estimate_record.ATTACHMENT_REFERENCE)
+        self.assertTrue(all(field not in settled for field in ("stone_origin", "stone_carat", "metal")))
+        still_missing = spec_gate.missing_required_fields(settled, {"defaults": {}})
+        self.assertTrue(all(field not in still_missing for field in ("earring_style", "stone_shape", "stone_cut", "setting_style")))
+        untouched = {"piece_type": "earrings"}
+        self.assertIs(estimate_record.settle_attachment_visuals(untouched, missing, image_attached=False), untouched)
+
+    def test_a_prior_piece_confirmation_never_requests_an_image_already_attached(self) -> None:
+        missing = [reading_check.PREFIX + "prior_piece"]
+        self.assertEqual(
+            pipeline.question_lines(missing, image_attached=True),
+            [reading_check.PRIOR_PIECE_WITH_IMAGE_QUESTION],
+        )
+        self.assertIn("send a photo", pipeline.question_lines(missing, image_attached=False)[0])
 
 
 class CostSheetDraftTests(unittest.TestCase):

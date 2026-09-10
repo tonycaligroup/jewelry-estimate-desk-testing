@@ -1960,6 +1960,25 @@ def refers_to_a_prior_piece(own_words: str) -> bool:
     return bool(PRIOR_PIECE_RE.search(str(own_words or "")))
 
 
+_PRIOR_PIECE_WORDS = {
+    "earring": "earring", "earrings": "earring",
+    "stud": "stud", "studs": "stud",
+    "hoop": "hoop", "hoops": "hoop",
+    "ring": "ring", "rings": "ring",
+    "band": "band", "bands": "band",
+}
+_PRIOR_PIECE_STOP_WORDS = {"a", "an", "the", "of", "pair", "custom", "piece"}
+
+
+def _prior_piece_words(value: str | None) -> set[str]:
+    """Comparable jewelry words; explicit forms avoid unsafe generic stemming."""
+    return {
+        _PRIOR_PIECE_WORDS.get(word, word)
+        for word in re.findall(r"[a-z]+", str(value or "").lower())
+        if word not in _PRIOR_PIECE_STOP_WORDS
+    }
+
+
 def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude: str | None = None) -> dict[str, Any] | None:
     """The desk's most recent quoted estimate for this customer that names the same kind of piece, else None.
 
@@ -1971,7 +1990,7 @@ def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude
     email = str(recipient or "").strip().lower()
     if not email or not root.exists():
         return None
-    wanted = {w for w in re.findall(r"[a-z]+", str(piece_type or "").lower()) if w not in ("a", "an", "the", "of", "pair", "custom", "piece")}
+    wanted = _prior_piece_words(piece_type)
     found: list[tuple[int, str, dict[str, Any]]] = []
     for path in sorted(root.glob("jed-*.json")):
         try:
@@ -1997,7 +2016,7 @@ def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude
                 continue
         if not isinstance(quoted, dict) or not quoted or not _present(quoted.get("piece_type")):
             continue
-        had = set(re.findall(r"[a-z]+", str(quoted.get("piece_type") or "").lower()))
+        had = _prior_piece_words(quoted.get("piece_type"))
         if wanted and not (wanted & had):
             continue
         found.append((rank, str(record.get("created_at") or record.get("estimate_id") or ""),
@@ -2400,6 +2419,42 @@ def settle_stone_dimensions(specification: dict[str, Any], own_words: str) -> di
         return specification
     size = stone_size_in_words(own_words)
     return {**specification, "stone_dimensions": size} if size else specification
+
+
+ATTACHMENT_VISUAL_FIELDS = {"earring_style", "stone_shape", "stone_cut", "setting_style"}
+ATTACHMENT_REFERENCE = "customer attached image; match its visual design"
+
+
+def settle_attachment_visuals(
+    specification: dict[str, Any], missing: list[str], image_attached: bool
+) -> dict[str, Any]:
+    """An attached image settles visual choices even when its machine reading fails.
+
+    The machine does not invent what it could not see. The bench follows the
+    customer's image, while origin, carat, metal, and every nonvisual fact
+    remain questions unless the words or file answer them.
+    """
+    if not isinstance(specification, dict) or not image_attached:
+        return specification
+    result = dict(specification)
+    pieces = [dict(piece) if isinstance(piece, dict) else {} for piece in result.get("pieces") or []]
+    settled = False
+    for name in missing:
+        index, field = split_field_name(name)
+        if field not in ATTACHMENT_VISUAL_FIELDS:
+            continue
+        if index is None:
+            if not _present(result.get(field)):
+                result[field] = "jeweler's choice"
+                settled = True
+        elif 0 <= index < len(pieces) and not _present(pieces[index].get(field)):
+            pieces[index][field] = "jeweler's choice"
+            settled = True
+    if pieces:
+        result["pieces"] = pieces
+    if settled and not _present(result.get("reference_images")):
+        result["reference_images"] = ATTACHMENT_REFERENCE
+    return result
 
 
 def settle_earring_style(specification: dict[str, Any], own_words: str) -> dict[str, Any]:

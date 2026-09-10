@@ -28,11 +28,11 @@ WATCHER_TIMEOUT_SECONDS = 300
 WORKER_LEASE_SECONDS = 1020
 WORKER_NAME_PREFIX = "jed-worker-"
 WATCHER_COMMAND_TEMPLATE = (
-    "python3 <BASE_DIR>/scripts/inbox_watcher.py "
+    ". ~/.koloclaw-env 2>/dev/null; python3 <BASE_DIR>/scripts/inbox_watcher.py "
     "--workspace <WORKSPACE> --base-dir <BASE_DIR> --owner-target <OWNER_TARGET>"
 )
 WATCHER_COMMAND_RE = re.compile(
-    r"^python3 (/\S+)/scripts/inbox_watcher\.py "
+    r"^\. ~/\.koloclaw-env 2>/dev/null; python3 (/\S+)/scripts/inbox_watcher\.py "
     r"--workspace (/\S+) --base-dir (/\S+) --owner-target (\S+)$"
 )
 

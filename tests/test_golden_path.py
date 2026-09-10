@@ -3273,6 +3273,47 @@ class PriorPieceTests(SideBranchTests):
             self.assertIn("on file: this follows the piece the shop made for them before", estimate_prompt)
         self.run_branch(branch)
 
+    def test_live_emerald_earring_finds_the_pair_on_file_and_asks_no_visual_questions(self) -> None:
+        """Live 10 Sep: singular 'earring' missed 'earrings' on file, then the desk questioned the attached photo twice."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_emerald"] = 400.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            earlier = {"piece_type": "pair of earrings", "earring_style": "stud", "metal": "white gold", "metal_karat": "18k",
+                       "metal_color": "white", "stone_type": "emerald", "stone_origin": "lab-grown", "stone_carat": 2.5,
+                       "stone_carat_basis": "each", "stone_shape": "round", "setting_style": "halo",
+                       "accent_stones": "lab-grown diamond halo", "center_stone": "yes"}
+            _thread, first_id = self._estimate_sent(
+                ws, world, spec=earlier,
+                text="A pair of round emerald halo stud earrings, 2.5 ct each, in 18k white gold.\n\nAnthony",
+            )
+            world.spec = {"piece_type": "earring", "metal": "rose gold", "metal_karat": "18k", "metal_color": "rose",
+                          "reference_images": "from the photo: round emerald halo studs"}
+            world.customer_message(
+                "ee1", "thread-emerald-return",
+                "Do you remember the emerald earring we worked on recently? Can I get a quote for the exact same thing but with 18k rose gold?",
+                subject="Emerald earring", attachments=("emerald-earring.jpg",),
+            )
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            self.assertEqual([n for n in world.notices if not n["file"]], [], "the owner is not asked")
+            confirm = world.sent[-1]["body"]
+            self.assertRegex(confirm, r"(?i)the piece you have in mind")
+            self.assertNotRegex(confirm, r"(?i)send a photo|studs, hoops|which cut|which shape|what look.*setting", confirm)
+            world.customer_message("ee2", "thread-emerald-return", "Yes, exactly those.\n\nAnthony", subject="Re: Emerald earring")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["approval_requested"], summary)
+            new_id = next(path.stem for path in (ws / "estimate-desk" / "records").glob("jed-*.json") if path.stem != first_id)
+            spec = self.record(ws, new_id)["specification"]
+            self.assertEqual((spec["piece_type"], spec["earring_style"], spec["stone_shape"], spec["setting_style"]),
+                             ("earring", "stud", "round", "halo"))
+            self.assertEqual((spec["stone_type"], spec["stone_origin"], spec["stone_carat"]), ("emerald", "lab-grown", 2.5))
+            self.assertEqual((spec["metal"], spec["metal_karat"], spec["metal_color"]), ("rose gold", "18k", "rose"))
+            self.assertEqual(spec["accent_stones"], "lab-grown diamond halo")
+        self.run_branch(branch)
+
     def test_the_earrings_we_talked_about_earlier_are_carried_from_the_earlier_estimate(self) -> None:
         """Live 9 Sep: 'the emerald earrings we talked about earlier, the same but with lab grown sapphires' was asked every question again."""
         def branch(ws: Path, world: World) -> None:
