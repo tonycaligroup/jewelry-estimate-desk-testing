@@ -1972,17 +1972,30 @@ def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude
 PRIOR_LOOSE_KEYS = ("notes", "reference_images", "scheduling_intent", "pieces", "quantity", "event_date", "budget", "engraving")
 
 
-def prior_piece_facts(prior_spec: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
-    """The facts of the piece on file the new words do not replace (a smaller stone replaces the carat and the size)."""
+def prior_piece_facts(prior_spec: dict[str, Any], current: dict[str, Any], own_words: str = "") -> dict[str, Any]:
+    """The facts of the piece on file the new words do not replace (a smaller stone replaces the carat and the size).
+
+    A value the new reading holds stands only when the customer's new words
+    say it; a guess of the reading ("prong" for studs) gives way to the
+    piece on file (live, 9 September 2026: "the exact same thing" lost its
+    diamond halo in the rendering).
+    """
     if not isinstance(prior_spec, dict):
         return {}
+    import ledger  # local import: the ledger imports this module
+
     carried: dict[str, Any] = {}
     for key, value in prior_spec.items():
-        if key in PRIOR_LOOSE_KEYS or not _present(value) or _present((current or {}).get(key)):
+        if key in PRIOR_LOOSE_KEYS or not _present(value):
             continue
+        held = (current or {}).get(key)
+        if _present(held) and (not own_words or ledger.source_of(held, own_words, "")[0] == "customer"):
+            continue  # the new words say so
         carried[key] = value
-    if _present((current or {}).get("stone_dimensions")) or _present((current or {}).get("stone_carat")):
-        # A new size: the old carat and size do not ride along.
+    new_size = any(_present((current or {}).get(k)) and (not own_words or ledger.source_of((current or {}).get(k), own_words, "")[0] == "customer")
+                   for k in ("stone_dimensions", "stone_carat"))
+    if new_size:
+        # A new size in their words: the old carat and size do not ride along.
         carried.pop("stone_carat", None)
         carried.pop("stone_dimensions", None)
         carried.pop("stone_carat_basis", None)

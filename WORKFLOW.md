@@ -456,6 +456,12 @@ closed by follow-up changes:
   trail, price cards included; the chat session runs nothing on an
   approval. A rejected price is followed by the desk's question for the
   price to file and a fresh brief at that price (built 6 September 2026).
+- Built 10 September 2026 (unpublished): a piece on file outranks the
+  reading's guesses. "The exact same thing, but with yellow diamonds" keeps
+  the halo and its diamonds from the earlier estimate even when the reading
+  guessed "prong" for the new studs; only the customer's own new words
+  replace a fact on file (live: the rendering of a look-alike lost its
+  diamond halo) (6.1, 6.6).
 - Built 9 September 2026 (unpublished): a phone call is booked as a call
   ("are you available for a call tomorrow at 3pm?"): the card, the calendar
   event, and the confirmation say so; the customer's number is read from

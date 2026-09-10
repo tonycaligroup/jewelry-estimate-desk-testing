@@ -10462,6 +10462,14 @@ class CarriedEarringStyleTests(unittest.TestCase):
         carried = estimate_record.prior_piece_facts(prior, {"piece_type": "earrings", "stone_type": "diamond"})
         self.assertEqual(carried["earring_style"], "stud")
         self.assertEqual(estimate_record.prior_piece_facts({"piece_type": "hoop earrings"}, {"piece_type": "earrings"})["earring_style"], "hoop")
+        # The reading's guess yields to the piece on file; the customer's own new words do not.
+        prior = {"piece_type": "earrings", "setting_style": "halo", "accent_stones": "diamond halo", "stone_type": "emerald", "stone_carat": 2.5}
+        words = "the exact same thing, but with lab grown yellow diamonds. Same size, all other details the same."
+        carried = estimate_record.prior_piece_facts(prior, {"piece_type": "earrings", "setting_style": "prong", "stone_type": "diamond"}, words)
+        self.assertEqual((carried["setting_style"], carried["accent_stones"], carried["stone_carat"]), ("halo", "diamond halo", 2.5))
+        self.assertNotIn("stone_type", carried, "yellow diamonds are in their words")
+        smaller = estimate_record.prior_piece_facts(prior, {"piece_type": "earrings", "stone_carat": 1.0}, "the same but 1 ct each")
+        self.assertNotIn("stone_carat", smaller, "a new size in their words replaces the old")
         self.assertNotIn("earring_style", estimate_record.prior_piece_facts({"piece_type": "earrings"}, {"piece_type": "earrings"}))
         self.assertIn("after the piece we made for you", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="made"))
         self.assertIn("after the design we discussed before", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="estimate"))

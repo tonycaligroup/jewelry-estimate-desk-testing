@@ -3067,11 +3067,11 @@ class PriorPieceTests(SideBranchTests):
             profile_path.write_text(json.dumps(profile), encoding="utf-8")
             earlier = {"piece_type": "pair of earrings", "earring_style": "stud", "metal": "white gold", "metal_karat": "18k", "metal_color": "white",
                        "stone_type": "emerald", "stone_origin": "lab-grown", "stone_carat": 2.5, "stone_carat_basis": "each", "stone_shape": "round",
-                       "setting_style": "halo", "center_stone": "yes"}
+                       "setting_style": "halo", "accent_stones": "diamond halo", "center_stone": "yes"}
             _thread, first_id = self._estimate_sent(ws, world, spec=earlier, text="A pair of halo stud earrings, 18k white gold, lab-grown "
                                                     "emeralds 2.5 ct each, round.\n\nAnthony")
-            # A new thread: the reading knows only what the new email says.
-            world.spec = {"piece_type": "earrings", "stone_type": "sapphire", "stone_origin": "lab-grown"}
+            # A new thread: the reading knows only what the new email says, and guesses a setting for studs.
+            world.spec = {"piece_type": "earrings", "stone_type": "sapphire", "stone_origin": "lab-grown", "setting_style": "prong"}
             world.customer_message("tb1", "thread-more-earrings", "Hi Tony,\n\nDo you remember this emerald earrings we talked about earlier?\n\n"
                                    "I'd like the exact same thing, but with lab grown sapphires. Same size, all other details the same.\n\n"
                                    "Can I get an idea what that would cost?\n\nAnthony", subject="More earrings")
@@ -3083,7 +3083,8 @@ class PriorPieceTests(SideBranchTests):
             spec = self.record(ws, new_id)["specification"]
             self.assertEqual((spec["stone_type"], spec["stone_origin"]), ("sapphire", "lab-grown"), "the new words win")
             self.assertEqual((spec["metal_karat"], spec["setting_style"], spec["earring_style"], spec["stone_carat"]), ("18k", "halo", "stud", 2.5),
-                             "everything else from the earlier estimate")
+                             "everything else from the earlier estimate; the reading's 'prong' guess gives way to the halo on file")
+            self.assertEqual(spec["accent_stones"], "diamond halo", "the halo's diamonds ride along for the render")
             self.assertIn("after the design we discussed before", estimate_record.vision_in_words(spec, on_file=estimate_record.prior_basis(self.record(ws, new_id))))
             self.assertEqual(self.record(ws, new_id)["prior_piece"]["estimate_id"], first_id)
             title = world.cards[-1]["title"]

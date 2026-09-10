@@ -886,8 +886,8 @@ def process_claim(
         prior = estimate_record.find_prior_piece(p["record_root"], (record.get("route") or {}).get("recipient"),
                                                  specification.get("piece_type"), exclude=estimate_id)
         if prior:
-            carried = estimate_record.prior_piece_facts(prior["specification"], specification)
-            specification = {**carried, **specification}
+            carried = estimate_record.prior_piece_facts(prior["specification"], specification, handled_words)
+            specification = {**specification, **carried}  # the piece on file outranks the reading's guesses; their words won above
             ledger.migrate(desk, record)
             ledger.absorb(desk, estimate_id, carried, message_id, "", "", default_source="prior")
             record = estimate_record.mark_prior_piece(p["record_root"], estimate_id,
