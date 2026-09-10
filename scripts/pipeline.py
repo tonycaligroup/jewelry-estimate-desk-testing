@@ -275,7 +275,8 @@ def _send_followup(
     try:
         drafted = judge.draft_followup(digest, describe_missing(specification, missing), _template_text(base_dir),
                                        shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding,
-                                       questions=question_lines(missing, specification), customer_name=estimate_record.customer_first_name(record_now))
+                                       questions=question_lines(missing, specification), customer_name=estimate_record.customer_first_name(record_now),
+                                       meeting_booked=bool(record_now.get("appointment_booked")))
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
@@ -952,6 +953,12 @@ def process_claim(
                 **({"appointment_approval_requested": True} if meeting_card else {})}
     if nxt == "send_spec_followup":
         record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
+        if record.get("appointment_booked") and not reviewed["initiating"] and estimate_record.courtesy_only(handled_words):
+            # 'See you tomorrow!' after the booking (live, 9 September 2026: it got a questionnaire). The facts, if
+            # any, are on the record; the rest is settled at the meeting. Nothing is sent.
+            token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+            kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
+            return {"outcome": "noted", "next": "done"}
         if specification.get("scheduling_intent") and (
             not record.get("appointment_booked") or estimate_record.asks_to_reschedule(handled_words)
         ):

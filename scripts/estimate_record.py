@@ -2042,7 +2042,31 @@ def set_one_time_rate(root: Path, estimate_id: str, rate_kind: str, rate_key: st
 CUSTOMER_FIELDS = ("name", "phone", "notes")
 PHONE_RE = re.compile(r"(?<!\d)(?<!\d\.)(?:\+?1[ .-]?)?\(?(\d{3})\)?[ .-]?(\d{3})[ .-]?(\d{4})(?!\d)(?!\.\d)")
 _CALL_RE = re.compile(r"(?i)\b(?:phone|call|zoom|video|facetime|google meet|teams|ring me|give me a ring)\b")
-_VISIT_RE = re.compile(r"(?i)\b(?:in person|come (?:in|by|over)|stop by|drop by|swing by|visit|at the shop|at your shop|your store|the store)\b")
+_VISIT_RE = re.compile(r"(?i)\b(?:in person|come (?:in|by|over)|stop by|drop by|swing by|visit|at the shop|at your shop|your store|the store"
+                       r"|bring(?:ing)? (?:it|them|these|those|everything|the \w+) (?:in|by|along|with me)|show you)\b")
+_COURTESY_RE = re.compile(
+    r"(?i)^(?:[\s!.,\-]*(?:see you (?:then|there|soon|tomorrow|today|tonight|on \w+|next \w+|at \d[\d:]*\s*(?:am|pm)?|\w+day)"
+    r"|thanks?(?: you)?(?: so much| very much| a lot| again)?|thank you(?: so much| very much| again)?|perfect|great|sounds (?:good|great|perfect)"
+    r"|looking forward(?: to it| to that| to meeting you)?|will do|got it|ok(?:ay)?|awesome|wonderful|cheers|talk (?:soon|then|tomorrow)"
+    r"|until (?:then|tomorrow)|excellent|noted|confirmed|that works|works for me)[\s!.,\-]*)+$"
+)
+
+
+def courtesy_only(own_words: str) -> bool:
+    """A note with nothing to act on: 'See you tomorrow!', 'Thanks, looking forward to it.'
+
+    The first paragraph must be nothing but courtesy, and no question may follow it anywhere (a signature
+    with a number or an address is fine). Live, 9 September 2026: 'See you tomorrow!' after a booking
+    got a questionnaire.
+    """
+    text = str(own_words or "").strip()
+    if not text:
+        return False
+    parts = re.split(r"\n\s*\n", text, maxsplit=1)
+    first, rest = parts[0], (parts[1] if len(parts) > 1 else "")
+    if "?" in first or not _COURTESY_RE.fullmatch(first.replace("\n", " ")):
+        return False
+    return "?" not in rest
 
 
 def phone_in_words(text: str) -> str | None:

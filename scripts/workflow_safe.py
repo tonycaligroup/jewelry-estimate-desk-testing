@@ -906,6 +906,10 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         before.update(_inventory_fact(record))
         if approval.get("action_type") == "appointment_booking" and options:
             when = options[0]["label"]
+            # A visit unless they asked for a call; the prepared email is used at approval only for a visit (a call's
+            # wording depends on the number, so it is drafted then). Live, 9 September 2026: a number in the signature
+            # made the prepared confirmation say "I'll call you".
+            before["this is a visit to the shop, not a phone call"] = "they are coming in; never say you will call or phone them"
             _prepare_email({"monitor_root": args.monitor_root, "shop_profile": args.shop_profile}, record, args.message_id,
                            "confirmation", {"piece": piece, "time_labels": [when], "shop name": shop, **before},
                            CONFIRMATION_NOTE.format(when=when, shop=shop, piece=piece), prepared_email_path(store), digest,
@@ -2968,7 +2972,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         if is_call:
             fixed = (CALL_CONFIRMATION_NOTE if phone else CALL_NUMBER_NOTE).format(when=chosen["label"], shop=shop, piece=piece, phone=phone)
         kind = "confirmation"
-    call_facts = {}
+    call_facts = {"this is a visit to the shop, not a phone call": "they are coming in; never say you will call or phone them"}
     if is_call:
         call_facts = {"this is a phone call, not a visit": (f"you will call them at {phone}; say so" if phone else
                       "you do not have their number: ask for the best number to reach them, in one sentence")}

@@ -2631,6 +2631,57 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.assertEqual(len(world.sent), 1, "nothing goes out before the cards are approved")
         self.run_branch(branch)
 
+    def test_a_visit_booked_from_a_signature_with_a_number_stays_a_visit_and_see_you_tomorrow_sends_nothing(self) -> None:
+        """Live 9 Sep (David): 'Are you available tomorrow at 1pm?' with a number in the signature was confirmed as
+        'I'll call you at (310) 810-3004'; then 'See you tomorrow!' got a questionnaire that invited him to come by."""
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-mothers-pieces"
+            wanted = next_weekday(1, 13, 0)
+            signature = "\n\nThank you,\nDavid Trujillo\nAtelier by Edward Avedis\n101 Wilshire Blvd.\nSanta Monica 90401\n(310) 810-3004"
+            world.spec = {"piece_type": "redesign of inherited pieces", "scheduling_intent": f"Are you available {wanted.strftime('%A')} at 1pm?"}
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 1pm"], [local_key(wanted)])
+            world.customer_message("mp1", thread, "Hello Tony,\nI recently came across a few pieces my mother left behind and would like you to "
+                                   "look at them. I think I would like them redesigned, but only if you think it's worth the effort.\n"
+                                   f"Are you available {wanted.strftime('%A')} at 1pm?{signature}", subject="Pieces I want you to take a look at")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            book = world.cards[-1]
+            self.assertEqual(book["kind"], "appointment_booking", book)
+            self.assertNotIn("meeting_kind", book["payload"], "a number in the signature does not make it a call")
+            self.assertEqual(book["payload"]["phone"], "310.810.3004", "the number is still kept")
+            self.assertNotIn("phone call", book["title"])
+            self.execute(ws, world, book["payload"]["execute"], book)
+            event = next(iter(world.calendar_events.values()))
+            self.assertIn("design consultation", event["summary"])
+            prompt = [q for q in world.prompts if "Confirm the appointment" in q][-1]
+            self.assertIn("never say you will call or phone them", prompt)
+            self.assertNotIn("this is a phone call, not a visit", prompt)
+            self.assertEqual(len(world.sent), 1)
+            self.assertNotRegex(world.sent[-1]["body"], r"(?i)call you")
+            # 'See you tomorrow!' with the same signature: nothing goes out, the claim is done, the record still waits.
+            world.intents = []
+            world.requested = ([], [])
+            world.spec = {"piece_type": "redesign of inherited pieces"}
+            world.customer_message("mp2", thread, f"See you tomorrow!{signature}", subject="Re: Pieces I want you to take a look at")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["noted"], summary)
+            self.assertEqual(len(world.sent), 1, "no questionnaire after a courtesy note")
+            self.assertEqual(self.claim(ws, "mp2")["status"], "processed")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["status"], "awaiting_specs")
+            self.assertTrue(record["appointment_booked"].get("before_estimate"))
+            # A later reply with a real question still gets answered, and the questions do not invite a visit: one is booked.
+            world.spec = {"piece_type": "ring", "metal": "yellow gold"}
+            world.customer_message("mp3", thread, "Thinking about it, I'd like one of them made into a ring in yellow gold. "
+                                   "What else do you need from me?\n\nDavid", subject="Re: Pieces I want you to take a look at")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["followup_sent"], summary)
+            prompt = [q for q in world.prompts if "asking only for what is still missing" in q or "missing details listed below" in q][-1]
+            self.assertIn("already booked", prompt)
+            self.assertNotIn("inviting them to come by the shop", prompt)
+        self.run_branch(branch)
+
     def test_bare_earrings_without_a_photo_are_asked_studs_hoops_or_drops(self) -> None:
         """The owner, 9 Sep: 'a pair of earrings' with no photo rendered as drops for a customer who meant studs."""
         def branch(ws: Path, world: World) -> None:

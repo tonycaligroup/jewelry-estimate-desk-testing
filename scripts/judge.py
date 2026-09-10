@@ -695,12 +695,15 @@ def draft_followup(
     understanding: str | None = None,
     questions: list[str] | None = None,
     customer_name: str = "",
+    meeting_booked: bool = False,
 ) -> dict[str, Any]:
     """One friendly, price-free email asking only for what is still missing; a photo's vision is confirmed first."""
     import gmail_text  # local import: gmail_text does not depend on this module
 
     sender = (str(customer_name or "").strip().split() or [""])[0].strip(",.") or gmail_text.sender_first_name(digest)
-    closing = "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. "
+    closing = ("A meeting with them is already booked: close by saying anything they are unsure of can be settled when you "
+               "meet, and do not invite them to come by or to set up a time. " if meeting_booked else
+               "Close by inviting them to come by the shop if they would rather talk it through in person, without naming times. ")
     prompt = (
         "You are the jeweler at a small retail custom-jewelry shop writing back to a customer. Write the reply "
         "body (no subject line, no headers) in the tone of the template: warm, personal, unhurried. Open with "

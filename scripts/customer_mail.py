@@ -109,6 +109,7 @@ def _opening(text: str) -> str:
 
 
 # A rendering email says the pictures guide, they do not promise (the owner, 9 September 2026).
+SAYS_WILL_CALL_RE = re.compile(r"(?i)\b(?:I(?:'|’)ll|I will|we(?:'|’)ll|we will|I can|we can) (?:call|phone|ring) you\b|\bcall you at\b")
 GUIDANCE_RE = re.compile(r"(?i)\b(?:for guidance|guidance only|as a guide|guide only|for reference only|for illustration)\b")
 CLAIMS_A_MEETING_RE = re.compile(
     r"(?i)\b(?:reserved|booked|i have (?:you|us|it) down for|(?:confirm(?:ed|ing)|locked in|set aside) (?:our|your|the|that) "
@@ -134,6 +135,10 @@ def _check(kind: str, facts: dict[str, Any], previous: str, sender: str = "") ->
             # Live, 9 September 2026: an estimate email said "Thursday at 11am, which I have reserved" with nothing booked.
             raise ValueError("never say a meeting time is reserved, booked, or confirmed: no meeting is booked; "
                              "if they named a time, say only that you will confirm it separately")
+        if kind in ("confirmation", "reschedule") and "this is a phone call, not a visit" not in facts and SAYS_WILL_CALL_RE.search(body):
+            # Live, 9 September 2026: a visit's confirmation said "I'll call you at (310) 810-3004" because the
+            # signature had a number. A visit is a visit.
+            raise ValueError("this is a visit to the shop, not a phone call: never say you will call or phone them")
         if kind == "rendering" and not GUIDANCE_RE.search(body):
             raise ValueError("say the renderings are for guidance only: they show the direction of the design and "
                              "a close rendering is still not the finished piece")

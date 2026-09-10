@@ -7149,6 +7149,34 @@ class RenderFromTheLedgerTests(unittest.TestCase):
 class NoInventedMeetingTests(unittest.TestCase):
     """Live 9 Sep: the estimate email said 'Thursday at 11am, which I have reserved' while nothing was booked."""
 
+    def test_a_visit_confirmation_that_says_it_will_call_is_rejected(self) -> None:
+        """Live 9 Sep (David): a visit was confirmed with "I'll call you at (310) 810-3004" from a number in the signature."""
+        import customer_mail
+        body = ("Hi David,\n\nThursday, September 10 at 1:00 PM PDT works perfectly. I'll call you at (310) 810-3004, and a calendar "
+                "invitation is on its way to this address. It sounds meaningful to look at the pieces your mother left behind, and I'm "
+                "glad you're bringing them in. If that time stops working for any reason, just reply and we'll adjust.")
+        facts = {"time_labels": ["Thursday, September 10 at 1:00 PM PDT"], "this is a visit to the shop, not a phone call": "they are coming in"}
+        with self.assertRaises(ValueError) as caught:
+            customer_mail._check("confirmation", facts, "")({"body": body})
+        self.assertIn("never say you will call", str(caught.exception))
+        call_facts = {"time_labels": facts["time_labels"], "this is a phone call, not a visit": "you will call them at 310.810.3004"}
+        self.assertIn("call you", customer_mail._check("confirmation", call_facts, "")({"body": body})["body"])
+        visit_body = body.replace("I'll call you at (310) 810-3004, and a", "A")
+        self.assertIn("bringing them in", customer_mail._check("confirmation", facts, "")({"body": visit_body})["body"])
+
+    def test_a_courtesy_note_is_only_courtesy(self) -> None:
+        import estimate_record
+        signature = "\n\nThank you,\nDavid Trujillo\nAtelier by Edward Avedis\n101 Wilshire Blvd.\nSanta Monica 90401\n(310) 810-3004"
+        for words in ("See you tomorrow!" + signature, "Thanks so much, looking forward to it!\n\nDavid", "Perfect. See you Friday.",
+                      "See you then!", "Great, thank you!", "Sounds good."):
+            self.assertTrue(estimate_record.courtesy_only(words), words)
+        for words in ("Thanks! Also, could we do 18k instead?", "See you tomorrow, and 18k white gold please.",
+                      "Sounds good. What time does the shop open?" , "", "Thanks. Actually, can we make it Friday?",
+                      "Thank you!\n\nOne more thing: is lab grown an option?"):
+            self.assertFalse(estimate_record.courtesy_only(words), words)
+        self.assertEqual(estimate_record.meeting_kind_in_words("Can I bring them in Friday?"), "visit")
+        self.assertEqual(estimate_record.meeting_kind_in_words("Are you available tomorrow at 1pm?\n(310) 810-3004"), None)
+
     def test_an_email_that_claims_a_booking_is_rejected_unless_one_exists(self) -> None:
         import customer_mail
         body = ("Thank you for confirming Thursday at 11am, which I have reserved for us. I have prepared an estimate at $5,000.00, "
