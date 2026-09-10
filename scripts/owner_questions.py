@@ -36,6 +36,14 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
         "same": ("same", "same piece", "same one", "existing", "that one", "yes", "it is the same"),
         "new": ("new", "new piece", "different", "separate", "another", "second", "no"),
+        "unrelated": (
+            "unrelated",
+            "neither",
+            "not jewelry",
+            "not a jewelry inquiry",
+            "ignore",
+            "automated report",
+        ),
     },
     "unclear_reply": {
         "second_piece": ("second piece", "another piece", "new piece", "additional", "second one", "separate piece"),

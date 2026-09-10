@@ -6162,7 +6162,7 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(result["outcome"], "awaiting_owner")
             sent = args.runner.call_args.args[0]
             self.assertEqual(sent[:3], ["kolo", "notify-owner", "-m"])
-            self.assertIn("same piece, or a new one", sent[3])
+            self.assertIn("same piece, a new one, or unrelated to jewelry", sent[3])
             self.assertIn("Pat Customer", sent[3])
             state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
             self.assertEqual(state["status"], "awaiting_owner")
@@ -7773,10 +7773,12 @@ class DecisionQuestionTests(unittest.TestCase):
     """Reviews that need the owner's judgment are questions with fixed outcomes."""
 
     def test_match_option_reads_plain_answers_and_refuses_ambiguity(self) -> None:
-        q = {"kind": "same_sender", "options": {"same": "x", "new": "y"}}
+        q = {"kind": "same_sender", "options": {k: "" for k in owner_questions.DECISION_OPTIONS["same_sender"]}}
         self.assertEqual(owner_questions.match_option(q, "new"), "new")
         self.assertEqual(owner_questions.match_option(q, "It's the same piece, I'll deal with it"), "same")
         self.assertEqual(owner_questions.match_option(q, "Separate estimate please"), "new")
+        self.assertEqual(owner_questions.match_option(q, "unrelated automated report"), "unrelated")
+        self.assertEqual(owner_questions.match_option(q, "neither"), "unrelated")
         with self.assertRaises(ValueError):
             owner_questions.match_option(q, "hmm not sure")
         u = {"kind": "unclear_reply", "options": {k: "" for k in owner_questions.DECISION_OPTIONS["unclear_reply"]}}
@@ -7830,6 +7832,32 @@ class DecisionQuestionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workflow_safe.answer_question(argparse.Namespace(
                     workspace=ws, base_dir=ROOT, question=None, answer="same", openclaw="openclaw",
+                    runner=Mock(),
+                ))
+
+    def test_same_sender_unrelated_closes_only_the_parked_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, args, existing, _asked = self.parked_same_sender(directory)
+            path = estimate_record.record_path(args.record_root, existing["estimate_id"])
+            before = estimate_record.read_object(path)
+
+            out = workflow_safe.answer_question(argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=None, answer="unrelated automated report", openclaw="openclaw",
+                runner=Mock(return_value=subprocess.CompletedProcess([], 0, "", "")),
+            ))
+
+            self.assertEqual(out["decision"], "unrelated")
+            self.assertEqual(out["claim"], "owner_decided_unrelated")
+            self.assertEqual(out["next_action"], "done")
+            self.assertEqual(estimate_record.read_object(path), before)
+            self.assertEqual(len(list(args.record_root.glob("*.json"))), 1)
+            state = inbox_claim.read_state(inbox_claim.claim_path(args.claim_root, "inquiry-1"))
+            self.assertEqual(state["status"], "manual_review")
+            self.assertEqual(state["reason_code"], "owner_decided_unrelated")
+            self.assertEqual(inbox_monitor.list_manual_reviews(args.monitor_root), [])
+            with self.assertRaises(ValueError):
+                workflow_safe.answer_question(argparse.Namespace(
+                    workspace=ws, base_dir=ROOT, question=None, answer="unrelated", openclaw="openclaw",
                     runner=Mock(),
                 ))
 

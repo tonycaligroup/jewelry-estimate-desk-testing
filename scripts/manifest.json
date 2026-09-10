@@ -31,7 +31,7 @@
     "kolo_safe.py": "d51a9d2d1e4502d71b090857fb5a03b6",
     "ledger.py": "c2f064c932036216fed5f0b5e671c4ba",
     "manifest.py": "a94d8af8a570000c8e2dbe027243555f",
-    "owner_questions.py": "7b36a181c90bd371c0351be732639d40",
+    "owner_questions.py": "4773b2529067d3e798dc36562f385014",
     "pipeline.py": "36c7a5db75996276882119b0009966f7",
     "pricing_model.py": "133e46b1d5047ff321ea0f2e38fe8c57",
     "rate_card.py": "62c408d155106de332ebef57bb1ac665",
@@ -52,7 +52,7 @@
     "spot_price.py": "10a3327c317c1f2a970b73e03b562db8",
     "validate_profile.py": "dd294e2d04031e6008d29c60e1cf78bd",
     "words.py": "46567cc843e760bc748e214a4f805f68",
-    "workflow_safe.py": "ef8fe109be0e0d8022c1ef3743c2d215"
+    "workflow_safe.py": "d547264e0965ca03c04fba2cc3153fd6"
   },
   "version": "4.15.16"
 }
