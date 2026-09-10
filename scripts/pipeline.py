@@ -285,6 +285,7 @@ def _send_followup(
                                        shop_name, model, judge_runner, openclaw, photos=photos, understanding=understanding,
                                        questions=questions, customer_name=estimate_record.customer_first_name(record_now),
                                        meeting_booked=bool(record_now.get("appointment_booked")), welcome_back=welcome_back)
+        draft_source = "model"
     except judge.JudgmentError as exc:
         if exc.transient:
             raise
@@ -292,9 +293,17 @@ def _send_followup(
         # still moves the inquiry, and the owner sees nothing odd.
         drafted = {"body": plain_followup(missing, shop_name, specification, understanding,
                                           lead_questions=[REMIND_QUESTION] if welcome_back else None)}
+        draft_source = "fallback"
     body_path = Path(paths["customer_reply"])
     body_path.parent.mkdir(parents=True, exist_ok=True)
     body_path.write_text(drafted["body"] + "\n", encoding="utf-8")
+    if draft_source != "fallback":
+        workflow_safe._check_customer_draft(
+            p, record_now, message_id, "questions",
+            {"missing_required_fields": missing, "questions": questions, "understanding": understanding,
+             "meeting_booked": bool(record_now.get("appointment_booked"))},
+            digest, drafted["body"], draft_source, body_path, model, judge_runner, openclaw, "chat", command_runner,
+        )
     workflow_safe.send_spec_followup(_namespace(
         p, message_id, estimate_id,
         route=Path(paths["route"]), body=body_path,

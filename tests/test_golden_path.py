@@ -150,6 +150,10 @@ class World:
         self.email_count = 0
         self.brief_count = 0
         self.event_count = 0
+        self.behavior_verdict = {
+            "decision": "pass", "confidence": "high", "violations": [], "evidence": [],
+            "unanswered_customer_questions": [], "contradictions": [],
+        }
 
     # ---- Fault injection ----------------------------------------------
     def _service(self, name: str, argv: list[str] | None = None, subprocess_style: str | None = None) -> None:
@@ -415,6 +419,8 @@ class World:
 
     # ---- The model, by contract ---------------------------------------
     def answer(self, prompt: str) -> dict:
+        if "final behavioral checker for a retail custom-jewelry email desk" in prompt:
+            return dict(self.behavior_verdict)
         if "Kinds:" in prompt and '"specification": {...}' in prompt:
             # One call for a new inquiry: kind and specification together.
             spec = dict(self.spec) if self.triage_kind == "estimate_request" else {}
@@ -2268,6 +2274,86 @@ class InventoryTests(SideBranchTests):
             self.assertEqual(record["status"], "awaiting_specs", "booked; the record waits in case they want something made")
             self.assertEqual(len(world.sent), 2)
         self.run_branch(branch)
+
+
+class BehaviorCheckerGoldenTests(GoldenPathTests):
+    """The fake speaks the checker contract, so golden runs prove the real integration rather than a swallowed error."""
+
+    def test_one_customer_from_inquiry_to_reschedule(self) -> None:
+        pass
+
+    @staticmethod
+    def flag() -> dict:
+        return {
+            "decision": "flag",
+            "confidence": "high",
+            "violations": ["wrong_meeting_type"],
+            "evidence": [
+                {"source": "record", "quote": "meeting_kind: visit", "explanation": "The record says this is a visit."},
+                {"source": "draft", "quote": "I will call you", "explanation": "The draft promises a phone call."},
+            ],
+            "unanswered_customer_questions": [],
+            "contradictions": ["visit versus phone call"],
+        }
+
+    def run_case(self, case) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws, world = self.workspace(directory)
+            patches = self.patched(world)
+            for one in patches:
+                one.start()
+            try:
+                case(ws, world)
+            finally:
+                for one in patches:
+                    one.stop()
+
+    def test_questions_email_produces_a_checked_artifact(self) -> None:
+        def case(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k"}
+            world.customer_message("bc-q1", "thread-behavior-questions", "Could you quote a 14k yellow gold signet ring?\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([item["outcome"] for item in summary["inline"]], ["followup_sent"], summary)
+            artifacts = list((ws / "estimate-desk").glob("**/customer-reply-behavior-check-questions.json"))
+            self.assertEqual(len(artifacts), 1, artifacts)
+            self.assertEqual(json.loads(artifacts[0].read_text(encoding="utf-8"))["status"], "checked")
+        self.run_case(case)
+
+    def test_flag_reaches_price_chat_and_appointment_card(self) -> None:
+        def case(ws: Path, world: World) -> None:
+            profile_path = ws / "estimate-desk" / "shop-profile.json"
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile["pricing"]["stones_per_carat"]["lab_grown_diamond_melee"] = 600.0
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            world.behavior_verdict = self.flag()
+            world.spec = {
+                "piece_type": "signet ring", "metal": "yellow gold", "metal_karat": "14k", "finger_size": "10",
+                "setting_style": "bead set", "engraving": "our logo on the face",
+                "accent_stones": "small lab-grown diamonds along the shoulders",
+                "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS",
+            }
+            thread = "thread-behavior-card"
+            world.customer_message("bc-p1", thread, "Please quote the complete signet ring specification.\n\nPat")
+            summary = self.tick(ws, world)
+            self.assertEqual([item["outcome"] for item in summary["inline"]], ["approval_requested"], summary)
+            estimate_id = self.only_estimate(ws)
+            chat = [notice["text"] for notice in world.notices if not notice["file"]]
+            self.assertTrue(any(estimate_id in text and "wrong_meeting_type" in text for text in chat), chat)
+            price_artifacts = list((ws / "estimate-desk").glob("**/customer-reply-behavior-check-estimate.json"))
+            self.assertEqual(len(price_artifacts), 1, price_artifacts)
+            self.assertEqual(json.loads(price_artifacts[0].read_text(encoding="utf-8"))["status"], "checked")
+            price_card = world.cards[-1]
+            self.execute(ws, world, price_card["payload"]["execute"], price_card)
+            wanted = next_weekday(2, 14, 0)
+            world.intents = ["appointment_request"]
+            world.requested = ([f"{wanted.strftime('%A')} at 2"], [local_key(wanted)])
+            world.customer_message("bc-a1", thread, f"Can I visit {wanted.strftime('%A')} at 2?\n\nPat")
+            self.tick(ws, world)
+            appointment = world.cards[-1]
+            self.assertEqual(appointment["kind"], "appointment_booking")
+            self.assertIn("CHECK: wrong_meeting_type", appointment["title"])
+            self.assertIn("wrong_meeting_type", appointment["details"]["Behavior check"])
+        self.run_case(case)
 
 
 class ProposedTimeTests(SideBranchTests):

@@ -3313,7 +3313,9 @@ def _check_customer_draft(
         who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "")) or "the customer"
         try:
             kolo_safe.tell_owner(
-                p.get("monitor_root"), f"Behavior check on the {kind} draft for {who}: {summary}.", runner=owner_runner
+                p.get("monitor_root"),
+                f"Behavior check on estimate {record.get('estimate_id')}, {kind} draft for {who}: {summary}.",
+                runner=owner_runner,
             )
         except Exception:  # noqa: BLE001 - the persisted check remains the evidence
             pass
