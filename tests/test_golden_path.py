@@ -1694,7 +1694,7 @@ class OwnStoneAndStallTests(SideBranchTests):
                 self._golden_path(ws, world)
             self.assertGreater(world.calls.count("model_direct"), 5, "the judgements went direct")
             self.assertEqual(world.calls.count("model"), 0, "no CLI model call")
-            self.assertGreaterEqual(world.calls.count("model_probe"), 5, "watcher starts resolve the model before work")
+            self.assertEqual(world.calls.count("model_probe"), 1, "the hourly cache avoids probing on every watcher tick")
         self.run_branch(branch)
 
     def _parallel_profile(self, ws: Path, parallel: int, claims: int = 16) -> None:

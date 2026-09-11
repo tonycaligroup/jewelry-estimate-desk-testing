@@ -455,6 +455,122 @@ def _thread_of(p: dict[str, Path], message_id: str) -> str:
         return message_id
 
 
+def _model_resolution_skips(error: OSError) -> list[dict[str, str]]:
+    skipped = [
+        {
+            "model": str(event.get("requested") or "unknown"),
+            "reason": f"provider served {event.get('served') or 'another model'}",
+        }
+        for event in image_provider.MODEL_EVENTS
+        if event.get("status") == "mismatch" or event.get("kind") == "model_mismatch"
+    ]
+    if skipped:
+        return skipped
+    return [{"model": name, "reason": str(error)[:200]} for name in image_provider.MODEL_PREFERENCE]
+
+
+def _tell_model_fallback_once(workspace: Path, runner: Runner) -> bool:
+    notice_dir = workspace / "estimate-desk" / "run-work"
+    notice_dir.mkdir(parents=True, exist_ok=True)
+    marker = notice_dir / f"model-resolution-cli-{time.strftime('%Y-%m-%d', time.gmtime())}.notice"
+    try:
+        marker.touch(mode=0o600, exist_ok=False)
+    except FileExistsError:
+        return False
+    try:
+        kolo_safe.tell_owner(
+            paths_for(workspace)["monitor_root"],
+            "No preferred model is being served by name. The Jewelry Estimate Desk is continuing on the CLI.",
+            runner=runner,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+MODEL_CACHE_SECONDS = 60 * 60
+
+
+def _model_cache_path(workspace: Path) -> Path:
+    return workspace / "estimate-desk" / "run-work" / "model-resolution.json"
+
+
+def _read_model_cache(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_model_cache(path: Path, resolution: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({
+        "model": resolution["model"],
+        "resolved_at": time.time(),
+    }, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def _resolve_tick_model(
+    summary: dict[str, Any],
+    switch: dict[str, Any],
+    workspace: Path,
+    provider_mode: str,
+    runner: Runner,
+) -> None:
+    direct = image_provider.available(provider_mode)
+    summary["transport"] = "direct" if direct else "cli"
+    if direct:
+        cache_path = _model_cache_path(workspace)
+        image_provider.set_model_cache_path(cache_path)
+        cached = _read_model_cache(cache_path)
+        cached_model = str(cached.get("model") or "").strip()
+        pinned = image_provider.model_name(switch.get("model"), "") if switch.get("model") else None
+        try:
+            cache_age = time.time() - float(cached.get("resolved_at"))
+        except (TypeError, ValueError):
+            cache_age = MODEL_CACHE_SECONDS + 1
+        if cached_model and cache_age <= MODEL_CACHE_SECONDS and (not pinned or pinned == cached_model):
+            image_provider.RESOLVED_MODEL = cached_model
+            summary["model"] = cached_model
+            summary["model_resolution"] = {
+                "model": cached_model,
+                "pinned": bool(pinned),
+                "cached": True,
+                "age_seconds": max(0, int(cache_age)),
+                "skipped": [],
+            }
+            return
+        try:
+            resolution = image_provider.resolve_model(
+                switch.get("model"), last_good=cached_model or None
+            )
+        except OSError as exc:
+            summary["model"] = None
+            summary["model_resolution"] = {
+                "model": None,
+                "error": str(exc)[:200],
+                "skipped": _model_resolution_skips(exc),
+            }
+            summary["transport"] = "cli"
+            judge.MODEL_PROVIDER_MODE = "cli"
+            summary["model_fallback_owner_note"] = _tell_model_fallback_once(workspace, runner)
+            return
+        summary["model"] = resolution["model"]
+        summary["model_resolution"] = resolution
+        _write_model_cache(cache_path, resolution)
+        return
+    summary["model"] = switch.get("model") or judge.DEFAULT_MODEL
+    summary["model_resolution"] = {
+        "model": summary["model"], "pinned": bool(switch.get("model")),
+        "skipped": [{"model": name, "reason": "direct provider unavailable; CLI identity was not probed"}
+                    for name in image_provider.MODEL_PREFERENCE],
+    }
+
+
 def tick(
     workspace: Path,
     base_dir: Path,
@@ -499,19 +615,7 @@ def tick(
     if max_workers is None:
         max_workers = desk["claims_per_tick"]
     parallel = desk["parallel_claims"]
-    direct = image_provider.available(desk["model_provider"])
-    summary["transport"] = "direct" if direct else "cli"
-    if direct:
-        resolution = image_provider.resolve_model(switch.get("model"))
-        summary["model"] = resolution["model"]
-        summary["model_resolution"] = resolution
-    else:
-        summary["model"] = switch.get("model") or judge.DEFAULT_MODEL
-        summary["model_resolution"] = {
-            "model": summary["model"], "pinned": bool(switch.get("model")),
-            "skipped": [{"model": name, "reason": "direct provider unavailable; CLI identity was not probed"}
-                        for name in image_provider.MODEL_PREFERENCE],
-        }
+    _resolve_tick_model(summary, switch, workspace, desk["model_provider"], runner)
     state = inbox_monitor.load_monitor_state(p["monitor_root"])
     if state["activation_state"] != "active":
         summary["skipped"] = state["activation_state"]

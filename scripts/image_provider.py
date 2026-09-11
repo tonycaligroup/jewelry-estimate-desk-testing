@@ -32,6 +32,7 @@ CLI_ALIASES = ("kolo-best-available",)
 MODEL_PREFERENCE = ("qwen-3-7-plus", "glm-5-3-flash", "claude-haiku-4-5")
 RESOLVED_MODEL: str | None = None
 MODEL_EVENTS: list[dict[str, str]] = []
+MODEL_CACHE_PATH: Path | None = None
 
 
 def reset_model_resolution() -> None:
@@ -44,6 +45,18 @@ def resolved_model() -> str | None:
     return RESOLVED_MODEL
 
 
+def set_model_cache_path(path: Path | None) -> None:
+    global MODEL_CACHE_PATH
+    MODEL_CACHE_PATH = path
+
+
+def invalidate_model_cache() -> None:
+    global RESOLVED_MODEL
+    RESOLVED_MODEL = None
+    if MODEL_CACHE_PATH is not None:
+        MODEL_CACHE_PATH.unlink(missing_ok=True)
+
+
 def _served_name(value: dict[str, Any]) -> str:
     return str(value.get("model") or "").strip()
 
@@ -53,6 +66,7 @@ def _verify_served(requested: str, value: dict[str, Any], what: str) -> None:
     if served == requested:
         return
     MODEL_EVENTS.append({"requested": requested, "served": served or "(missing)", "status": "mismatch"})
+    invalidate_model_cache()
     raise OSError(f"{what}: requested model {requested} but the provider served {served or '(missing)'}")
 
 
@@ -258,11 +272,13 @@ def _chat_completion(prompt: str, model: str, timeout: float, temperature: float
 
 
 def resolve_model(pin: str | None = None, env: dict[str, str] | None = None,
-                  opener: Opener = urlopen) -> dict[str, Any]:
+                  opener: Opener = urlopen, last_good: str | None = None) -> dict[str, Any]:
     """Resolve one model by observed provider identity, never by a successful fallback response."""
     global RESOLVED_MODEL
     pinned = model_name(pin, "") if str(pin or "").strip() else None
     candidates = (pinned,) if pinned else MODEL_PREFERENCE
+    if not pinned and last_good in MODEL_PREFERENCE:
+        candidates = (last_good,) + tuple(name for name in MODEL_PREFERENCE if name != last_good)
     skipped: list[dict[str, str]] = []
     if pinned:
         skipped.extend({"model": name, "reason": f"pipeline.json pins {pinned}"}

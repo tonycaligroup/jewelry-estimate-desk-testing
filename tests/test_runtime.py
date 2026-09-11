@@ -10168,6 +10168,86 @@ class ChatTransportTests(unittest.TestCase):
         self.assertTrue(result["pinned"])
         self.assertEqual([item["body"]["model"] for item in log], ["claude-haiku-4-5"])
 
+    def test_watcher_resolution_mismatches_fall_back_once_without_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            notices: list[list[str]] = []
+
+            def runner(command, **kwargs):  # noqa: ANN001, ANN003
+                notices.append(command)
+                return Mock(returncode=0, stdout="", stderr="")
+
+            def mismatched_models(pin=None, **kwargs):  # noqa: ANN001, ANN003
+                for requested in image_provider.MODEL_PREFERENCE:
+                    image_provider.MODEL_EVENTS.append({
+                        "kind": "model_mismatch", "requested": requested, "served": "deepseek-v3",
+                    })
+                raise OSError("no preferred model was served by name")
+
+            summary: dict = {}
+            judge.MODEL_PROVIDER_MODE = "direct"
+            image_provider.reset_model_resolution()
+            with patch.object(image_provider, "available", return_value=True), patch.object(
+                image_provider, "resolve_model", side_effect=mismatched_models
+            ):
+                inbox_watcher._resolve_tick_model(summary, {}, workspace, "direct", runner)
+                self.assertEqual(summary["transport"], "cli")
+                self.assertIsNone(summary["model_resolution"]["model"])
+                self.assertEqual(len(summary["model_resolution"]["skipped"]), 3)
+                self.assertEqual(judge.MODEL_PROVIDER_MODE, "cli")
+
+                judge.MODEL_PROVIDER_MODE = "direct"
+                inbox_watcher._resolve_tick_model({}, {}, workspace, "direct", runner)
+
+            owner_notes = [command for command in notices if command[:2] == ["kolo", "notify-owner"]]
+            self.assertEqual(len(owner_notes), 1)
+
+    def test_watcher_reuses_a_resolved_model_for_one_hour(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            resolution = {"model": "glm-5-3-flash", "pinned": False, "skipped": []}
+            with patch.object(image_provider, "available", return_value=True), patch.object(
+                image_provider, "resolve_model", return_value=resolution
+            ) as resolver:
+                first: dict = {}
+                second: dict = {}
+                inbox_watcher._resolve_tick_model(first, {}, workspace, "direct", Mock())
+                inbox_watcher._resolve_tick_model(second, {}, workspace, "direct", Mock())
+            self.assertEqual(resolver.call_count, 1)
+            self.assertTrue(second["model_resolution"]["cached"])
+            self.assertEqual(second["model"], "glm-5-3-flash")
+
+    def test_real_served_name_mismatch_invalidates_the_watcher_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first = {"model": "qwen-3-7-plus", "pinned": False, "skipped": []}
+            second = {"model": "glm-5-3-flash", "pinned": False, "skipped": []}
+            with patch.object(image_provider, "available", return_value=True), patch.object(
+                image_provider, "resolve_model", side_effect=[first, second]
+            ) as resolver:
+                inbox_watcher._resolve_tick_model({}, {}, workspace, "direct", Mock())
+                with self.assertRaisesRegex(OSError, "provider served deepseek-v3"):
+                    image_provider._verify_served(
+                        "qwen-3-7-plus", {"model": "deepseek-v3"}, "judgement"
+                    )
+                summary: dict = {}
+                inbox_watcher._resolve_tick_model(summary, {}, workspace, "direct", Mock())
+            self.assertEqual(resolver.call_count, 2)
+            self.assertEqual(summary["model"], "glm-5-3-flash")
+
+    def test_last_known_good_model_is_probed_first(self) -> None:
+        log: list = []
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(
+            last_good="claude-haiku-4-5",
+            env=self.ENV,
+            opener=self._opener(
+                {"model": "claude-haiku-4-5", "choices": [{"message": {"content": "OK"}}]}, log
+            ),
+        )
+        self.assertEqual(result["model"], "claude-haiku-4-5")
+        self.assertEqual([item["body"]["model"] for item in log], ["claude-haiku-4-5"])
+
     def test_complete_chooses_the_transport_and_maps_failures(self) -> None:
         judge.reset_stats()
         with patch.dict(os.environ, self.ENV), patch.object(image_provider, "chat", lambda prompt, **kw: '{"ok": true}') as _:
