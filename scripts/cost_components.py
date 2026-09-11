@@ -267,10 +267,22 @@ def match_rate_key(
     """Resolve one card key from tokens, or return the ambiguous candidates."""
     if not isinstance(card, dict) or not required:
         return None, []
-    candidates = [
-        key for key in card
-        if isinstance(key, str) and required <= _tokens(key)
-    ]
+    candidates = []
+    for key in card:
+        if not isinstance(key, str):
+            continue
+        tokens = _tokens(key)
+        if not required <= tokens:
+            continue
+        # Adding yellow_diamond and the other fancy keys must not make a
+        # plain diamond ambiguous. The reverse is already protected because
+        # a fancy request requires the full "yellow diamond" token.
+        if required == {"diamond"} and any(
+            f"{color.replace('-', ' ')} diamond" in tokens
+            for color in estimate_record.FANCY_DIAMOND_COLORS
+        ):
+            continue
+        candidates.append(key)
     if preferred and len(candidates) > 1:
         # The key that shares the most descriptive tokens with the
         # specification wins (14k_white_gold over 14k_yellow_gold for a white
@@ -603,7 +615,8 @@ def missing_accent_rates(specification: dict[str, Any], pricing: dict[str, Any])
             missing.append({
                 "rate_kind": "stones_per_carat",
                 "line": "stone_lines[accent]",
-                "suggested_key": f"{origin_token}_grown_{stone}_melee" if origin_token == "lab" else f"natural_{stone}_melee",
+                "suggested_key": (f"{origin_token}_grown_{stone}_melee" if origin_token == "lab" else f"natural_{stone}_melee")
+                                 .replace("-", "_").replace(" ", "_"),
                 "description": f"{origin} {stone} melee (small accent or pave stones, per carat)",
                 "candidates": [k for k in card if stone in str(k).lower()],
             })

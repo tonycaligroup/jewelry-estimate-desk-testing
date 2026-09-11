@@ -7191,7 +7191,7 @@ class NoInventedMeetingTests(unittest.TestCase):
         self.assertTrue(estimate_record.asks_to_reschedule("Sorry, I meant to say Tuesday.", booked=True))
         self.assertFalse(estimate_record.asks_to_reschedule("Sorry, I meant to say Tuesday."), "no booking: nothing to move")
         booked = {"appointment_booked": {"confirmed_start": "2026-09-14T15:00:00-07:00"}}
-        self.assertEqual(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", booked), "Tuesday at 3pm")
+        self.assertEqual(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", booked), "September 15 at 3pm")
         self.assertEqual(estimate_record.moved_to_same_time("Actually the 22nd works better.", {"appointment_booked": {"confirmed_start": "2026-09-14T10:30:00-07:00"}}), "the 22nd at 10:30am")
         self.assertIsNone(estimate_record.moved_to_same_time("Can we do Tuesday at 4pm instead?", booked), "a time of their own is theirs")
         self.assertIsNone(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", {}))
@@ -10456,6 +10456,12 @@ class ConfirmTheVisionTests(unittest.TestCase):
             {"lab", "grown", "yellow diamond"},
         )
         self.assertIsNone(generic_key, "a fancy diamond never borrows the plain diamond rate")
+        plain_key, _ = cost_components_module.match_rate_key(
+            {"lab_grown_diamond": 200, "lab_grown_yellow_diamond": 500},
+            {"diamond"},
+            {"lab", "grown"},
+        )
+        self.assertEqual(plain_key, "lab_grown_diamond", "a plain diamond never becomes ambiguous with fancy rates")
 
     def test_black_diamond_halo_is_an_accent_stone_name(self) -> None:
         settled = estimate_record.settle_fancy_diamonds(
@@ -10606,10 +10612,26 @@ class CarriedEarringStyleTests(unittest.TestCase):
         self.assertNotIn("stone_carat", smaller, "a new size in their words replaces the old")
         self.assertNotIn("earring_style", estimate_record.prior_piece_facts({"piece_type": "earrings"}, {"piece_type": "earrings"}))
         self.assertIn("after the piece we made for you", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="made"))
-        self.assertIn("after the design we discussed before", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="estimate"))
+        self.assertIn("after the design we quoted before", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="estimate"))
         self.assertEqual(estimate_record.prior_basis({"prior_piece": {"on_file": True, "owner": "details"}}), "made")
         self.assertEqual(estimate_record.prior_basis({"prior_piece": {"on_file": True, "estimate_id": "jed-x"}}), "estimate")
         self.assertFalse(estimate_record.prior_basis({}))
+
+    def test_a_binding_quote_keeps_its_records_photo_words_for_style(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            estimate_record.write_object(root / "jed-old.json", {
+                "estimate_id": "jed-old",
+                "created_at": "2026-09-09T12:00:00+00:00",
+                "status": "estimate_sent",
+                "route": {"recipient": "anthony@example.com"},
+                "specification": {"piece_type": "earrings", "reference_images": "from the photo: round halo studs"},
+                "estimate_history": [{"specification": {"piece_type": "earrings", "stone_type": "emerald"}}],
+            })
+            prior = estimate_record.find_prior_piece(root, "anthony@example.com", "earring")
+            self.assertIsNotNone(prior)
+            carried = estimate_record.prior_piece_facts(prior["specification"], {"piece_type": "earrings"})
+            self.assertEqual(carried["earring_style"], "stud")
 
 
 class EarlierConversationTests(unittest.TestCase):

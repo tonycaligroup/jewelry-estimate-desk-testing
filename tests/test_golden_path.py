@@ -3339,7 +3339,7 @@ class PriorPieceTests(SideBranchTests):
             self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" in n["text"]], [], "no question to the owner, same or new")
             self.assertEqual(len(world.sent), 2, "one email: the piece said back, is that the one")
             confirm = world.sent[-1]["body"]
-            self.assertIn("after the design we discussed before", confirm)
+            self.assertIn("after the design we quoted before", confirm)
             self.assertRegex(confirm, r"(?i)the piece you have in mind")
             self.assertNotRegex(confirm, r"(?i)carat weight|studs, hoops|karat", "nothing on file is asked")
             world.customer_message("tb1b", "thread-more-earrings", "Yes, exactly those.\n\nAnthony", subject="Re: More earrings")
@@ -3352,7 +3352,7 @@ class PriorPieceTests(SideBranchTests):
             self.assertEqual((spec["metal_karat"], spec["setting_style"], spec["earring_style"], spec["stone_carat"]), ("18k", "halo", "stud", 2.5),
                              "everything else from the earlier estimate; the reading's 'prong' guess gives way to the halo on file")
             self.assertEqual(spec["accent_stones"], "diamond halo", "the halo's diamonds ride along for the render")
-            self.assertIn("after the design we discussed before", estimate_record.vision_in_words(spec, on_file=estimate_record.prior_basis(self.record(ws, new_id))))
+            self.assertIn("after the design we quoted before", estimate_record.vision_in_words(spec, on_file=estimate_record.prior_basis(self.record(ws, new_id))))
             self.assertEqual(self.record(ws, new_id)["prior_piece"]["estimate_id"], first_id)
             title = world.cards[-1]["title"]
             self.assertTrue(title.startswith("Price approval"), title)

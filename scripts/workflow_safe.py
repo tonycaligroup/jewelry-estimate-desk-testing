@@ -36,6 +36,7 @@ import inbox_monitor
 import judge
 import kolo_safe
 import owner_questions
+import reading_check
 import rehearsal
 import run_lease
 import cost_components
@@ -3691,8 +3692,13 @@ def estimate_email_facts(record: dict[str, Any], profile: dict[str, Any]) -> tup
     }
     if chosen:
         facts["chosen by the jeweler, say if you have a preference"] = ", ".join(chosen)
-    if (record.get("prior_piece") or {}).get("on_file"):
-        facts["on file"] = "this follows the piece the shop made for them before, with the changes they named; say so in a sentence"
+    basis = estimate_record.prior_basis(record)
+    if basis:
+        facts["on file"] = (
+            "this follows the piece the shop made for them before, with the changes they named; say so in a sentence"
+            if basis == "made"
+            else "this follows the design the shop quoted for them before, with the changes they named; say so in a sentence"
+        )
     renders = (record.get("concierge") or {}).get("renderings") or []
     if renders:
         facts["renderings attached"] = f"{len(renders)} view{'s' if len(renders) != 1 else ''} of the design, for guidance only"
