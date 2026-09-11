@@ -878,12 +878,6 @@ def process_claim(
     shop_bodies = [str(m.get("body") or "") for m in digest.get("messages") or [] if m.get("sent_by") == "shop"]
     handled_words = " ".join(reading_check.strip_shop_lines(reading_check.own_words(str(m.get("body") or "")), shop_bodies)
                              for m in digest.get("messages") or [] if m.get("sent_by") == "customer" and m.get("claimed"))
-    customer_words = " ".join(
-        reading_check.strip_shop_lines(reading_check.own_words(str(m.get("body") or "")), shop_bodies)
-        for m in digest.get("messages") or [] if m.get("sent_by") == "customer"
-    )
-    repair_only = estimate_record.is_repair_request(customer_words) and not estimate_record.explicitly_requests_new_piece(customer_words)
-    repair_price_requested = repair_only and estimate_record.asks_for_repair_price(handled_words)
     judged = judge.triage_and_extract(digest, model, judge_runner, openclaw, known=known, photos=photos) if initiating else None
     reread = False
     if judged and judged["kind"] != "estimate_request":
@@ -919,12 +913,6 @@ def process_claim(
     # The model's judgement that they point at something from before (the owner, 10 September 2026: judgement is the
     # model's, the rule is the floor); it decides the lookup below and never rides on the record.
     specification = dict(specification)
-    if repair_only:
-        # A repair stays out of new-piece discovery. The loose scheduling fact
-        # makes the ordinary appointment machinery offer a visit, while the
-        # repair branch below prevents the specification gate from asking
-        # design questions or automatically pricing bench work.
-        specification["scheduling_intent"] = specification.get("scheduling_intent") or "bring the repair in"
     model_says_earlier = bool(str(specification.pop("refers_to_earlier", "") or "").strip())
     specification = estimate_record.carry_prior_facts(record, specification)
     specification = estimate_record.merge_known_facts(record, specification)
@@ -1004,31 +992,6 @@ def process_claim(
             # Their reply stands, whatever it said: a correction or a photo already won above, in their own words.
             record = estimate_record.mark_prior_piece(p["record_root"], estimate_id, {"confirm": message_id})
     workflow_safe.write_private(review_path, {"specification": specification, "missing_required_fields": missing})
-    if repair_only:
-        # Record every fact and its source, but stop before any new-piece
-        # questionnaire or automatic price path. A price request is the
-        # jeweler's work; otherwise the desk tries to book the visit.
-        workflow_safe.review_thread(_namespace(p, message_id, estimate_id, review=review_path, runner=command_runner))
-        if repair_price_requested:
-            return _manual_review(p, message_id, "repair_estimate_requested", command_runner)
-        record = estimate_record.read_object(estimate_record.record_path(p["record_root"], estimate_id))
-        if record.get("appointment_booked"):
-            token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
-            kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
-            return {"outcome": "repair_details_recorded", "next": "done"}
-        intent = appointment_intent(p, digest, paths, model, judge_runner, openclaw, estimate_id=estimate_id)
-        intent["repair_request"] = True
-        intent_path = Path(paths["appointment_intent"])
-        workflow_safe.write_private(intent_path, intent)
-        workflow_safe.request_appointment_approval(argparse.Namespace(
-            monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"],
-            shop_profile=p.get("shop_profile"), message_id=message_id, estimate_id=estimate_id,
-            appointment_intent=intent_path, appointment_approval=Path(paths["appointment_approval"]),
-            record_output=Path(paths["current_record"]), defer_finalize_for_rendering=False,
-            runner=command_runner, judge_runner=judge_runner,
-        ))
-        return {"outcome": "appointment_approval_requested", "before_estimate": True,
-                "repair": True, "asks": [], "next": "done"}
     if estimate_record.desk_mode(profile) == "concierge":
         return _concierge_reply(p, message_id, estimate_id, record, specification, missing, digest, handled_words, initiating,
                                 paths, profile, model, judge_runner, openclaw, command_runner, review_path)

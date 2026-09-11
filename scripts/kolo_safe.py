@@ -1235,7 +1235,7 @@ def review_notice_claimed(
 # Reasons that still send a notice. Empty on purpose: the owner asked for
 # approvals and questions only. Add a reason here only with the owner's say.
 # A ready-made inquiry the desk could not book in two replies is the one review that tells the owner (WORKFLOW.md triage table).
-NOTIFY_REVIEW_REASONS: frozenset[str] = frozenset({"inventory_handoff", "repair_estimate_requested"})
+NOTIFY_REVIEW_REASONS: frozenset[str] = frozenset({"inventory_handoff"})
 
 
 def review_notice_claimed_or_alert(monitor_root, claim_root, message_id, claim_token, reason_code, runner):

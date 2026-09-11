@@ -903,13 +903,9 @@ def request_appointment_approval(args: argparse.Namespace) -> dict[str, Any]:
         options = approval.get("calendar_availability") or []
         paths = inbox_monitor.prepare_claim_work(args.monitor_root, args.claim_root, args.message_id)
         digest = _digest_from_work(paths, args.message_id, profile)
-        if approval.get("repair_request"):
-            before = {"this is a repair visit, not a new-piece design consultation":
-                      "they are bringing an existing item for inspection or repair; use repair language, never design language"}
-        else:
-            before = {"the visit": "the visit is to design your perfect piece together (write to the customer as you); "
-                                   "never mention an estimate or a quote, and do not ask for design details now"} \
-                if record.get("status") == "awaiting_specs" else {}
+        before = {"the visit": "the visit is to design your perfect piece together (write to the customer as you); "
+                               "never mention an estimate or a quote, and do not ask for design details now"} \
+            if record.get("status") == "awaiting_specs" else {}
         before.update(_inventory_fact(record))
         if approval.get("action_type") == "appointment_booking" and options:
             when = options[0]["label"]
@@ -2926,11 +2922,8 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         body, body_source = _draft_customer_email(p, record, args.message_id, kind, {
             "piece": piece, "time_labels": [chosen["label"]], "shop name": shop, **call_facts,
             "previous time (now cancelled)": existing.get("confirmed_start") if existing else "",
-            **({"this is a repair visit, not a new-piece design consultation":
-                "they are bringing an existing item for inspection or repair; use repair language, never design language"}
-               if approval.get("repair_request") else
-               ({"the visit": "the visit is to design your perfect piece together (write to the customer as you); never mention an estimate or a quote"}
-                if record.get("status") == "awaiting_specs" else {})),
+            **({"the visit": "the visit is to design your perfect piece together (write to the customer as you); never mention an estimate or a quote"}
+               if record.get("status") == "awaiting_specs" else {}),
             **_inventory_fact(record),
         }, fixed, args)
     held = _read_held(p, "appointment", args.estimate_id, args.message_id)
@@ -2994,17 +2987,6 @@ OFFER_NOTE_OUTSIDE_HOURS = (
     "Reply with the one that works and we will lock it in. If none of these fit, tell us what does within "
     "those hours and we will find something.\n\n{shop}\n"
 )
-REPAIR_OFFER_NOTE = (
-    "Hello,\n\nHappy to set up a time to inspect {piece} and go over the repair with you. Here is what is open on "
-    "our side:\n\n{lines}\n\nReply with the one that works and we will lock it in. If none of these fit, "
-    "tell us what does and we will find something.\n\n{shop}\n"
-)
-REPAIR_OFFER_NOTE_OUTSIDE_HOURS = (
-    "Hello,\n\nHappy to set up a time to inspect {piece} and go over the repair with you. We take appointments "
-    "{hours}, so {asked} falls outside our hours. Here is what is open on our side:\n\n{lines}\n\n"
-    "Reply with the one that works and we will lock it in. If none of these fit, tell us what does within "
-    "those hours and we will find something.\n\n{shop}\n"
-)
 
 
 _ASK_STOP = {"which", "would", "you", "like", "what", "your", "the", "a", "an", "or", "do", "have", "could", "confirm", "that", "rather", "than", "one", "with"}
@@ -3034,19 +3016,12 @@ def _offer_facts(approval: dict[str, Any], piece: str, labels: list[str], shop: 
     outside = [str(o) for o in (approval.get("outside_hours") or []) if str(o).strip()]
     hours = str(approval.get("hours") or "").strip()
     facts: dict[str, Any] = {"piece": piece, "time_labels": labels, "shop name": shop}
-    repair = bool(approval.get("repair_request"))
-    if repair:
-        facts["this is a repair visit, not a new-piece design consultation"] = (
-            "they are bringing an existing item for inspection or repair; use repair language, never design language"
-        )
     if outside and hours:
         facts["consultation hours"] = hours
         facts["the time they asked for is outside those hours"] = "; ".join(outside)
-        template = REPAIR_OFFER_NOTE_OUTSIDE_HOURS if repair else OFFER_NOTE_OUTSIDE_HOURS
-        fixed = template.format(piece=piece, hours=hours, asked="; ".join(outside), lines=lines, shop=shop)
+        fixed = OFFER_NOTE_OUTSIDE_HOURS.format(piece=piece, hours=hours, asked="; ".join(outside), lines=lines, shop=shop)
     else:
-        template = REPAIR_OFFER_NOTE if repair else OFFER_NOTE
-        fixed = template.format(piece=piece, lines=lines, shop=shop)
+        fixed = OFFER_NOTE.format(piece=piece, lines=lines, shop=shop)
     asks = [str(q).strip() for q in (approval.get("ask_for") or []) if str(q).strip()]
     if asks:
         # The customer also asked for a price: the same email asks the details the estimate needs (8 September 2026).
