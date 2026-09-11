@@ -1914,6 +1914,40 @@ def asks_for_estimate(own_words: str) -> bool:
     return bool(ASKS_FOR_ESTIMATE_RE.search(str(own_words or "")))
 
 
+REPAIR_WORK_RE = re.compile(
+    r"(?i)\b(?:resiz\w*|repair\w*|fix(?:ed|ing)?|restor\w*|solder\w*|refinish\w*|"
+    r"repolish\w*|polish\w*|re-?plate\w*|re-?set\w*|remount\w*|replace\w*\s+(?:a\s+|the\s+)?"
+    r"(?:stone|clasp|prong|shank|head)|size\s+\d+(?:\.\d+)?\s+(?:down|up|to))\b"
+)
+EXPLICIT_NEW_PIECE_RE = re.compile(
+    r"(?i)\b(?:new|another|matching|custom)\s+(?:piece|ring|band|earrings?|pendant|bracelet|necklace)|"
+    r"\b(?:make|create|design|build|commission)\s+(?:me\s+)?(?:a|an|new|another|matching)\b"
+)
+REPAIR_TIME_ESTIMATE_RE = re.compile(
+    r"(?i)\b(?:estimate|idea|sense)\s+(?:of\s+)?how\s+long\b|\btime\s+estimate\b|"
+    r"\bestimated?\s+(?:time|turnaround)\b|\bhow\s+long\b"
+)
+REPAIR_PRICE_WORD_RE = re.compile(r"(?i)\b(?:ballpark|quotes?|quotation|pricing|prices?|costs?|how much)\b")
+
+
+def is_repair_request(customer_words: str) -> bool:
+    """Whether the customer's own conversation explicitly concerns work on an existing item."""
+    return bool(REPAIR_WORK_RE.search(str(customer_words or "")))
+
+
+def explicitly_requests_new_piece(customer_words: str) -> bool:
+    """A repair photo or jewelry noun is not a new commission; the customer's words must introduce one."""
+    return bool(EXPLICIT_NEW_PIECE_RE.search(str(customer_words or "")))
+
+
+def asks_for_repair_price(newest_own_words: str) -> bool:
+    """A direct repair price request, excluding questions about turnaround time."""
+    words = str(newest_own_words or "")
+    if REPAIR_TIME_ESTIMATE_RE.search(words) and not REPAIR_PRICE_WORD_RE.search(words):
+        return False
+    return asks_for_estimate(words)
+
+
 LEAVES_TO_JEWELER_RE = re.compile(
     r"(?i)\b(?:i (?:don'?t|do not) know|not sure|no idea|no clue|not really|haven'?t (?:decided|thought about it)|no preference|up to you|"
     r"you (?:decide|choose|pick)|your call|whatever you (?:think|suggest|recommend)|what(?:ever)? (?:looks|works) best|"

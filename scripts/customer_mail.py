@@ -115,6 +115,7 @@ CLAIMS_A_MEETING_RE = re.compile(
     r"(?i)\b(?:reserved|booked|i have (?:you|us|it) down for|(?:confirm(?:ed|ing)|locked in|set aside) (?:our|your|the|that) "
     r"(?:meeting|appointment|time|slot)|(?:meeting|appointment) is (?:set|confirmed|booked)|see you (?:on|at) )"
 )
+REPAIR_AS_DESIGN_RE = re.compile(r"(?i)\b(?:design(?:ing)?|custom(?:ize|ized|isation|ization)?|perfect piece)\b")
 
 
 def _check(kind: str, facts: dict[str, Any], previous: str, sender: str = "") -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -135,6 +136,8 @@ def _check(kind: str, facts: dict[str, Any], previous: str, sender: str = "") ->
             # Live, 9 September 2026: an estimate email said "Thursday at 11am, which I have reserved" with nothing booked.
             raise ValueError("never say a meeting time is reserved, booked, or confirmed: no meeting is booked; "
                              "if they named a time, say only that you will confirm it separately")
+        if facts.get("this is a repair visit, not a new-piece design consultation") and REPAIR_AS_DESIGN_RE.search(body):
+            raise ValueError("this is a repair visit: never describe it as designing or customizing a new piece")
         if kind in ("confirmation", "reschedule") and "this is a phone call, not a visit" not in facts and SAYS_WILL_CALL_RE.search(body):
             # Live, 9 September 2026: a visit's confirmation said "I'll call you at (310) 810-3004" because the
             # signature had a number. A visit is a visit.

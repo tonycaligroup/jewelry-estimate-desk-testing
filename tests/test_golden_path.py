@@ -2160,6 +2160,59 @@ class MeetingFirstTests(SideBranchTests):
         self.run_branch(branch)
 
 
+class RepairInquiryTests(SideBranchTests):
+    """Live 10 Sep: a resizing estimate repeated design questions instead of bringing in the jeweler."""
+
+    INITIAL = ("Hello Tony,\n\nI wanted to bring these rings in to get them resized. They're currently a size 9 "
+               "and need to come down to a size 8.\n\nCan you help with this?\n\nDavid Trujillo")
+
+    def test_live_two_ring_resize_offers_a_visit_then_hands_the_estimate_to_the_jeweler(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            thread = "thread-resize-two-rings"
+            world.spec = {"piece_type": "rings", "quantity": 2, "finger_size": 9,
+                          "dimensions": "resize from size 9 to size 8"}
+            world.customer_message("rr1", thread, self.INITIAL,
+                                   subject="Estimate to Resize these Rings", attachments=("rings.png",))
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            offer = world.cards[-1]
+            self.assertEqual(offer["kind"], "appointment_offer", offer)
+            self.assertEqual(world.sent, [], "the repair gets an appointment card, not a design questionnaire")
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            self.assertRegex(world.sent[-1]["body"], r"(?i)repair|inspect|resiz")
+            self.assertNotRegex(world.sent[-1]["body"], r"(?i)designing|perfect piece|customiz")
+            sent_before = len(world.sent)
+
+            world.spec.update({"quantity": 2, "metal": "white gold", "metal_karat": "14k"})
+            world.customer_message("rr2", thread, "Can you provide an estimate before I drive out there?\n\nDavid",
+                                   subject="Re: Estimate to Resize these Rings")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["manual_review"], summary)
+            review = world.cards[-1]
+            self.assertEqual(review["kind"], "manual_review", review)
+            self.assertIn("Estimate to Resize these Rings", review["title"])
+            self.assertIn("repair estimate", (review["title"] + " " + json.dumps(review.get("details") or {})).lower())
+            self.assertEqual(self.claim(ws, "rr2")["status"], "manual_review")
+            self.assertEqual(len(world.sent), sent_before, "no customer questionnaire or automatic repair estimate")
+        self.run_branch(branch)
+
+    def test_turnaround_question_is_not_a_price_request(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "ring"}
+            world.customer_message("rt1", "thread-repair-time", "Can you estimate how long the ring repair will take?\n\nDavid",
+                                   subject="Ring repair timing")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.assertEqual(world.cards[-1]["kind"], "appointment_offer")
+            self.assertNotEqual(self.claim(ws, "rt1")["status"], "manual_review")
+        self.run_branch(branch)
+
+    def test_an_explicit_matching_piece_is_not_swallowed_by_the_repair_route(self) -> None:
+        words = "Please resize this ring and make me a matching band."
+        self.assertTrue(estimate_record.is_repair_request(words))
+        self.assertTrue(estimate_record.explicitly_requests_new_piece(words))
+
+
 class OutOfScopeTests(SideBranchTests):
     """Live 8 Sep: a customer's message the reading called out of scope was filed silently; now the owner decides."""
 
