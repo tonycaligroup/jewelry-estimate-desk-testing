@@ -302,6 +302,8 @@ def build_request_appointment_approval(
     details_object = json.loads(read_json_argument(details))
     if details_object.get("action_type") not in {"appointment_booking", "appointment_offer"}:
         raise ValueError("appointment approval action_type must be appointment_booking or appointment_offer")
+    if not isinstance(details_object.get("execute"), str) or not details_object["execute"].strip():
+        raise ValueError("appointment approval execution payload must include a non-empty execute command")
     if details_object.get("estimate_id") != estimate_id:
         raise ValueError("appointment approval estimate_id does not match")
     payload = json.dumps(

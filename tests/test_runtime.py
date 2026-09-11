@@ -1389,6 +1389,7 @@ class SafeCliTests(unittest.TestCase):
                 "schema_version": 1,
                 "action_type": "appointment_booking",
                 "estimate_id": "jed-0123456789abcdef",
+                "execute": "python3 workflow_safe.py book-approved-appointment --estimate-id jed-0123456789abcdef",
             }), encoding="utf-8")
             _, claim = inbox_claim.acquire(root, "appointment-message")
             runner = Mock(
@@ -1519,6 +1520,7 @@ class SafeCliTests(unittest.TestCase):
                 "thread_id": "gmail-thread",
                 "requested_times": ["Friday afternoon"],
                 "calendar_availability": [],
+                "execute": "python3 workflow_safe.py book-approved-appointment --estimate-id jed-0123456789abcdef",
             }), encoding="utf-8")
             argv = kolo_safe.build_request_appointment_approval(
                 "jed-0123456789abcdef",
@@ -1530,6 +1532,22 @@ class SafeCliTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--agent-id") + 1], "main")
         payload = json.loads(argv[argv.index("--execution-payload") + 1])
         self.assertEqual(payload["action_type"], "appointment_booking")
+
+    def test_appointment_card_rejects_an_empty_execution_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            details = Path(directory) / "appointment.json"
+            details.write_text(json.dumps({
+                "schema_version": 1,
+                "action_type": "appointment_booking",
+                "estimate_id": "jed-0123456789abcdef",
+                "execute": "",
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "non-empty execute command"):
+                kolo_safe.build_request_appointment_approval(
+                    "jed-0123456789abcdef",
+                    details,
+                    "agent:main:kolo:test-session",
+                )
 
     def test_claimed_owner_notification_records_sent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

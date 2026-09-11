@@ -279,8 +279,17 @@ releases the held send alone after thirty minutes.
 
 An optional spreadsheet mirror, off until set up, shows every customer, the
 week's meetings, every price card, and every fact with its source, rewritten
-after each tick that changed something; nothing is ever read back from it. To
-set it up once, in the desk session:
+after each tick that changed something; nothing is ever read back from it.
+
+During initial setup, explicitly ask the owner whether they want to create a
+new Google Sheet, use an existing Sheet, or leave the mirror off for now. Do
+not omit the question because the mirror is optional, and do not create or
+adopt a Sheet without their choice. If Google Sheets is not connected, tell
+the owner that the desk can wait while they connect it and continue only when
+they are ready; leaving the mirror off must not block the rest of setup or
+activation.
+
+To set it up once, in the desk session:
 
 ```bash
 python3 {baseDir}/scripts/sheet_mirror.py setup --workspace '<absolute-workspace>'
@@ -765,6 +774,17 @@ delivers an approval to you, do nothing: run no line, and tell the owner
 nothing, since the desk reports the outcome on the card. If you run the
 line anyway it finds the first run's journal and does nothing more (its
 output says `already_sent`, `already_booked`, or `already_offered`). Never
+inspect, repair, revise, or resubmit an approved brief. This remains true
+when the delivered approval has an empty or incomplete execution payload:
+the watcher reconstructs the command from the desk's private brief registry
+and durable estimate or appointment state. Do not ask the owner for an
+estimate id, message id, command, or clarification about what the approved
+card meant. In particular, never call `kolo request-approval` to replace it.
+When the owner gives a different time after rejecting an appointment card,
+run the exact `desk-answer` line the desk delivered for that open question;
+that path recovers the estimate and message ids internally and files a fresh,
+complete card. Never turn the owner's words into a manual card revision.
+Never
 run `kolo update-brief` yourself: the line reports the brief (its output
 says so in `brief_reported`), and Kolo refuses a second report on the same
 brief; that refusal is not a fault and is never reported to the owner. The one card you still run is a
