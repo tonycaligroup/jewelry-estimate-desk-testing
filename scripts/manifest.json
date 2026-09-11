@@ -28,7 +28,7 @@
     "inbox_monitor.py": "84f4729647905abaeb87c8a98b77ca0e",
     "inbox_watcher.py": "569f13ec7832543dba21565b8eb1b9d7",
     "judge.py": "32fbf726b40a1328530c64d6d00380d5",
-    "kolo_safe.py": "d51a9d2d1e4502d71b090857fb5a03b6",
+    "kolo_safe.py": "ea680856d31cabf6fd0d15dca41fc684",
     "ledger.py": "60fc3fef57d134bff07e258e02605478",
     "manifest.py": "a94d8af8a570000c8e2dbe027243555f",
     "owner_questions.py": "4773b2529067d3e798dc36562f385014",
