@@ -1389,6 +1389,7 @@ class SafeCliTests(unittest.TestCase):
                 "schema_version": 1,
                 "action_type": "appointment_booking",
                 "estimate_id": "jed-0123456789abcdef",
+                "execute": "python3 workflow_safe.py book-approved-appointment --estimate-id jed-0123456789abcdef",
             }), encoding="utf-8")
             _, claim = inbox_claim.acquire(root, "appointment-message")
             runner = Mock(
