@@ -1301,6 +1301,38 @@ def intake(args: argparse.Namespace) -> dict[str, Any]:
         and not getattr(args, "force_new_inquiry", False)
         and len(messages) == 1
     ):
+        # A sender with an open estimate may also send an unrelated report
+        # from the same ordinary address. Read this new thread before asking
+        # whether it is the same piece: only a clear non-inquiry closes
+        # automatically; ambiguous readings and model failures keep the
+        # owner's existing same/new/unrelated question (live, 11 September
+        # 2026: "Morning Toast - Gladstones" repeatedly interrupted the
+        # earrings estimate).
+        try:
+            relevance_digest = gmail_text.thread_digest(thread, args.message_id, mailbox)
+            newest_own_words = reading_check.own_words(gmail_text.body_text(message, limit=4000))
+            relevance_digest["messages"] = [
+                {**item, "body": newest_own_words}
+                for item in relevance_digest.get("messages") or []
+                if item.get("claimed")
+            ]
+            relevance = judge.triage(
+                relevance_digest,
+                getattr(args, "model", None),
+                getattr(args, "judge_runner", subprocess.run),
+                getattr(args, "openclaw", None),
+            )
+        except judge.JudgmentError:
+            relevance = None
+        if relevance and relevance.get("kind") in {"vendor_or_marketing", "personal_or_internal", "unrelated"}:
+            kolo_safe.complete_claimed(args.monitor_root, args.claim_root, args.message_id, token)
+            result.update({
+                "decision": "not_an_inquiry",
+                "reason_code": relevance["kind"],
+                "outcome": "not_an_inquiry",
+                "next_action": "done",
+            })
+            return result
         # "The pendant you made for me, but smaller": a new piece after one on file, not the same piece continued
         # (the jeweler, 9 September 2026); the owner is not asked which. The rules are the floor; when none reads it,
         # the model judges the one email (the owner, 10 September 2026).

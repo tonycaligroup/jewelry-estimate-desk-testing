@@ -5068,6 +5068,45 @@ class SameSenderTests(SideBranchTests):
             self.assertEqual([f["code"] for f in doctor.scan(ws) if f["level"] != "info"], [])
         self.run_branch(branch)
 
+    def test_obviously_unrelated_new_thread_does_not_ask_about_the_open_piece(self) -> None:
+        """Live 11 Sep: an automated restaurant report from Tony's address was repeatedly compared with his earrings."""
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "stud earrings", "metal": "rose gold", "metal_karat": "18k",
+                          "stone_type": "diamond", "stone_origin": "lab-grown", "stone_carat": 1,
+                          "stone_carat_basis": "each", "earring_style": "stud"}
+            world.customer_message("f1", "thread-earrings", "Please quote 18k rose gold lab-grown diamond studs, 1 ct each.\n\nTony",
+                                   subject="Diamond earrings")
+            self.tick(ws, world)
+            notices_before = len(world.notices)
+            records_before = sorted((ws / "estimate-desk" / "records").glob("*.json"))
+
+            world.triage_kind = "unrelated"
+            world.customer_message("toast1", "thread-toast", "Morning Toast report for Gladstones. Covers, sales and labor attached.\n\nTony\n\n"
+                                   "On Tuesday someone wrote:\n> Please quote my diamond earrings",
+                                   subject="Morning Toast - Gladstones - 2026-09-11")
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["inline_failures"], 0, summary)
+            self.assertEqual(self.claim(ws, "toast1")["status"], "processed")
+            self.assertEqual(len(world.notices), notices_before, "no same/new/unrelated question")
+            self.assertEqual(sorted((ws / "estimate-desk" / "records").glob("*.json")), records_before,
+                             "the report creates no jewelry estimate")
+        self.run_branch(branch)
+
+    def test_ambiguous_new_thread_keeps_the_owner_question(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "ring", "metal": "yellow gold", "metal_karat": "14k"}
+            world.customer_message("f1", "thread-first", "A plain 14k yellow gold ring please.\n\nPat", subject="Ring")
+            self.tick(ws, world)
+            world.triage_kind = "not_a_quote_request"
+            world.customer_message("a1", "thread-ambiguous", "Following up. Can you help me with this?\n\nPat",
+                                   subject="Following up")
+            self.tick(ws, world)
+            asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertIn("same piece, a new one, or unrelated to jewelry", asked[0]["text"])
+            self.assertEqual(self.claim(ws, "a1")["status"], "awaiting_owner")
+        self.run_branch(branch)
+
     def test_same_on_a_new_thread_after_the_estimate_books_the_meeting_in_the_new_thread(self) -> None:
         """The live script: estimate sent, the customer asks to meet from a brand-new thread, owner says same."""
         def branch(ws: Path, world: World) -> None:
