@@ -1619,9 +1619,15 @@ class OwnStoneAndStallTests(SideBranchTests):
                 raise OSError("judgement: the model provider answered 503")
             return json.dumps(world.answer(prompt))
 
+        def fake_resolve(pin=None, **kw):  # noqa: ANN001, ANN003
+            selected = image_provider.model_name(pin, image_provider.MODEL_PREFERENCE[0])
+            image_provider.RESOLVED_MODEL = selected
+            world.calls.append("model_probe")
+            return {"model": selected, "pinned": bool(pin), "skipped": []}
+
         return (patch.dict(os.environ, {"LITELLM_BASE_URL": "http://proxy.local:4000", "LITELLM_API_KEY": "k"}),
                 patch.object(image_provider, "generate", fake_generate), patch.object(image_provider, "describe", fake_describe),
-                patch.object(image_provider, "chat", fake_chat))
+                patch.object(image_provider, "chat", fake_chat), patch.object(image_provider, "resolve_model", side_effect=fake_resolve))
 
     def test_with_the_provider_reachable_a_two_piece_rendering_lands_in_one_tick(self) -> None:
         """Kolo's probe, 8 September 2026: the proxy answers a generation in 11 s and takes calls in parallel.
@@ -1634,8 +1640,8 @@ class OwnStoneAndStallTests(SideBranchTests):
             thread, _estimate_id = self._estimate_sent(ws, world, spec=two, text="Two plain polished 18k bands, one yellow one rose, size 10.\n\nPat")
             world.intents = ["rendering_request"]
             world.customer_message("s2", thread, "Could you send renderings?\n\nPat")
-            env, gen, desc, chat = self._direct_provider(world)
-            with env, gen, desc, chat:
+            env, gen, desc, chat, resolver = self._direct_provider(world)
+            with env, gen, desc, chat, resolver:
                 summary = self.one_tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["rendering_approval_requested"], summary)
             self.assertEqual(world.calls.count("image_direct"), 4, "four views, all in this tick")
@@ -1653,8 +1659,8 @@ class OwnStoneAndStallTests(SideBranchTests):
             thread, _estimate_id = self._estimate_sent(ws, world)
             world.intents = ["rendering_request"]
             world.customer_message("s2", thread, "Could you send a rendering?\n\nPat")
-            env, gen, desc, chat = self._direct_provider(world)
-            with env, gen, desc, chat:
+            env, gen, desc, chat, resolver = self._direct_provider(world)
+            with env, gen, desc, chat, resolver:
                 summary = self.one_tick(ws, world)
             self.assertEqual([i["outcome"] for i in summary["inline"]], ["rendering_approval_requested"], summary)
             self.assertEqual(world.calls.count("image_describe_direct"), 0, "no vision call")
@@ -1683,11 +1689,12 @@ class OwnStoneAndStallTests(SideBranchTests):
     def test_the_whole_golden_path_runs_on_the_direct_transport(self) -> None:
         """RELEASE-PLAN-4.14.md: the same prompts and checks, the proxy instead of the CLI; no CLI model call is made."""
         def branch(ws: Path, world: World) -> None:
-            env, gen, desc, chat = self._direct_provider(world)
-            with env, gen, desc, chat:
+            env, gen, desc, chat, resolver = self._direct_provider(world)
+            with env, gen, desc, chat, resolver:
                 self._golden_path(ws, world)
             self.assertGreater(world.calls.count("model_direct"), 5, "the judgements went direct")
             self.assertEqual(world.calls.count("model"), 0, "no CLI model call")
+            self.assertEqual(world.calls.count("model_probe"), 1, "the hourly cache avoids probing on every watcher tick")
         self.run_branch(branch)
 
     def _parallel_profile(self, ws: Path, parallel: int, claims: int = 16) -> None:
@@ -1708,10 +1715,11 @@ class OwnStoneAndStallTests(SideBranchTests):
             for n in range(1, 7):
                 world.customer_message(f"b{n}", f"thread-b{n}", f"A 14k signet ring, size 10, logo on the face, small lab-grown diamonds G VS bead set. Customer {n}\n\nPat {n}",
                                        subject=f"Signet {n}", sender=f"customer{n}@example.org")
-            env, gen, desc, chat = self._direct_provider(world)
-            with env, gen, desc, chat:
+            env, gen, desc, chat, resolver = self._direct_provider(world)
+            with env, gen, desc, chat, resolver:
                 summary = self.one_tick(ws, world)
             self.assertEqual(summary["transport"], "direct")
+            self.assertEqual(summary["model"], "qwen-3-7-plus")
             outcomes = sorted((i["message_id"], i["outcome"]) for i in summary["inline"])
             self.assertEqual(outcomes, [(f"b{n}", "approval_requested") for n in range(1, 7)], summary)
             self.assertEqual(summary["claimed"], 6)
@@ -1731,8 +1739,8 @@ class OwnStoneAndStallTests(SideBranchTests):
                           "engraving": "our logo on the face", "accent_stones": "small lab-grown diamonds along the shoulders",
                           "stone_type": "diamond", "stone_origin": "lab-grown", "stone_color": "G", "stone_clarity": "VS"}
             world.customer_message("t1", "thread-t", "A 14k signet ring, logo on the face, small lab-grown diamonds G VS.\n\nPat", subject="Signet")
-            env, gen, desc, chat = self._direct_provider(world)
-            with env, gen, desc, chat:
+            env, gen, desc, chat, resolver = self._direct_provider(world)
+            with env, gen, desc, chat, resolver:
                 first = self.one_tick(ws, world)
                 self.assertEqual([i["outcome"] for i in first["inline"]], ["followup_sent"], first)
                 # The customer answers the follow-up, and a stranger writes at the same moment.
@@ -3339,7 +3347,7 @@ class PriorPieceTests(SideBranchTests):
             self.assertEqual([n for n in world.notices if not n["file"] and "desk-answer" in n["text"]], [], "no question to the owner, same or new")
             self.assertEqual(len(world.sent), 2, "one email: the piece said back, is that the one")
             confirm = world.sent[-1]["body"]
-            self.assertIn("after the design we discussed before", confirm)
+            self.assertIn("after the design we quoted before", confirm)
             self.assertRegex(confirm, r"(?i)the piece you have in mind")
             self.assertNotRegex(confirm, r"(?i)carat weight|studs, hoops|karat", "nothing on file is asked")
             world.customer_message("tb1b", "thread-more-earrings", "Yes, exactly those.\n\nAnthony", subject="Re: More earrings")
@@ -3352,7 +3360,7 @@ class PriorPieceTests(SideBranchTests):
             self.assertEqual((spec["metal_karat"], spec["setting_style"], spec["earring_style"], spec["stone_carat"]), ("18k", "halo", "stud", 2.5),
                              "everything else from the earlier estimate; the reading's 'prong' guess gives way to the halo on file")
             self.assertEqual(spec["accent_stones"], "diamond halo", "the halo's diamonds ride along for the render")
-            self.assertIn("after the design we discussed before", estimate_record.vision_in_words(spec, on_file=estimate_record.prior_basis(self.record(ws, new_id))))
+            self.assertIn("after the design we quoted before", estimate_record.vision_in_words(spec, on_file=estimate_record.prior_basis(self.record(ws, new_id))))
             self.assertEqual(self.record(ws, new_id)["prior_piece"]["estimate_id"], first_id)
             title = world.cards[-1]["title"]
             self.assertTrue(title.startswith("Price approval"), title)
@@ -5013,6 +5021,45 @@ class SameSenderTests(SideBranchTests):
             self.assertEqual(doctor.requeue(ws, "s2")["outcome"], "requeued")
             self.assertEqual(self.questions(ws, "open"), [], "the requeue answered the question")
             self.assertEqual([f["code"] for f in doctor.scan(ws) if f["level"] != "info"], [])
+        self.run_branch(branch)
+
+    def test_obviously_unrelated_new_thread_does_not_ask_about_the_open_piece(self) -> None:
+        """Live 11 Sep: an automated restaurant report from Tony's address was repeatedly compared with his earrings."""
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "stud earrings", "metal": "rose gold", "metal_karat": "18k",
+                          "stone_type": "diamond", "stone_origin": "lab-grown", "stone_carat": 1,
+                          "stone_carat_basis": "each", "earring_style": "stud"}
+            world.customer_message("f1", "thread-earrings", "Please quote 18k rose gold lab-grown diamond studs, 1 ct each.\n\nTony",
+                                   subject="Diamond earrings")
+            self.tick(ws, world)
+            notices_before = len(world.notices)
+            records_before = sorted((ws / "estimate-desk" / "records").glob("*.json"))
+
+            world.triage_kind = "unrelated"
+            world.customer_message("toast1", "thread-toast", "Morning Toast report for Gladstones. Covers, sales and labor attached.\n\nTony\n\n"
+                                   "On Tuesday someone wrote:\n> Please quote my diamond earrings",
+                                   subject="Morning Toast - Gladstones - 2026-09-11")
+            summary = self.tick(ws, world)
+            self.assertEqual(summary["inline_failures"], 0, summary)
+            self.assertEqual(self.claim(ws, "toast1")["status"], "processed")
+            self.assertEqual(len(world.notices), notices_before, "no same/new/unrelated question")
+            self.assertEqual(sorted((ws / "estimate-desk" / "records").glob("*.json")), records_before,
+                             "the report creates no jewelry estimate")
+        self.run_branch(branch)
+
+    def test_ambiguous_new_thread_keeps_the_owner_question(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            world.spec = {"piece_type": "ring", "metal": "yellow gold", "metal_karat": "14k"}
+            world.customer_message("f1", "thread-first", "A plain 14k yellow gold ring please.\n\nPat", subject="Ring")
+            self.tick(ws, world)
+            world.triage_kind = "not_a_quote_request"
+            world.customer_message("a1", "thread-ambiguous", "Following up. Can you help me with this?\n\nPat",
+                                   subject="Following up")
+            self.tick(ws, world)
+            asked = [n for n in world.notices if not n["file"] and "desk-answer" in n["text"]]
+            self.assertEqual(len(asked), 1, asked)
+            self.assertIn("same piece, a new one, or unrelated to jewelry", asked[0]["text"])
+            self.assertEqual(self.claim(ws, "a1")["status"], "awaiting_owner")
         self.run_branch(branch)
 
     def test_same_on_a_new_thread_after_the_estimate_books_the_meeting_in_the_new_thread(self) -> None:

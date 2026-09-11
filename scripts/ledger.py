@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS facts (
 );
 CREATE INDEX IF NOT EXISTS facts_estimate ON facts(estimate_id);
 """
+_CONNECT_LOCK = threading.Lock()
 
 
 def path(desk: Path) -> Path:
@@ -63,9 +65,10 @@ def connect(desk: Path) -> sqlite3.Connection:
     Path(desk).mkdir(parents=True, exist_ok=True, mode=0o700)
     connection = sqlite3.connect(str(path(desk)), timeout=30, isolation_level=None)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA busy_timeout=30000")
-    connection.executescript(SCHEMA)
+    with _CONNECT_LOCK:
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.executescript(SCHEMA)
     try:
         path(desk).chmod(0o600)
     except OSError:

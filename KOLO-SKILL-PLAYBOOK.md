@@ -463,3 +463,16 @@ returned 200 and the row landed; POST `spreadsheets` (create, with two
 tabs) returned 200 with the id and URL. No second credential is needed for
 a spreadsheet mirror, and setup can create the sheet itself. A placeholder id returns a Sheets "not found" 404,
 which itself shows the gateway path and the scope are right.
+
+## Verified 11 September 2026: trust the served model, not a successful response
+
+- The desk resolves direct inference at watcher start in this order:
+  `qwen-3-7-plus`, `glm-5-3-flash`, `claude-haiku-4-5`. A candidate is
+  accepted only when the chat-completion response's top-level `model` exactly
+  equals the requested name; a proxy fallback is recorded and skipped.
+- One resolved name is shared by extraction, classification, drafting, the
+  behavior checker, and direct vision for the tick. Every direct call verifies
+  the served name again and records a mismatch without logging prompts or keys.
+- A `pipeline.json` model pin probes only that name and fails closed if it is
+  unavailable or substituted. Readiness reports the resolved model and the
+  bounded reason for every higher preference it skipped.

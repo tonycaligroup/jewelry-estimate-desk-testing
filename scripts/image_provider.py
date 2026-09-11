@@ -29,10 +29,51 @@ DEFAULT_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_VISION_MODEL = "kolo-best-available"  # the CLI's alias
 DIRECT_VISION_MODEL = "qwen-3-7-plus"  # what the proxy knows; vision-capable (platform facts, 4 Sep 2026)
 CLI_ALIASES = ("kolo-best-available",)
+MODEL_PREFERENCE = ("qwen-3-7-plus", "glm-5-3-flash", "claude-haiku-4-5")
+RESOLVED_MODEL: str | None = None
+MODEL_EVENTS: list[dict[str, str]] = []
+MODEL_CACHE_PATH: Path | None = None
+
+
+def reset_model_resolution() -> None:
+    global RESOLVED_MODEL
+    RESOLVED_MODEL = None
+    MODEL_EVENTS.clear()
+
+
+def resolved_model() -> str | None:
+    return RESOLVED_MODEL
+
+
+def set_model_cache_path(path: Path | None) -> None:
+    global MODEL_CACHE_PATH
+    MODEL_CACHE_PATH = path
+
+
+def invalidate_model_cache() -> None:
+    global RESOLVED_MODEL
+    RESOLVED_MODEL = None
+    if MODEL_CACHE_PATH is not None:
+        MODEL_CACHE_PATH.unlink(missing_ok=True)
+
+
+def _served_name(value: dict[str, Any]) -> str:
+    return str(value.get("model") or "").strip()
+
+
+def _verify_served(requested: str, value: dict[str, Any], what: str) -> None:
+    served = _served_name(value)
+    if served == requested:
+        return
+    MODEL_EVENTS.append({"requested": requested, "served": served or "(missing)", "status": "mismatch"})
+    invalidate_model_cache()
+    raise OSError(f"{what}: requested model {requested} but the provider served {served or '(missing)'}")
 
 
 def vision_model_name(model: str | None) -> str:
     """The proxy's id for the vision model: the CLI's alias becomes a real model."""
+    if RESOLVED_MODEL:
+        return RESOLVED_MODEL
     name = model_name(model, DEFAULT_VISION_MODEL)
     return DIRECT_VISION_MODEL if name in CLI_ALIASES else name
 GENERATE_TIMEOUT_SECONDS = 180
@@ -175,8 +216,9 @@ def describe(image: Path, prompt: str, model: str | None = None, timeout: float 
     base, key = found
     seconds = float(timeout or DESCRIBE_TIMEOUT_SECONDS)
     encoded = base64.b64encode(Path(image).read_bytes()).decode("ascii")
+    requested = vision_model_name(model)
     body = json.dumps({
-        "model": vision_model_name(model),
+        "model": requested,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
@@ -186,6 +228,7 @@ def describe(image: Path, prompt: str, model: str | None = None, timeout: float 
         "reasoning_effort": "none",  # live, 8 September 2026: every vision check came back empty with thinking on
     }).encode()
     value = _post(f"{base}/v1/chat/completions", key, body, "application/json", seconds, "vision check", opener)
+    _verify_served(requested, value, "vision check")
     choices = value.get("choices")
     message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
     content = message.get("content") if isinstance(message, dict) else None
@@ -200,6 +243,65 @@ CHAT_TIMEOUT_SECONDS = 60
 DEFAULT_CHAT_MODEL = "qwen-3-7-plus"
 
 
+def _chat_completion(prompt: str, model: str, timeout: float, temperature: float, max_tokens: int,
+                     env: dict[str, str] | None, opener: Opener, verify: bool = True,
+                     what: str = "judgement") -> tuple[str, str]:
+    found = credentials(env)
+    if found is None:
+        raise OSError("the model provider is not configured in this environment")
+    base, key = found
+    requested = model_name(model, DEFAULT_CHAT_MODEL)
+    body = json.dumps({
+        "model": requested,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": float(temperature),
+        "max_tokens": int(max_tokens),
+        "reasoning_effort": "none",
+    }).encode()
+    value = _post(f"{base}/v1/chat/completions", key, body, "application/json", timeout, what, opener)
+    if verify:
+        _verify_served(requested, value, what)
+    choices = value.get("choices")
+    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    if not isinstance(content, str) or not content.strip():
+        raise OSError(f"{what}: the model returned no text")
+    return content, _served_name(value)
+
+
+def resolve_model(pin: str | None = None, env: dict[str, str] | None = None,
+                  opener: Opener = urlopen, last_good: str | None = None) -> dict[str, Any]:
+    """Resolve one model by observed provider identity, never by a successful fallback response."""
+    global RESOLVED_MODEL
+    pinned = model_name(pin, "") if str(pin or "").strip() else None
+    candidates = (pinned,) if pinned else MODEL_PREFERENCE
+    if not pinned and last_good in MODEL_PREFERENCE:
+        candidates = (last_good,) + tuple(name for name in MODEL_PREFERENCE if name != last_good)
+    skipped: list[dict[str, str]] = []
+    if pinned:
+        skipped.extend({"model": name, "reason": f"pipeline.json pins {pinned}"}
+                       for name in MODEL_PREFERENCE if name != pinned)
+    for candidate in candidates:
+        try:
+            _text, served = _chat_completion(
+                "Reply with exactly OK.", candidate, 20.0, 0.0, 8, env, opener,
+                verify=False, what="model probe",
+            )
+        except OSError as exc:
+            skipped.append({"model": candidate, "reason": str(exc)[:160]})
+            continue
+        if served != candidate:
+            MODEL_EVENTS.append({"requested": candidate, "served": served or "(missing)", "status": "mismatch"})
+            skipped.append({"model": candidate, "reason": f"provider served {served or '(missing)'}"})
+            continue
+        RESOLVED_MODEL = candidate
+        return {"model": candidate, "pinned": bool(pinned), "skipped": skipped}
+    detail = "; ".join(f"{item['model']}: {item['reason']}" for item in skipped)
+    raise OSError(f"no preferred model was served by name" + (f" ({detail})" if detail else ""))
+
+
 def chat(prompt: str, model: str | None = None, timeout: float | None = None, temperature: float = 0.0,
          max_tokens: int = 1500, env: dict[str, str] | None = None, opener: Opener = urlopen) -> str:
     """One judgement: the prompt as a single user message, thinking off, the answer's text.
@@ -209,26 +311,10 @@ def chat(prompt: str, model: str | None = None, timeout: float | None = None, te
     `reasoning_effort: "none"` gives the clean JSON the desk needs in about a
     second (13 s through the CLI), ~180 completion tokens.
     """
-    found = credentials(env)
-    if found is None:
-        raise OSError("the model provider is not configured in this environment")
-    base, key = found
-    body = json.dumps({
-        "model": model_name(model, DEFAULT_CHAT_MODEL),
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": float(temperature),
-        "max_tokens": int(max_tokens),
-        "reasoning_effort": "none",
-    }).encode()
-    value = _post(f"{base}/v1/chat/completions", key, body, "application/json",
-                  float(timeout or CHAT_TIMEOUT_SECONDS), "judgement", opener)
-    choices = value.get("choices")
-    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, list):
-        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
-    if not isinstance(content, str) or not content.strip():
-        raise OSError("judgement: the model returned no text")
+    chosen = model or RESOLVED_MODEL or DEFAULT_CHAT_MODEL
+    content, _served = _chat_completion(
+        prompt, chosen, float(timeout or CHAT_TIMEOUT_SECONDS), temperature, max_tokens, env, opener,
+    )
     return content
 
 

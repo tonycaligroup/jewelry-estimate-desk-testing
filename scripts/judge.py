@@ -154,7 +154,8 @@ def complete(
     if image_provider.available(MODEL_PROVIDER_MODE):
         started = time.monotonic()
         try:
-            text = image_provider.chat(prompt, model=model or DEFAULT_MODEL, timeout=min(timeout, image_provider.CHAT_TIMEOUT_SECONDS),
+            text = image_provider.chat(prompt, model=model or image_provider.resolved_model() or DEFAULT_MODEL,
+                                       timeout=min(timeout, image_provider.CHAT_TIMEOUT_SECONDS),
                                        temperature=temperature)
         except OSError as exc:
             CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": False, "transport": "direct"})
@@ -162,7 +163,7 @@ def complete(
             raise JudgmentError(f"completion call failed: {exc}", transient=not refused) from exc
         CALL_LOG.append({"seconds": round(time.monotonic() - started, 3), "prompt_chars": len(prompt), "ok": True, "transport": "direct"})
         return text
-    argv = infer_argv(prompt, model or DEFAULT_MODEL, openclaw or default_openclaw())
+    argv = infer_argv(prompt, model or image_provider.resolved_model() or DEFAULT_MODEL, openclaw or default_openclaw())
     started = time.monotonic()
     try:
         completed = runner(argv, check=False, capture_output=True, text=True, shell=False, timeout=timeout)
@@ -417,6 +418,8 @@ def extract_specification(
         "(studs, hoops, huggies, drops, dangles); omit it otherwise. "
         "stone_dimensions is the stone size the customer wants in millimetres (\"15mm x 12mm oval\"), the size they "
         "want, not one they are comparing against; omit it otherwise. "
+        "A fancy diamond color (yellow, pink, blue, black, brown, champagne, cognac, green, orange, red, grey, or salt-and-pepper) "
+        "is part of the stone_type, for example yellow diamond, not a stone_color grade. A letter grade or colorless remains stone_color. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "
@@ -498,6 +501,8 @@ def triage_and_extract(
         "(studs, hoops, huggies, drops, dangles); omit it otherwise. "
         "stone_dimensions is the stone size the customer wants in millimetres (\"15mm x 12mm oval\"), the size they "
         "want, not one they are comparing against; omit it otherwise. "
+        "A fancy diamond color (yellow, pink, blue, black, brown, champagne, cognac, green, orange, red, grey, or salt-and-pepper) "
+        "is part of the stone_type, for example yellow diamond, not a stone_color grade. A letter grade or colorless remains stone_color. "
         "stone_color and stone_clarity describe the center or main stone only; a grade the customer gives for the halo, "
         "pave, or accent stones (\"D color VS1 on the halo\") goes in accent_stone_color and accent_stone_clarity, "
         "their kind in accent_stone_type and their origin in accent_stone_origin, never in the center stone's keys. "

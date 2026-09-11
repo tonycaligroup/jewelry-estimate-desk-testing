@@ -25,6 +25,18 @@ every pre-activation inquiry manually.
    replace a different activating user. Never ask for an approver name or email.
    Isolated cron runs do not call `sessions_list`; `workflow_safe.py` loads this
    binding itself when it requests approval.
+   Install the desk-owned gateway token before creating the watcher. This
+   copies the current gateway token into a private `0600` file and never prints
+   its value:
+
+   ```bash
+   python3 {baseDir}/scripts/gateway_token.py install
+   ```
+
+   Once this file exists, the desk always uses it in preference to
+   `MATON_API_KEY_FILE` or `MATON_API_KEY`. This prevents a later
+   process-environment change from silently swapping the Gmail gateway
+   credential.
 2. Perform a read-only capability check. Verify that the Gmail integration can:
    use `after:<epoch-seconds>`, return integer `internalDate` epoch milliseconds,
    and enumerate every page until no `nextPageToken` remains. Write a private
@@ -264,4 +276,3 @@ edit their JSON directly. After the reset, conduct the normal first-time setup
 questions, bind the current Kolo user as approver, verify the live cron binding,
 activate the monitor with a fresh forward-only watermark, and enable the cron
 only when setup is complete and the user is ready.
-

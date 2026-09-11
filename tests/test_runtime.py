@@ -5886,16 +5886,29 @@ class GatewayTokenTests(unittest.TestCase):
             path.write_text("file-token\n", encoding="utf-8")
             os.chmod(path, 0o600)
             env = {"MATON_API_KEY_FILE": str(path), "MATON_API_KEY": "env-token"}
-            self.assertEqual(gateway_token.load_token(env), "file-token")
-            os.chmod(path, 0o640)
-            with self.assertRaisesRegex(ValueError, "group or others"):
-                gateway_token.load_token(env)
-            os.chmod(path, 0o600)
-            path.write_text("two words\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "usable token"):
-                gateway_token.load_token(env)
-            with self.assertRaisesRegex(ValueError, "does not exist"):
-                gateway_token.load_token({"MATON_API_KEY_FILE": str(Path(directory) / "missing")})
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path(directory) / "not-installed"):
+                self.assertEqual(gateway_token.load_token(env), "file-token")
+                os.chmod(path, 0o640)
+                with self.assertRaisesRegex(ValueError, "group or others"):
+                    gateway_token.load_token(env)
+                os.chmod(path, 0o600)
+                path.write_text("two words\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "usable token"):
+                    gateway_token.load_token(env)
+                with self.assertRaisesRegex(ValueError, "does not exist"):
+                    gateway_token.load_token({"MATON_API_KEY_FILE": str(Path(directory) / "missing")})
+
+    def test_desk_token_cannot_be_replaced_by_environment_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            desk_token = Path(directory) / "desk" / "maton-api-key"
+            stale_token = Path(directory) / "stale-maton-api-key"
+            stale_token.write_text("stale-token\n", encoding="utf-8")
+            os.chmod(stale_token, 0o600)
+            env = {"MATON_API_KEY_FILE": str(stale_token), "MATON_API_KEY": "also-stale"}
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", desk_token):
+                self.assertEqual(gateway_token.install_token_file({"MATON_API_KEY": "desk-token"}), desk_token)
+                self.assertEqual(desk_token.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(gateway_token.load_token(env), "desk-token")
 
     def test_environment_variable_is_only_a_fallback(self) -> None:
         with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path("/nonexistent/maton-api-key")):
@@ -6520,11 +6533,9 @@ class WatcherBindingTests(unittest.TestCase):
         }
 
     def test_command_binding_round_trips_and_rejects_drift(self) -> None:
-        self.assertTrue(
-            cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner").startswith(
-                ". ~/.koloclaw-env 2>/dev/null; python3 "
-            )
-        )
+        command = cron_config.watcher_command(Path("/workspace"), ROOT, "kolo:test-owner")
+        self.assertTrue(command.startswith(cron_config.LITELLM_ENV_IMPORT + " python3 "))
+        self.assertNotIn("MATON_API_KEY", command)
         binding = cron_config.build_binding(self.live_command_job(), Path("/workspace"), ROOT)
         self.assertEqual(binding["payload"]["kind"], "command")
         self.assertNotIn("outputMaxBytes", binding["payload"])
@@ -7180,7 +7191,7 @@ class NoInventedMeetingTests(unittest.TestCase):
         self.assertTrue(estimate_record.asks_to_reschedule("Sorry, I meant to say Tuesday.", booked=True))
         self.assertFalse(estimate_record.asks_to_reschedule("Sorry, I meant to say Tuesday."), "no booking: nothing to move")
         booked = {"appointment_booked": {"confirmed_start": "2026-09-14T15:00:00-07:00"}}
-        self.assertEqual(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", booked), "Tuesday at 3pm")
+        self.assertEqual(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", booked), "September 15 at 3pm")
         self.assertEqual(estimate_record.moved_to_same_time("Actually the 22nd works better.", {"appointment_booked": {"confirmed_start": "2026-09-14T10:30:00-07:00"}}), "the 22nd at 10:30am")
         self.assertIsNone(estimate_record.moved_to_same_time("Can we do Tuesday at 4pm instead?", booked), "a time of their own is theirs")
         self.assertIsNone(estimate_record.moved_to_same_time("Sorry, I meant to say Tuesday.", {}))
@@ -9999,7 +10010,7 @@ class ImageProviderTests(unittest.TestCase):
 
     def test_the_vision_check_posts_the_image_and_returns_the_text(self) -> None:
         log: list = []
-        opener = self._opener([{"choices": [{"message": {"content": '{"answers": {"a": "yes"}, "notes": {}}'}}]}], log)
+        opener = self._opener([{"model": image_provider.DIRECT_VISION_MODEL, "choices": [{"message": {"content": '{"answers": {"a": "yes"}, "notes": {}}'}}]}], log)
         with tempfile.TemporaryDirectory() as tmp:
             image = Path(tmp) / "v.png"; image.write_bytes(b"PNGDATA")
             text = image_provider.describe(image, "is it a ring?", model="litellm/kolo-best-available", env=self.ENV, opener=opener)
@@ -10069,6 +10080,9 @@ class ChatTransportTests(unittest.TestCase):
 
     ENV = {"LITELLM_BASE_URL": "http://proxy.local:4000", "LITELLM_API_KEY": "secret-key-value"}
 
+    def tearDown(self) -> None:
+        image_provider.reset_model_resolution()
+
     def _opener(self, response, log):
         def opener(request, timeout=None):
             log.append({"url": request.full_url, "timeout": timeout, "body": json.loads(request.data)})
@@ -10086,7 +10100,7 @@ class ChatTransportTests(unittest.TestCase):
     def test_a_judgement_is_one_user_message_with_thinking_off(self) -> None:
         log: list = []
         text = image_provider.chat("read this", model="litellm-fireworks/qwen-3-7-plus", timeout=42, temperature=0.3,
-                                   env=self.ENV, opener=self._opener({"choices": [{"message": {"content": '{"kind": "x"}'}}]}, log))
+                                   env=self.ENV, opener=self._opener({"model": "qwen-3-7-plus", "choices": [{"message": {"content": '{"kind": "x"}'}}]}, log))
         self.assertEqual(text, '{"kind": "x"}')
         self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/chat/completions")
         self.assertEqual(log[0]["timeout"], 42.0)
@@ -10097,12 +10111,142 @@ class ChatTransportTests(unittest.TestCase):
         self.assertEqual(body["temperature"], 0.3)
         self.assertEqual(body["max_tokens"], 1500)
         # Content may arrive as parts; empty content is an error; failures never carry the key.
-        parts = image_provider.chat("x", env=self.ENV, opener=self._opener({"choices": [{"message": {"content": [{"type": "text", "text": "{\"a\":1}"}]}}]}, []))
+        parts = image_provider.chat("x", env=self.ENV, opener=self._opener({"model": "qwen-3-7-plus", "choices": [{"message": {"content": [{"type": "text", "text": "{\"a\":1}"}]}}]}, []))
         self.assertEqual(parts, '{"a":1}')
-        for response, words in ({"choices": [{"message": {"content": ""}}]}, "no text"), (503, "answered 503"), ("timeout", "did not answer"):
+        for response, words in ({"model": "qwen-3-7-plus", "choices": [{"message": {"content": ""}}]}, "no text"), \
+                (503, "answered 503"), ("timeout", "did not answer"):
             with self.assertRaisesRegex(OSError, words) as caught:
                 image_provider.chat("x", env=self.ENV, opener=self._opener(response, []))
             self.assertNotIn("secret-key-value", str(caught.exception))
+
+    def test_model_preference_accepts_only_the_name_the_provider_served(self) -> None:
+        log: list = []
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(env=self.ENV, opener=self._opener(
+            {"model": "qwen-3-7-plus", "choices": [{"message": {"content": "OK"}}]}, log))
+        self.assertEqual(result["model"], "qwen-3-7-plus")
+        self.assertEqual([item["body"]["model"] for item in log], ["qwen-3-7-plus"])
+
+    def test_proxy_fallback_is_rejected_before_the_next_preference(self) -> None:
+        log: list = []
+        def opener(request, timeout=None):
+            body = json.loads(request.data); log.append(body["model"])
+            served = "deepseek-v3" if body["model"] == "qwen-3-7-plus" else body["model"]
+            class Resp:
+                def read(self_inner): return json.dumps({"model": served, "choices": [{"message": {"content": "OK"}}]}).encode()
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return Resp()
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(env=self.ENV, opener=opener)
+        self.assertEqual(result["model"], "glm-5-3-flash")
+        self.assertEqual(log, ["qwen-3-7-plus", "glm-5-3-flash"])
+        self.assertIn("served deepseek-v3", result["skipped"][0]["reason"])
+
+    def test_probe_error_is_skipped(self) -> None:
+        log: list = []
+        def opener(request, timeout=None):
+            body = json.loads(request.data); log.append(body["model"])
+            if body["model"] == "qwen-3-7-plus":
+                raise HTTPError(request.full_url, 503, "nope", {}, io.BytesIO(b"{}"))
+            class Resp:
+                def read(self_inner): return json.dumps({"model": body["model"], "choices": [{"message": {"content": "OK"}}]}).encode()
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return Resp()
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(env=self.ENV, opener=opener)
+        self.assertEqual(result["model"], "glm-5-3-flash")
+        self.assertIn("answered 503", result["skipped"][0]["reason"])
+
+    def test_pipeline_pin_wins_without_probing_preferences(self) -> None:
+        log: list = []
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model("litellm/claude-haiku-4-5", env=self.ENV, opener=self._opener(
+            {"model": "claude-haiku-4-5", "choices": [{"message": {"content": "OK"}}]}, log))
+        self.assertEqual(result["model"], "claude-haiku-4-5")
+        self.assertTrue(result["pinned"])
+        self.assertEqual([item["body"]["model"] for item in log], ["claude-haiku-4-5"])
+
+    def test_watcher_resolution_mismatches_fall_back_once_without_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            notices: list[list[str]] = []
+
+            def runner(command, **kwargs):  # noqa: ANN001, ANN003
+                notices.append(command)
+                return Mock(returncode=0, stdout="", stderr="")
+
+            def mismatched_models(pin=None, **kwargs):  # noqa: ANN001, ANN003
+                for requested in image_provider.MODEL_PREFERENCE:
+                    image_provider.MODEL_EVENTS.append({
+                        "kind": "model_mismatch", "requested": requested, "served": "deepseek-v3",
+                    })
+                raise OSError("no preferred model was served by name")
+
+            summary: dict = {}
+            judge.MODEL_PROVIDER_MODE = "direct"
+            image_provider.reset_model_resolution()
+            with patch.object(image_provider, "available", return_value=True), patch.object(
+                image_provider, "resolve_model", side_effect=mismatched_models
+            ):
+                inbox_watcher._resolve_tick_model(summary, {}, workspace, "direct", runner)
+                self.assertEqual(summary["transport"], "cli")
+                self.assertIsNone(summary["model_resolution"]["model"])
+                self.assertEqual(len(summary["model_resolution"]["skipped"]), 3)
+                self.assertEqual(judge.MODEL_PROVIDER_MODE, "cli")
+
+                judge.MODEL_PROVIDER_MODE = "direct"
+                inbox_watcher._resolve_tick_model({}, {}, workspace, "direct", runner)
+
+            owner_notes = [command for command in notices if command[:2] == ["kolo", "notify-owner"]]
+            self.assertEqual(len(owner_notes), 1)
+
+    def test_watcher_reuses_a_resolved_model_for_one_hour(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            resolution = {"model": "glm-5-3-flash", "pinned": False, "skipped": []}
+            with patch.object(image_provider, "available", return_value=True), patch.object(
+                image_provider, "resolve_model", return_value=resolution
+            ) as resolver:
+                first: dict = {}
+                second: dict = {}
+                inbox_watcher._resolve_tick_model(first, {}, workspace, "direct", Mock())
+                inbox_watcher._resolve_tick_model(second, {}, workspace, "direct", Mock())
+            self.assertEqual(resolver.call_count, 1)
+            self.assertTrue(second["model_resolution"]["cached"])
+            self.assertEqual(second["model"], "glm-5-3-flash")
+
+    def test_real_served_name_mismatch_invalidates_the_watcher_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first = {"model": "qwen-3-7-plus", "pinned": False, "skipped": []}
+            second = {"model": "glm-5-3-flash", "pinned": False, "skipped": []}
+            with patch.object(image_provider, "available", return_value=True), patch.object(
+                image_provider, "resolve_model", side_effect=[first, second]
+            ) as resolver:
+                inbox_watcher._resolve_tick_model({}, {}, workspace, "direct", Mock())
+                with self.assertRaisesRegex(OSError, "provider served deepseek-v3"):
+                    image_provider._verify_served(
+                        "qwen-3-7-plus", {"model": "deepseek-v3"}, "judgement"
+                    )
+                summary: dict = {}
+                inbox_watcher._resolve_tick_model(summary, {}, workspace, "direct", Mock())
+            self.assertEqual(resolver.call_count, 2)
+            self.assertEqual(summary["model"], "glm-5-3-flash")
+
+    def test_last_known_good_model_is_probed_first(self) -> None:
+        log: list = []
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(
+            last_good="claude-haiku-4-5",
+            env=self.ENV,
+            opener=self._opener(
+                {"model": "claude-haiku-4-5", "choices": [{"message": {"content": "OK"}}]}, log
+            ),
+        )
+        self.assertEqual(result["model"], "claude-haiku-4-5")
+        self.assertEqual([item["body"]["model"] for item in log], ["claude-haiku-4-5"])
 
     def test_complete_chooses_the_transport_and_maps_failures(self) -> None:
         judge.reset_stats()
@@ -10265,7 +10409,7 @@ class ArtworkFromTheCustomerOnlyTests(unittest.TestCase):
         def opener(request, timeout=None):
             log.append(json.loads(request.data))
             class Resp:
-                def read(self_inner): return json.dumps({"choices": [{"message": {"content": '{"answers": {}}'}}]}).encode()
+                def read(self_inner): return json.dumps({"model": log[-1]["model"], "choices": [{"message": {"content": '{"answers": {}}'}}]}).encode()
                 def __enter__(self_inner): return self_inner
                 def __exit__(self_inner, *a): return False
             return Resp()
@@ -10422,6 +10566,46 @@ class ConfirmTheVisionTests(unittest.TestCase):
         self.assertIsNone(estimate_record.vision_in_words({**self.SPEC, "reference_images": ""}), "no photo, nothing to confirm")
         self.assertIsNone(estimate_record.vision_in_words({"pieces": [{"piece_type": "ring"}, {"piece_type": "band"}], "reference_images": "from the photo: x"}))
 
+    def test_fancy_diamond_color_is_the_stone_name_not_a_grade(self) -> None:
+        words = "Lab-grown yellow diamond stud earrings, just like the photo."
+        settled = estimate_record.settle_fancy_diamonds(
+            {"piece_type": "stud earrings", "stone_type": "diamond", "stone_origin": "lab-grown",
+             "stone_color": "yellow", "reference_images": "from the photo: yellow diamond studs"},
+            words,
+            "yellow diamond stud earrings",
+        )
+        self.assertEqual(settled["stone_type"], "yellow diamond")
+        self.assertNotIn("stone_color", settled)
+        self.assertIn("yellow diamond stud earrings", estimate_record.vision_in_words(settled))
+        key, candidates = cost_components_module.match_rate_key(
+            {"lab_grown_yellow_diamond": 500, "lab_grown_diamond": 200},
+            {"yellow diamond"},
+            {"lab", "grown", "yellow diamond"},
+        )
+        self.assertEqual(key, "lab_grown_yellow_diamond")
+        generic_key, _ = cost_components_module.match_rate_key(
+            {"lab_grown_diamond": 200},
+            {"yellow diamond"},
+            {"lab", "grown", "yellow diamond"},
+        )
+        self.assertIsNone(generic_key, "a fancy diamond never borrows the plain diamond rate")
+        plain_key, _ = cost_components_module.match_rate_key(
+            {"lab_grown_diamond": 200, "lab_grown_yellow_diamond": 500},
+            {"diamond"},
+            {"lab", "grown"},
+        )
+        self.assertEqual(plain_key, "lab_grown_diamond", "a plain diamond never becomes ambiguous with fancy rates")
+
+    def test_black_diamond_halo_is_an_accent_stone_name(self) -> None:
+        settled = estimate_record.settle_fancy_diamonds(
+            {"stone_type": "sapphire", "accent_stone_type": "diamond", "accent_stone_color": "black",
+             "accent_stones": "diamond halo"},
+            "a black diamond halo around the sapphire",
+        )
+        self.assertEqual(settled["accent_stone_type"], "black diamond")
+        self.assertEqual(settled["accent_stones"], "black diamond halo")
+        self.assertNotIn("accent_stone_color", settled)
+
     def test_the_photo_fills_the_style_and_the_setting_to_be_confirmed(self) -> None:
         photo = {"piece_type": "earrings", "stone_type": "sapphire", "reference_images": "from the photo: cushion halo studs"}
         self.assertEqual(estimate_record.settle_earring_style(photo, "like the attached but with sapphires")["earring_style"], "stud")
@@ -10561,10 +10745,26 @@ class CarriedEarringStyleTests(unittest.TestCase):
         self.assertNotIn("stone_carat", smaller, "a new size in their words replaces the old")
         self.assertNotIn("earring_style", estimate_record.prior_piece_facts({"piece_type": "earrings"}, {"piece_type": "earrings"}))
         self.assertIn("after the piece we made for you", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="made"))
-        self.assertIn("after the design we discussed before", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="estimate"))
+        self.assertIn("after the design we quoted before", estimate_record.vision_in_words({"piece_type": "ring", "stone_type": "topaz"}, on_file="estimate"))
         self.assertEqual(estimate_record.prior_basis({"prior_piece": {"on_file": True, "owner": "details"}}), "made")
         self.assertEqual(estimate_record.prior_basis({"prior_piece": {"on_file": True, "estimate_id": "jed-x"}}), "estimate")
         self.assertFalse(estimate_record.prior_basis({}))
+
+    def test_a_binding_quote_keeps_its_records_photo_words_for_style(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            estimate_record.write_object(root / "jed-old.json", {
+                "estimate_id": "jed-old",
+                "created_at": "2026-09-09T12:00:00+00:00",
+                "status": "estimate_sent",
+                "route": {"recipient": "anthony@example.com"},
+                "specification": {"piece_type": "earrings", "reference_images": "from the photo: round halo studs"},
+                "estimate_history": [{"specification": {"piece_type": "earrings", "stone_type": "emerald"}}],
+            })
+            prior = estimate_record.find_prior_piece(root, "anthony@example.com", "earring")
+            self.assertIsNotNone(prior)
+            carried = estimate_record.prior_piece_facts(prior["specification"], {"piece_type": "earrings"})
+            self.assertEqual(carried["earring_style"], "stud")
 
 
 class EarlierConversationTests(unittest.TestCase):

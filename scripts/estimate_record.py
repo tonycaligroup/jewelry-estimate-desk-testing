@@ -12,7 +12,7 @@ import re
 import secrets
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -750,6 +750,77 @@ STONE_WORDS_IN_TEXT = (
     "topaz", "garnet", "opal", "pearl", "tourmaline", "spinel", "peridot", "citrine", "pave", "pavé", "melee",
     "tennis", "eternity", "halo", "gemstone", "stones",
 )
+
+FANCY_DIAMOND_COLORS = (
+    "salt-and-pepper", "champagne", "cognac", "yellow", "pink", "blue",
+    "black", "brown", "green", "orange", "red", "grey",
+)
+
+
+def _fancy_diamond_color(stone_type: Any, grade: Any, evidence: str) -> str | None:
+    """Return a named fancy color only when it belongs to a diamond."""
+    kind = re.sub(r"[^a-z]+", " ", str(stone_type or "").lower()).strip()
+    if "diamond" not in kind:
+        return None
+    grade_words = re.sub(r"[^a-z]+", "-", str(grade or "").lower()).strip("-")
+    words = re.sub(r"[^a-z]+", " ", str(evidence or "").lower()).strip()
+    for color in FANCY_DIAMOND_COLORS:
+        aliases = {color, color.replace("-and-", " and "), color.replace("-", " ")}
+        normalized = color.replace("-", " ")
+        if normalized in kind or grade_words in aliases:
+            return color
+        for alias in aliases:
+            phrase = re.sub(r"[^a-z]+", " ", alias).strip()
+            if re.search(rf"\b(?:lab grown\s+|natural\s+)?{re.escape(phrase)}\s+diamonds?\b", words):
+                return color
+    return None
+
+
+def settle_fancy_diamonds(specification: Any, customer_words: str = "", photo_words: str = "") -> Any:
+    """Make a fancy diamond color part of the stone name, never its grade.
+
+    The operation is deterministic and recursive for multi-piece requests. A
+    grade letter and ``colorless`` are deliberately not fancy colors.
+    """
+    if not isinstance(specification, dict):
+        return specification
+    settled = dict(specification)
+    evidence = " ".join((customer_words, photo_words, str(settled.get("reference_images") or "")))
+
+    def settle_stone(type_key: str, color_key: str, description_key: str | None = None) -> None:
+        description = str(settled.get(description_key) or "") if description_key else ""
+        stone_type = settled.get(type_key)
+        if not stone_type and "diamond" in description.lower():
+            stone_type = "diamond"
+        color = _fancy_diamond_color(stone_type, settled.get(color_key), " ".join((evidence, description)))
+        if not color:
+            return
+        name = f"{color} diamond"
+        settled[type_key] = name
+        settled.pop(color_key, None)
+        if description_key:
+            if description:
+                settled[description_key] = re.sub(r"(?<![a-z])diamonds?(?![a-z])", name, description,
+                                                   count=1, flags=re.IGNORECASE)
+            else:
+                settled[description_key] = f"{name} accents"
+
+    settle_stone("stone_type", "stone_color")
+    settle_stone("accent_stone_type", "accent_stone_color", "accent_stones")
+    stone_name = str(settled.get("stone_type") or "").lower()
+    piece_name = str(settled.get("piece_type") or "").lower()
+    if any(stone_name == f"{color} diamond" for color in FANCY_DIAMOND_COLORS) \
+            and "earring" in piece_name and not _present(settled.get("earring_style")):
+        # Promoting "yellow" into the stone name must not flatten "yellow diamond
+        # stud earrings" into generic earrings. Older readings often kept the style
+        # only in piece_type, the photo description, or notes.
+        style = earring_style_in_words(" ".join((piece_name, evidence, str(settled.get("notes") or ""))))
+        if style:
+            settled["earring_style"] = style
+    if isinstance(settled.get("pieces"), list):
+        settled["pieces"] = [settle_fancy_diamonds(piece, customer_words, photo_words)
+                             if isinstance(piece, dict) else piece for piece in settled["pieces"]]
+    return settled
 
 
 def stones_in_words(specification: Any) -> bool:
@@ -1968,6 +2039,7 @@ _PRIOR_PIECE_WORDS = {
     "band": "band", "bands": "band",
 }
 _PRIOR_PIECE_STOP_WORDS = {"a", "an", "the", "of", "pair", "custom", "piece"}
+PRIOR_LOOSE_KEYS = ("notes", "reference_images", "scheduling_intent", "pieces", "quantity", "event_date", "budget", "engraving")
 
 
 def _prior_piece_words(value: str | None) -> set[str]:
@@ -2002,6 +2074,7 @@ def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude
         route = record.get("route") if isinstance(record.get("route"), dict) else {}
         if str(route.get("recipient") or "").strip().lower() != email:
             continue
+        record_spec = record.get("specification") if isinstance(record.get("specification"), dict) else {}
         history = record.get("estimate_history") or []
         quoted = history[-1].get("specification") if history and isinstance(history[-1], dict) else None
         rank = 2
@@ -2016,6 +2089,13 @@ def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude
                 continue
         if not isinstance(quoted, dict) or not quoted or not _present(quoted.get("piece_type")):
             continue
+        # Binding quote snapshots intentionally contain priced facts, not every
+        # descriptive trace. Carry the same record's photo and notes alongside
+        # that snapshot so older earrings can still yield stud/hoop/drop.
+        quoted = dict(quoted)
+        for key in PRIOR_LOOSE_KEYS:
+            if not _present(quoted.get(key)) and _present(record_spec.get(key)):
+                quoted[key] = record_spec[key]
         had = _prior_piece_words(quoted.get("piece_type"))
         if wanted and not (wanted & had):
             continue
@@ -2025,9 +2105,6 @@ def find_prior_piece(root: Path, recipient: str, piece_type: str | None, exclude
         return None
     found.sort(key=lambda item: (item[0], item[1]))
     return found[-1][2]
-
-
-PRIOR_LOOSE_KEYS = ("notes", "reference_images", "scheduling_intent", "pieces", "quantity", "event_date", "budget", "engraving")
 
 
 def prior_piece_facts(prior_spec: dict[str, Any], current: dict[str, Any], own_words: str = "") -> dict[str, Any]:
@@ -2358,7 +2435,7 @@ def vision_in_words(specification: dict[str, Any] | None, on_file: bool | str = 
         parts.append(f"the stone {size}")
     if on_file:
         made = isinstance(on_file, str) and on_file == "made"
-        parts.append("after the piece we made for you, with the changes you named" if made else "after the design we discussed before, with the changes you named")
+        parts.append("after the piece we made for you, with the changes you named" if made else "after the design we quoted before, with the changes you named")
     return ", ".join(parts)
 
 
@@ -2801,6 +2878,17 @@ def moved_to_same_time(own_words: str, record: dict[str, Any] | None) -> str | N
     except ValueError:
         return None
     clock = start.strftime("%I:%M%p").lstrip("0").lower().replace(":00", "")
+    named = match.group(0).lower()
+    weekdays = {
+        "mon": 0, "monday": 0, "tue": 1, "tues": 1, "tuesday": 1,
+        "wed": 2, "wednesday": 2, "thu": 3, "thur": 3, "thurs": 3, "thursday": 3,
+        "fri": 4, "friday": 4, "sat": 5, "saturday": 5, "sun": 6, "sunday": 6,
+    }
+    if named in weekdays:
+        # "I meant Tuesday" corrects the booked Monday to the Tuesday beside
+        # it, even when today's nearest Tuesday belongs to another week.
+        target = start + timedelta(days=(weekdays[named] - start.weekday()) % 7)
+        return f"{target.strftime('%B')} {target.day} at {clock}"
     return f"{match.group(0)} at {clock}"
 
 

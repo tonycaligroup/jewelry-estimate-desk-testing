@@ -51,7 +51,8 @@ SPOT_METAL_WORDS = {
     "sterling": "silver",
     "palladium": "palladium",
 }
-STONE_WORDS = (
+STONE_WORDS = tuple(estimate_record.FANCY_DIAMOND_COLORS[index] + " diamond"
+                    for index in range(len(estimate_record.FANCY_DIAMOND_COLORS))) + (
     "sapphire", "diamond", "ruby", "emerald", "moissanite", "aquamarine",
     "morganite", "tanzanite", "amethyst", "topaz", "garnet", "opal", "pearl",
     "tourmaline", "spinel", "peridot", "citrine",
@@ -86,7 +87,11 @@ def _flatten(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
 
 
 def _tokens(text: str) -> set[str]:
-    return {token for token in re.split(r"[^a-z0-9]+", text.lower()) if token}
+    words = [token for token in re.split(r"[^a-z0-9]+", text.lower()) if token]
+    tokens = set(words)
+    for width in range(2, min(4, len(words)) + 1):
+        tokens.update(" ".join(words[index:index + width]) for index in range(len(words) - width + 1))
+    return tokens
 
 
 def _number(value: Any) -> float | None:
@@ -262,10 +267,22 @@ def match_rate_key(
     """Resolve one card key from tokens, or return the ambiguous candidates."""
     if not isinstance(card, dict) or not required:
         return None, []
-    candidates = [
-        key for key in card
-        if isinstance(key, str) and required <= _tokens(key)
-    ]
+    candidates = []
+    for key in card:
+        if not isinstance(key, str):
+            continue
+        tokens = _tokens(key)
+        if not required <= tokens:
+            continue
+        # Adding yellow_diamond and the other fancy keys must not make a
+        # plain diamond ambiguous. The reverse is already protected because
+        # a fancy request requires the full "yellow diamond" token.
+        if required == {"diamond"} and any(
+            f"{color.replace('-', ' ')} diamond" in tokens
+            for color in estimate_record.FANCY_DIAMOND_COLORS
+        ):
+            continue
+        candidates.append(key)
     if preferred and len(candidates) > 1:
         # The key that shares the most descriptive tokens with the
         # specification wins (14k_white_gold over 14k_yellow_gold for a white
@@ -382,7 +399,7 @@ def _missing_rates_for_piece(specification: dict[str, Any], index: int, pricing:
             missing.append({
                 "rate_kind": "stones_per_carat",
                 "line": f"stone_lines[{index}]",
-                "suggested_key": "_".join([*origin, stone["stone_type"]]),
+                "suggested_key": "_".join([*origin, stone["stone_type"]]).replace("-", "_").replace(" ", "_"),
                 "description": " ".join(w for w in (words, stone["stone_type"]) if w),
                 "candidates": candidates,
             })
@@ -598,7 +615,8 @@ def missing_accent_rates(specification: dict[str, Any], pricing: dict[str, Any])
             missing.append({
                 "rate_kind": "stones_per_carat",
                 "line": "stone_lines[accent]",
-                "suggested_key": f"{origin_token}_grown_{stone}_melee" if origin_token == "lab" else f"natural_{stone}_melee",
+                "suggested_key": (f"{origin_token}_grown_{stone}_melee" if origin_token == "lab" else f"natural_{stone}_melee")
+                                 .replace("-", "_").replace(" ", "_"),
                 "description": f"{origin} {stone} melee (small accent or pave stones, per carat)",
                 "candidates": [k for k in card if stone in str(k).lower()],
             })
