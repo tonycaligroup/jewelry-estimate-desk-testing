@@ -93,9 +93,18 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
             profile_now = validate_profile.load_profile(desk / "shop-profile.json")
             mode = inbox_watcher.desk_settings(profile_now if isinstance(profile_now, dict) else None)["model_provider"]
             judge.MODEL_PROVIDER_MODE = mode
-            transport = "direct (proxy reachable)" if image_provider.available(mode) else "cli"
+            direct = image_provider.available(mode)
+            transport = "direct (proxy reachable)" if direct else "cli"
+            if direct:
+                image_provider.reset_model_resolution()
+                resolution = image_provider.resolve_model(switch.get("model"))
+                model = resolution["model"]
+                skipped = "; ".join(f"{item['model']} skipped: {item['reason']}" for item in resolution["skipped"])
+            else:
+                skipped = "preference probing skipped: direct provider unavailable"
             text = judge.complete('Reply with exactly {"ok":true}', model, runner, openclaw, timeout=90)
-            add("inline judgment", "PASS" if '"ok"' in text else "FAIL", f"model {model} via {transport}: " + text[:80])
+            detail = f"resolved model {model} via {transport}" + (f"; {skipped}" if skipped else "") + f": {text[:80]}"
+            add("inline judgment", "PASS" if '"ok"' in text else "FAIL", detail)
         except Exception as exc:  # noqa: BLE001 - a readiness check reports, never crashes
             add("inline judgment", "FAIL", f"model {model}: {exc}")
 

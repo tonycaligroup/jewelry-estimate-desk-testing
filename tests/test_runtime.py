@@ -10010,7 +10010,7 @@ class ImageProviderTests(unittest.TestCase):
 
     def test_the_vision_check_posts_the_image_and_returns_the_text(self) -> None:
         log: list = []
-        opener = self._opener([{"choices": [{"message": {"content": '{"answers": {"a": "yes"}, "notes": {}}'}}]}], log)
+        opener = self._opener([{"model": image_provider.DIRECT_VISION_MODEL, "choices": [{"message": {"content": '{"answers": {"a": "yes"}, "notes": {}}'}}]}], log)
         with tempfile.TemporaryDirectory() as tmp:
             image = Path(tmp) / "v.png"; image.write_bytes(b"PNGDATA")
             text = image_provider.describe(image, "is it a ring?", model="litellm/kolo-best-available", env=self.ENV, opener=opener)
@@ -10080,6 +10080,9 @@ class ChatTransportTests(unittest.TestCase):
 
     ENV = {"LITELLM_BASE_URL": "http://proxy.local:4000", "LITELLM_API_KEY": "secret-key-value"}
 
+    def tearDown(self) -> None:
+        image_provider.reset_model_resolution()
+
     def _opener(self, response, log):
         def opener(request, timeout=None):
             log.append({"url": request.full_url, "timeout": timeout, "body": json.loads(request.data)})
@@ -10097,7 +10100,7 @@ class ChatTransportTests(unittest.TestCase):
     def test_a_judgement_is_one_user_message_with_thinking_off(self) -> None:
         log: list = []
         text = image_provider.chat("read this", model="litellm-fireworks/qwen-3-7-plus", timeout=42, temperature=0.3,
-                                   env=self.ENV, opener=self._opener({"choices": [{"message": {"content": '{"kind": "x"}'}}]}, log))
+                                   env=self.ENV, opener=self._opener({"model": "qwen-3-7-plus", "choices": [{"message": {"content": '{"kind": "x"}'}}]}, log))
         self.assertEqual(text, '{"kind": "x"}')
         self.assertEqual(log[0]["url"], "http://proxy.local:4000/v1/chat/completions")
         self.assertEqual(log[0]["timeout"], 42.0)
@@ -10108,12 +10111,62 @@ class ChatTransportTests(unittest.TestCase):
         self.assertEqual(body["temperature"], 0.3)
         self.assertEqual(body["max_tokens"], 1500)
         # Content may arrive as parts; empty content is an error; failures never carry the key.
-        parts = image_provider.chat("x", env=self.ENV, opener=self._opener({"choices": [{"message": {"content": [{"type": "text", "text": "{\"a\":1}"}]}}]}, []))
+        parts = image_provider.chat("x", env=self.ENV, opener=self._opener({"model": "qwen-3-7-plus", "choices": [{"message": {"content": [{"type": "text", "text": "{\"a\":1}"}]}}]}, []))
         self.assertEqual(parts, '{"a":1}')
-        for response, words in ({"choices": [{"message": {"content": ""}}]}, "no text"), (503, "answered 503"), ("timeout", "did not answer"):
+        for response, words in ({"model": "qwen-3-7-plus", "choices": [{"message": {"content": ""}}]}, "no text"), \
+                (503, "answered 503"), ("timeout", "did not answer"):
             with self.assertRaisesRegex(OSError, words) as caught:
                 image_provider.chat("x", env=self.ENV, opener=self._opener(response, []))
             self.assertNotIn("secret-key-value", str(caught.exception))
+
+    def test_model_preference_accepts_only_the_name_the_provider_served(self) -> None:
+        log: list = []
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(env=self.ENV, opener=self._opener(
+            {"model": "qwen-3-7-plus", "choices": [{"message": {"content": "OK"}}]}, log))
+        self.assertEqual(result["model"], "qwen-3-7-plus")
+        self.assertEqual([item["body"]["model"] for item in log], ["qwen-3-7-plus"])
+
+    def test_proxy_fallback_is_rejected_before_the_next_preference(self) -> None:
+        log: list = []
+        def opener(request, timeout=None):
+            body = json.loads(request.data); log.append(body["model"])
+            served = "deepseek-v3" if body["model"] == "qwen-3-7-plus" else body["model"]
+            class Resp:
+                def read(self_inner): return json.dumps({"model": served, "choices": [{"message": {"content": "OK"}}]}).encode()
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return Resp()
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(env=self.ENV, opener=opener)
+        self.assertEqual(result["model"], "glm-5-3-flash")
+        self.assertEqual(log, ["qwen-3-7-plus", "glm-5-3-flash"])
+        self.assertIn("served deepseek-v3", result["skipped"][0]["reason"])
+
+    def test_probe_error_is_skipped(self) -> None:
+        log: list = []
+        def opener(request, timeout=None):
+            body = json.loads(request.data); log.append(body["model"])
+            if body["model"] == "qwen-3-7-plus":
+                raise HTTPError(request.full_url, 503, "nope", {}, io.BytesIO(b"{}"))
+            class Resp:
+                def read(self_inner): return json.dumps({"model": body["model"], "choices": [{"message": {"content": "OK"}}]}).encode()
+                def __enter__(self_inner): return self_inner
+                def __exit__(self_inner, *a): return False
+            return Resp()
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model(env=self.ENV, opener=opener)
+        self.assertEqual(result["model"], "glm-5-3-flash")
+        self.assertIn("answered 503", result["skipped"][0]["reason"])
+
+    def test_pipeline_pin_wins_without_probing_preferences(self) -> None:
+        log: list = []
+        image_provider.reset_model_resolution()
+        result = image_provider.resolve_model("litellm/claude-haiku-4-5", env=self.ENV, opener=self._opener(
+            {"model": "claude-haiku-4-5", "choices": [{"message": {"content": "OK"}}]}, log))
+        self.assertEqual(result["model"], "claude-haiku-4-5")
+        self.assertTrue(result["pinned"])
+        self.assertEqual([item["body"]["model"] for item in log], ["claude-haiku-4-5"])
 
     def test_complete_chooses_the_transport_and_maps_failures(self) -> None:
         judge.reset_stats()
@@ -10276,7 +10329,7 @@ class ArtworkFromTheCustomerOnlyTests(unittest.TestCase):
         def opener(request, timeout=None):
             log.append(json.loads(request.data))
             class Resp:
-                def read(self_inner): return json.dumps({"choices": [{"message": {"content": '{"answers": {}}'}}]}).encode()
+                def read(self_inner): return json.dumps({"model": log[-1]["model"], "choices": [{"message": {"content": '{"answers": {}}'}}]}).encode()
                 def __enter__(self_inner): return self_inner
                 def __exit__(self_inner, *a): return False
             return Resp()

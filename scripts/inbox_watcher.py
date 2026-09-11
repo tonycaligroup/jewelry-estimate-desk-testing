@@ -488,16 +488,30 @@ def tick(
     summary["tick_started"] = started
     mark_tick(workspace, started=datetime.now(timezone.utc).isoformat(), message_id=None, step=None)
     judge.reset_stats()
+    image_provider.reset_model_resolution()
     profile_loaded = validate_profile.load_profile(p["shop_profile"])
     profile_result = validate_profile.validate_profile(profile_loaded)
     if not profile_result.get("ready"):
         raise ValueError("shop profile is not ready: " + "; ".join(profile_result.get("errors", [])))
     desk = desk_settings(profile_loaded if isinstance(profile_loaded, dict) else None)
     judge.MODEL_PROVIDER_MODE = desk["model_provider"]
+    switch = pipeline.settings(workspace / "estimate-desk")
     if max_workers is None:
         max_workers = desk["claims_per_tick"]
     parallel = desk["parallel_claims"]
-    summary["transport"] = "direct" if image_provider.available(desk["model_provider"]) else "cli"
+    direct = image_provider.available(desk["model_provider"])
+    summary["transport"] = "direct" if direct else "cli"
+    if direct:
+        resolution = image_provider.resolve_model(switch.get("model"))
+        summary["model"] = resolution["model"]
+        summary["model_resolution"] = resolution
+    else:
+        summary["model"] = switch.get("model") or judge.DEFAULT_MODEL
+        summary["model_resolution"] = {
+            "model": summary["model"], "pinned": bool(switch.get("model")),
+            "skipped": [{"model": name, "reason": "direct provider unavailable; CLI identity was not probed"}
+                        for name in image_provider.MODEL_PREFERENCE],
+        }
     state = inbox_monitor.load_monitor_state(p["monitor_root"])
     if state["activation_state"] != "active":
         summary["skipped"] = state["activation_state"]
@@ -603,6 +617,8 @@ def tick(
     if rehearsal_state.get("enabled"):
         notes.insert(0, rehearsal.banner(rehearsal_state) + (f"; {summary.get('held', 0)} held this tick" if summary.get("held") else ""))
     summary["notes"] = notes
+    if image_provider.MODEL_EVENTS:
+        summary["model_mismatches"] = list(image_provider.MODEL_EVENTS)
     # The optional spreadsheet mirror (RELEASE-PLAN-4.15.md 2.8): rewritten when the desk's state changed, after
     # the customers' work, best effort; a Google failure is journaled and never reaches the owner or a customer.
     # The owner's cost sheet is read first (9 September 2026): drafts are kept, blocks marked ready are priced.
