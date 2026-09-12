@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.17
+version: 4.15.18
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -149,6 +149,14 @@ The runtime profile is `estimate-desk/shop-profile.json` in the workspace, not
 in this skill and not in `SKILL.md` frontmatter. Do not store or trust a manual
 `ready` field.
 
+Before collecting any setup answers, tell the owner that the channel where
+they complete setup becomes the channel for desk questions, notices, and
+rendering previews. Ask whether they want those notifications here or in an
+existing Kolo text-message, Slack, or other supported channel. If they want
+text-message notifications and this is not that text conversation, stop setup
+and tell them to start the Jewelry Estimate Desk setup from the text channel
+now. Do not continue here and move the notification binding later.
+
 On first setup, copy `{baseDir}/templates/shop-profile.json` to the runtime
 location and collect:
 
@@ -188,15 +196,11 @@ location and collect:
 6. Whether spot metal pricing is enabled; provider (`stackerscan` or
    `gold-api`), refresh frequency (`per_estimate`, `daily`, or `weekly`), and
    unit. StackerScan is the default and supports grams; gold-api uses troy oz.
-7. The owner's channel for questions, notices, and rendering previews. The
-   default is this setup thread, where the approval cards also appear, so
-   the owner has one place to look; nothing needs to be stored for that.
-   If the owner would rather use another Kolo chat, or an SMS or Slack chat
-   they already have with Kolo, run `kolo list-chats`, let them pick, and
-   store its session key as
-   `owner_channel.session_key` (kind under `owner_channel.kind`) in the shop
-   profile. Approval cards always go to the approval queue. This never
-   changes the customer's original-channel routing.
+7. Confirm that the owner wants questions, notices, and rendering previews in
+   the channel where setup is now running. If not, stop and have them restart
+   setup from the channel they want, as described above. Approval cards always
+   go to the approval queue. The notification-channel choice never changes the
+   customer's original-channel routing.
 8. Trust stage. Default to Stage 1.
 9. Scheduling. The calendar is the owner's primary Google Calendar, stored
    as `primary`; never ask for a calendar id. Only if the owner wants a
@@ -219,6 +223,11 @@ location and collect:
     activation binding, monitor state, the inline judgment model, audit-trail
     access (rejections are read from it), the Kolo backend, and the watcher
     job. It changes nothing and contacts no customer.
+12. After setup succeeds, tell an owner using text-message notifications that
+    the best practice is to reply directly to the individual desk message,
+    rather than send a new standalone text. On iPhone, long-press the message,
+    tap **Reply**, type the answer, and send it. This keeps the answer attached
+    to the notification it addresses.
 
 Before reading or processing an inquiry, run:
 
