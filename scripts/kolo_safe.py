@@ -706,7 +706,7 @@ def owner_channel_args(monitor_root: Path | None) -> list[str]:
     try:
         profile = json.loads((monitor_root.resolve().parent / "shop-profile.json").read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
-        return []
+        profile = {}
     channel = profile.get("owner_channel") if isinstance(profile, dict) else None
     key = channel.get("session_key") if isinstance(channel, dict) else None
     if not (isinstance(key, str) and key.strip()):
@@ -1022,7 +1022,8 @@ def notify_owner_claimed(
     """Send one claimed-message notification with durable ambiguity tracking."""
     if claim_token is None:
         claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
-    command = build_notify_owner(estimate_id, event)
+    monitor_root = claim_root.resolve().parent / "inbox-monitor"
+    command = build_notify_owner(estimate_id, event) + owner_channel_args(monitor_root)
     acquired, state = inbox_claim.acquire_notification(
         claim_root, message_id, claim_token, notification_key
     )
@@ -1055,7 +1056,8 @@ def notify_monitor_claimed(
     """Send one generic monitor notification with durable ambiguity tracking."""
     if claim_token is None:
         claim_token = inbox_claim.authoritative_claim_token(claim_root, message_id)
-    command = build_notify_monitor(event)
+    monitor_root = claim_root.resolve().parent / "inbox-monitor"
+    command = build_notify_monitor(event) + owner_channel_args(monitor_root)
     acquired, state = inbox_claim.acquire_notification(
         claim_root,
         message_id,

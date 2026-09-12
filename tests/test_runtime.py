@@ -1572,6 +1572,32 @@ class SafeCliTests(unittest.TestCase):
             self.assertEqual(stored["owner_notification"]["status"], "sent")
             self.assertNotIn("@", runner.call_args.args[0][-1])
 
+    def test_claimed_notifications_use_the_activation_channel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            desk = Path(directory) / "estimate-desk"
+            claim_root = desk / "inbox-claims"
+            monitor_root = desk / "inbox-monitor"
+            monitor_root.mkdir(parents=True)
+            activation_binding.create(
+                activation_binding.binding_path(monitor_root),
+                "agent:main:kolo:sms:test-owner",
+            )
+            _, claim = inbox_claim.acquire(claim_root, "gmail-notify-routed")
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "delivered\n", ""))
+
+            kolo_safe.notify_owner_claimed(
+                claim_root,
+                "gmail-notify-routed",
+                claim["claim_token"],
+                "customer_replied:jed-0123456789abcdef:gmail-notify-routed",
+                "jed-0123456789abcdef",
+                "customer-replied",
+                runner=runner,
+            )
+
+            command = runner.call_args.args[0]
+            self.assertEqual(command[command.index("--session-key") + 1], "agent:main:kolo:sms:test-owner")
+
     def test_claimed_owner_notification_failure_becomes_uncertain(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "claims"
