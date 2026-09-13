@@ -276,13 +276,15 @@ class World:
                 "response_body_sha256": calendar_query.canonical_hash(body), "response_body": body})
 
     def create_event(self, calendar_id, start, end, timezone_name, summary, description, attendee_email, token,
-                     opener=None) -> dict:
+                     opener=None, location=None) -> dict:
         self._service("calendar_create")
         self.event_count += 1
         event = {"kind": "calendar#event", "id": f"evt-{self.event_count}", "summary": summary, "description": description,
                  "start": {"dateTime": start, "timeZone": timezone_name}, "end": {"dateTime": end, "timeZone": timezone_name},
                  "attendees": [{"email": attendee_email}], "htmlLink": f"https://calendar.example/{self.event_count}",
                  "status": "confirmed"}
+        if location:
+            event["location"] = location
         self.calendar_events[event["id"]] = event
         self.busy.append({"start": start, "end": end, "event": event["id"]})
         self.created_events.append(event)
@@ -3740,6 +3742,7 @@ class PhoneCallTests(SideBranchTests):
             event = next(iter(world.calendar_events.values()))
             self.assertTrue(event["summary"].startswith("Kolo Jewelers: phone call"), event["summary"])
             self.assertIn("Call the customer at 213.431.9336", event["description"])
+            self.assertNotIn("location", event)
             prompt = [q for q in world.prompts if "Confirm the appointment" in q][-1]
             self.assertIn("you will call them at 213.431.9336", prompt)
             record = self.record(ws, self.only_estimate(ws))

@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.24
+version: 4.15.25
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -730,7 +730,10 @@ derives the weekday/date labels. Offer those
 specific times, then re-check immediately before
 creating an event. Include the customer's email address (from `route.json`
 recipient field) as an attendee in the calendar event so they receive the
-invitation. Confirm to the customer only after the calendar write succeeds.
+invitation. For an in-person meeting, put `scheduling.location` in the event's
+native location field when configured, otherwise use the complete required
+shop address. A phone call has no shop location. Confirm to the customer only
+after the calendar write succeeds.
 Use the owner's IANA timezone, never the pod's UTC clock. Never select meeting
 times based on the desired delivery date.
 

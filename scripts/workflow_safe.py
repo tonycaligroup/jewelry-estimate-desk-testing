@@ -2862,6 +2862,22 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
     saved = read_object(event_path) if event_path.exists() else {}
     is_call = approval.get("meeting_kind") == "call"
     phone = str(approval.get("phone") or estimate_record.customer_phone(record) or "")
+    event_location = None
+    if not is_call:
+        configured_location = scheduling.get("location")
+        if isinstance(configured_location, str) and configured_location.strip():
+            event_location = configured_location.strip()
+        else:
+            address = (profile.get("shop") or {}).get("address") or {}
+            if isinstance(address, dict):
+                street = str(address.get("street") or "").strip()
+                city = str(address.get("city") or "").strip()
+                state = str(address.get("state") or "").strip()
+                postal = str(address.get("zip") or "").strip()
+                locality = " ".join(value for value in (state, postal) if value)
+                event_location = ", ".join(
+                    value for value in (street, city, locality) if value
+                ) or None
     description = f"Design consultation for {piece}. Estimate {args.estimate_id.upper()}."
     if is_call:
         # A phone call, not a visit (the owner, 9 September 2026): the number on the event, or a note that it is to follow.
@@ -2897,7 +2913,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         event = calendar_query.create_event(
             calendar_id, chosen["start"], chosen["end"], scheduling.get("timezone") or "UTC",
             (f"{shop}: phone call, {piece}" if is_call else f"{shop}: design consultation, {piece}")[:200], description,
-            record["route"]["recipient"], token, **kwargs,
+            record["route"]["recipient"], token, location=event_location, **kwargs,
         )
         write_private(event_path, {**event, "desk_slot_start": chosen["start"]})
     cancelled_old = None

@@ -8103,7 +8103,7 @@ class OneCommandExecutorTests(unittest.TestCase):
         record = {"schema_version": 1, "estimate_id": "jed-0123456789abcdef", "status": "estimate_sent", "route": route,
                   "inbound_timestamp_ms": 1, "specification": {"piece_type": "wedding band", "metal": "gold", "metal_karat": 18}}
         estimate_record.persist_record(record_root, record)
-        profile = {"shop": {"name": "Cali Jewelers"}, "terms": {"quote_valid_days": 7, "lead_time_business_days": 15},
+        profile = {"shop": {"name": "Cali Jewelers", "address": {"street": "625 S Hill St #B7", "city": "Los Angeles", "state": "CA", "zip": "90014"}}, "terms": {"quote_valid_days": 7, "lead_time_business_days": 15},
                    "scheduling": {"timezone": "America/Los_Angeles", "calendar": "primary",
                                   "windows": [{"days": ["mon", "fri"], "start": "10:00", "end": "17:00"}]}}
         (desk / "shop-profile.json").write_text(json.dumps(profile), encoding="utf-8")
@@ -8151,6 +8151,7 @@ class OneCommandExecutorTests(unittest.TestCase):
             self.assertEqual(posted[1][0], "https://gateway.maton.ai/google-calendar/calendar/v3/calendars/primary/events?sendUpdates=all")
             self.assertEqual(posted[1][1]["attendees"], [{"email": "customer@example.net"}])
             self.assertEqual(posted[1][1]["start"]["dateTime"], slot["start"])
+            self.assertEqual(posted[1][1]["location"], "625 S Hill St #B7, Los Angeles, CA 90014")
             body = json.loads(Path(send.call_args.args[4]).read_text(encoding="utf-8"))
             self.assertEqual(body["threadId"], "thread-1")
             stored = estimate_record.read_object(estimate_record.record_path(p["record_root"], record["estimate_id"]))
@@ -8164,6 +8165,37 @@ class OneCommandExecutorTests(unittest.TestCase):
             ))
             self.assertEqual(again["outcome"], "already_booked")
             self.assertEqual(len(posted), 2)
+
+    def test_calendar_event_omits_a_blank_location(self) -> None:
+        class Response:
+            def read(self):
+                return json.dumps({"kind": "calendar#event", "id": "evt-call"}).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        posted = []
+
+        def opener(request, timeout=20):
+            posted.append(json.loads(request.data.decode("utf-8")))
+            return Response()
+
+        calendar_query.create_event(
+            "primary",
+            "2026-09-14T14:00:00-07:00",
+            "2026-09-14T14:30:00-07:00",
+            "America/Los_Angeles",
+            "Cali Jewelers: phone call",
+            "Phone call about a ring.",
+            "customer@example.net",
+            "token",
+            opener=opener,
+            location=None,
+        )
+        self.assertNotIn("location", posted[0])
 
     def test_a_second_approved_time_reschedules_and_cancels_the_old_event(self) -> None:
         import email.utils

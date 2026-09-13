@@ -163,6 +163,7 @@ def create_event(
     attendee_email: str,
     token: str,
     opener: Callable[..., Any] = urllib.request.urlopen,
+    location: str | None = None,
 ) -> dict[str, Any]:
     """Insert one event with the customer invited; returns the provider's event."""
     if parse_timestamp(end, "end") <= parse_timestamp(start, "start"):
@@ -178,6 +179,8 @@ def create_event(
         "end": {"dateTime": end, "timeZone": timezone_name},
         "attendees": [{"email": attendee_email}],
     }
+    if isinstance(location, str) and location.strip():
+        body["location"] = location.strip()[:500]
     request = urllib.request.Request(
         EVENTS_URL.format(calendar=urllib.parse.quote(calendar_id, safe="")),
         data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
