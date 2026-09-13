@@ -1007,25 +1007,41 @@ class BusinessStateResetTests(unittest.TestCase):
             activation_binding.binding_path(monitor_root),
             "agent:main:kolo:direct:test-owner",
         )
-        inbox_monitor.atomic_write_json(
-            monitor_root / "monitor-state.json",
-            {
-                "schema_version": 2,
-                "activation_state": "active",
-                "bound_cron_sha256": "sha256:bound",
-                "pending_cron_sha256": None,
-                "capabilities": {
-                    "gmail_after_epoch": True,
-                    "gmail_internal_date_ms": True,
-                    "gmail_complete_pagination": True,
-                },
-                "activated_at_ms": 1_000,
-                "discovery_watermark_ms": 1_500,
+        owner_target = "kolo:test-owner"
+        base_dir = Path("/opt/test-skill")
+        binding = {
+            "id": "cron-test",
+            "name": cron_config.JOB_NAME,
+            "schedule": {
+                "kind": "cron",
+                "expr": "*/2 10-17 * * 1,2,3,4,5",
+                "tz": "America/Los_Angeles",
             },
-        )
-        inbox_monitor.atomic_write_json(
-            desk / "work" / "cron-binding.json", {"id": "cron-test"}
-        )
+            "sessionTarget": "isolated",
+            "wakeMode": "now",
+            "payload": {
+                "kind": "command",
+                "argv": [
+                    "sh",
+                    "-lc",
+                    cron_config.watcher_command(root, base_dir, owner_target),
+                ],
+                "cwd": str(root.resolve()),
+                "timeoutSeconds": cron_config.WATCHER_TIMEOUT_SECONDS,
+            },
+            "delivery": {
+                "mode": "announce",
+                "channel": "kolo",
+                "to": owner_target,
+            },
+        }
+        capabilities = {
+            "gmail_after_epoch": True,
+            "gmail_internal_date_ms": True,
+            "gmail_complete_pagination": True,
+        }
+        inbox_monitor.prepare(monitor_root, capabilities, binding)
+        inbox_monitor.activate(monitor_root, binding, activated_at_ms=1_000)
         inbox_monitor.atomic_write_json(desk / "spot-cache.json", {"prices": {}})
         return desk
 
@@ -1044,9 +1060,25 @@ class BusinessStateResetTests(unittest.TestCase):
             self.assertEqual(profile["shop"]["name"], "")
             state = inbox_monitor.load_monitor_state(desk / "inbox-monitor")
             self.assertEqual(state["activation_state"], "prepared")
-            self.assertEqual(state["bound_cron_sha256"], "sha256:bound")
+            durable = inbox_monitor.read_json(desk / "work" / "cron-binding.json")
+            self.assertEqual(
+                state["bound_cron_sha256"], inbox_monitor.sha256_json(durable)
+            )
             self.assertIsNone(state["activated_at_ms"])
             self.assertIsNone(state["discovery_watermark_ms"])
+
+    def test_reset_refuses_a_durable_binding_that_does_not_match_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desk = self.build_workspace(root)
+            path = desk / "work" / "cron-binding.json"
+            binding = inbox_monitor.read_json(path)
+            binding["schedule"]["expr"] = "*/5 10-17 * * 1,2,3,4,5"
+            inbox_monitor.atomic_write_json(path, binding)
+
+            with self.assertRaisesRegex(ValueError, "does not match active monitor state"):
+                business_state_reset.reset(root)
+            self.assertTrue((desk / "work" / "activation-binding.json").exists())
 
     def test_reset_refuses_customer_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3371,9 +3403,9 @@ class InboxMonitorTests(unittest.TestCase):
             inbox_monitor.sync_claim(root, message_id, {"acquired": True, **claim})
             target = Path(directory) / "outside-work"
             target.mkdir()
-            (root.resolve().parent / "work").symlink_to(
-                target, target_is_directory=True
-            )
+            work_root = root.resolve().parent / "work"
+            work_root.rename(Path(directory) / "setup-work")
+            work_root.symlink_to(target, target_is_directory=True)
 
             with self.assertRaisesRegex(ValueError, "work root"):
                 inbox_monitor.prepare_claim_work(root, claim_root, message_id)

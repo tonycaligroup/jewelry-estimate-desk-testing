@@ -251,6 +251,31 @@ def load_monitor_state(root: Path) -> dict[str, Any]:
     return validate_monitor_state(read_json(root / "monitor-state.json"))
 
 
+def durable_cron_binding_path(root: Path) -> Path:
+    return root.resolve().parent / "work" / "cron-binding.json"
+
+
+def persist_cron_binding(root: Path, value: Any) -> Path:
+    """Keep the exact validated binding needed for later safe reset/reconfiguration."""
+    cron_config_helper.validate_binding(value)
+    path = durable_cron_binding_path(root)
+    parent = path.parent
+    if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+        raise ValueError("durable cron binding directory is unsafe")
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(parent, 0o700)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("durable cron binding is unsafe")
+    temporary = parent / f"cron-binding.{secrets.token_hex(4)}.tmp"
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    return path
+
+
 def verify_legacy_binding(root: Path, live_job: Any) -> dict[str, Any]:
     """Reconstruct and prove the schema-1 five-field binding without mutation."""
     raw_state = read_json(root / "monitor-state.json")
@@ -300,6 +325,7 @@ def prepare(root: Path, capabilities: Any, cron_config: Any) -> dict[str, Any]:
             existing = load_monitor_state(root)
             if existing["bound_cron_sha256"] != cron_hash:
                 raise ValueError("existing monitor cron identity/config does not match")
+            persist_cron_binding(root, cron_config)
             return existing
         state = {
             "schema_version": SCHEMA_VERSION,
@@ -311,6 +337,7 @@ def prepare(root: Path, capabilities: Any, cron_config: Any) -> dict[str, Any]:
             "discovery_watermark_ms": None,
         }
         atomic_write_json(state_path, state)
+        persist_cron_binding(root, cron_config)
         return state
 
 
@@ -329,6 +356,7 @@ def activate(
             if state.get("schema_version") != SCHEMA_VERSION:
                 state["schema_version"] = SCHEMA_VERSION
                 atomic_write_json(root / "monitor-state.json", state)
+            persist_cron_binding(root, cron_config)
             return state
         if state["activation_state"] != "prepared":
             raise ValueError("monitor is not prepared for initial activation")
@@ -340,6 +368,7 @@ def activate(
         state["activated_at_ms"] = activation
         state["discovery_watermark_ms"] = activation
         atomic_write_json(root / "monitor-state.json", state)
+        persist_cron_binding(root, cron_config)
         return state
 
 
@@ -383,6 +412,7 @@ def activate_reconfiguration(root: Path, cron_config_value: Any) -> dict[str, An
         state["bound_cron_sha256"] = target_hash
         state["pending_cron_sha256"] = None
         atomic_write_json(root / "monitor-state.json", state)
+        persist_cron_binding(root, cron_config_value)
         return state
 
 
@@ -424,6 +454,7 @@ def adopt_disabled_live_reconfiguration(
             raise ValueError("current cron config does not match the bound config")
         state["bound_cron_sha256"] = target_hash
         atomic_write_json(root / "monitor-state.json", state)
+        persist_cron_binding(root, target_config)
         return state
 
 

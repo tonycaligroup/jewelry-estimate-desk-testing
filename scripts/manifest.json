@@ -6,7 +6,7 @@
     "artwork.py": "16c33aa10dd2bc3b39997c471ec74f3f",
     "behavior_check.py": "b4a853aa6fa2ffcf524cfe25b4874fa3",
     "brief_registry.py": "9b86561d08a561cc1fe11f2200ef831c",
-    "business_state_reset.py": "464187ae198afce7f2e5ff0257cbff0e",
+    "business_state_reset.py": "3dfcf5868b298c45b893281f90ad42ae",
     "calendar_query.py": "0de538dfda4237dfea435557f8167b35",
     "cli.py": "11dc98d7c9f266c70225fe7110b4d9df",
     "cost_components.py": "aa10145f30ce743afa079740da38ebdc",
@@ -25,7 +25,7 @@
     "gmail_text.py": "defc5d368bf8536f71bd544e4a10d862",
     "image_provider.py": "07874f38339dacad8444f6526705bced",
     "inbox_claim.py": "d737e3d6148ed90a945e4e0ab572c6c7",
-    "inbox_monitor.py": "84f4729647905abaeb87c8a98b77ca0e",
+    "inbox_monitor.py": "af33c224c49aad06699493e2cb4ed3b8",
     "inbox_watcher.py": "569f13ec7832543dba21565b8eb1b9d7",
     "judge.py": "32fbf726b40a1328530c64d6d00380d5",
     "kolo_safe.py": "96100e58c3d66526e18093e8bb7a9319",
@@ -54,5 +54,5 @@
     "words.py": "46567cc843e760bc748e214a4f805f68",
     "workflow_safe.py": "6f62cd60f6f68a2e591b74aadd0f0320"
   },
-  "version": "4.15.23"
+  "version": "4.15.24"
 }

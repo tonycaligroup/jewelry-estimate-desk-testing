@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import activation_binding
+import cron_config
 import customer_state_reset
 import inbox_monitor
 import validate_profile
@@ -84,6 +85,9 @@ def reset(workspace: Path, template: Path | None = None) -> dict[str, Any]:
     cron_binding = inbox_monitor.read_json(cron_binding_path)
     if not isinstance(cron_binding, dict) or not cron_binding:
         raise ValueError("durable cron binding must be a non-empty JSON object")
+    cron_config.validate_binding(cron_binding)
+    if inbox_monitor.sha256_json(cron_binding) != state["bound_cron_sha256"]:
+        raise ValueError("durable cron binding does not match active monitor state")
 
     template_value = inbox_monitor.read_json(template_path)
     template_status = validate_profile.validate_profile(template_value)

@@ -106,6 +106,10 @@ every pre-activation inquiry manually.
      --cron-config "$WORK/cron-binding.json"
    ```
 
+   Preparation validates that binding and stores an exact private copy at
+   `<workspace>/estimate-desk/work/cron-binding.json`. Activation repairs that
+   durable copy when called again with the same verified binding.
+
 7. Activate only against that exact verified binding, then enable the same job
    ID. Re-read it once more and require `enabled: true` and a successful
    `bind-live` result equal to `cron-binding.json`:
@@ -205,6 +209,9 @@ watermark, queue, claims, and records are preserved.
    python3 {baseDir}/scripts/inbox_monitor.py reconfigure-activate \
      --cron-config "$WORK/verified-target-binding.json"
    ```
+
+   A successful commit also replaces the durable cron binding with this exact
+   verified target. Recovery adoption does the same.
 
    Re-read once more and require `enabled: true` plus the same verified binding.
    If the edit fails, restore the complete former live config before using
