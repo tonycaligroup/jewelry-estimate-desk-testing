@@ -912,7 +912,7 @@ class CustomerStateResetTests(unittest.TestCase):
             ("approvals", [
                 "jed-0123456789abcdef-0123456789abcdef.json",
                 "jed-0123456789abcdef-0123456789abcdef.email.txt",
-                "jed-0123456789abcdef-0123456789abcdef-behavior-check-booking.json",
+                "jed-0123456789abcdef-0123456789abcdef.email-behavior-check-offer.json",
             ]),
             ("briefs", ["00000001-0000-4000-8000-000000000000.json", "rejections-watermark.json", "approvals-watermark.json"]),
         ):

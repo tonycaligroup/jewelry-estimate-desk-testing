@@ -13,7 +13,7 @@
     "cron_config.py": "c970d76a94e201962b34ea3275492ea7",
     "customer_content_guard.py": "d21e5b76a2da0e67e91f806674ade777",
     "customer_mail.py": "3dfbc332b53d881091c63487ecfb79dc",
-    "customer_state_reset.py": "b0af6ce7652d82d83e8f5163f0dce8c3",
+    "customer_state_reset.py": "285345d674c0a650ea26fe7a21e75978",
     "doctor.py": "ee93e435e15850b0980547e535398cb1",
     "estimate_record.py": "f475e7c904df7c5a21ff128e82bc4b87",
     "gateway_token.py": "11a14f0bcc788508c7382728c4b9fe7a",
@@ -54,5 +54,5 @@
     "words.py": "46567cc843e760bc748e214a4f805f68",
     "workflow_safe.py": "6f62cd60f6f68a2e591b74aadd0f0320"
   },
-  "version": "4.15.22"
+  "version": "4.15.23"
 }

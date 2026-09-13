@@ -66,7 +66,8 @@ def _flat_files(root: Path, label: str, pattern: re.Pattern[str]) -> list[Path]:
 QUESTION_FILE_RE = re.compile(r"q-[0-9a-f]{12}\.json")
 APPROVAL_FILE_RE = re.compile(
     r"jed-[0-9a-f]{16}-[0-9a-f]{16}"
-    r"(\.email\.txt|-behavior-check-[a-z0-9_-]+\.json|\.json)"
+    r"(\.email\.txt|\.email-behavior-check-[a-z0-9_-]+\.json|"
+    r"-behavior-check-[a-z0-9_-]+\.json|\.json)"
 )
 BRIEF_FILE_RE = re.compile(r"([0-9a-fA-F-]{8,64}|[a-z]+-watermark)\.json")
 
