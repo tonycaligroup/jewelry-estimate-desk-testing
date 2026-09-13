@@ -909,7 +909,11 @@ class CustomerStateResetTests(unittest.TestCase):
         (desk / "work" / "cron-binding.json").write_text("{}", encoding="utf-8")
         for name, files in (
             ("questions", ["q-0123456789ab.json"]),
-            ("approvals", ["jed-0123456789abcdef-0123456789abcdef.json", "jed-0123456789abcdef-0123456789abcdef.email.txt"]),
+            ("approvals", [
+                "jed-0123456789abcdef-0123456789abcdef.json",
+                "jed-0123456789abcdef-0123456789abcdef.email.txt",
+                "jed-0123456789abcdef-0123456789abcdef-behavior-check-booking.json",
+            ]),
             ("briefs", ["00000001-0000-4000-8000-000000000000.json", "rejections-watermark.json", "approvals-watermark.json"]),
         ):
             (desk / name).mkdir(exist_ok=True)
@@ -956,7 +960,7 @@ class CustomerStateResetTests(unittest.TestCase):
             for name in ("questions", "approvals", "briefs"):
                 self.assertEqual([p for p in (desk / name).iterdir() if not p.name.startswith(".")], [], name)
             self.assertEqual(result["removed"]["questions"], 1)
-            self.assertEqual(result["removed"]["approvals"], 2)
+            self.assertEqual(result["removed"]["approvals"], 3)
             self.assertEqual(result["removed"]["briefs"], 3)
             self.assertFalse((desk / "work" / "offer-0123456789abcdef-round2").exists())
             for name in (brief_registry.watermark_path(desk / "inbox-monitor").name, brief_registry.approvals_watermark_path(desk / "inbox-monitor").name):
@@ -977,6 +981,17 @@ class CustomerStateResetTests(unittest.TestCase):
             (desk / "work" / "unexpected-customer-folder").mkdir()
             with self.assertRaisesRegex(ValueError, "unexpected reset target"):
                 customer_state_reset.reset(root, now_ms=2_000)
+            self.assertTrue(list((desk / "records").glob("jed-*.json")))
+
+    def test_reset_refuses_unknown_approval_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desk, _ = self.build_workspace(root)
+            unknown = desk / "approvals" / "customer-notes.txt"
+            unknown.write_text("do not delete", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unexpected reset target"):
+                customer_state_reset.reset(root, now_ms=2_000)
+            self.assertTrue(unknown.exists())
             self.assertTrue(list((desk / "records").glob("jed-*.json")))
 
 
