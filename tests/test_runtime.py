@@ -10689,6 +10689,25 @@ class ConfirmTheVisionTests(unittest.TestCase):
         self.assertIsNone(estimate_record.vision_in_words({**self.SPEC, "reference_images": ""}), "no photo, nothing to confirm")
         self.assertIsNone(estimate_record.vision_in_words({"pieces": [{"piece_type": "ring"}, {"piece_type": "band"}], "reference_images": "from the photo: x"}))
 
+    def test_a_photo_recreation_is_confirmed_broadly_without_invented_construction(self) -> None:
+        spec = {
+            "piece_type": "oval signet ring", "stone_type": "diamond", "stone_origin": "lab-grown",
+            "metal": "gold", "metal_karat": 18, "setting_style": "bezel",
+            "reference_images": "from the photo: oval signet face with KOLO text detail",
+        }
+        settled = estimate_record.settle_attachment_visuals(
+            spec, ["metal_color"], image_attached=True, recreate_reference=True,
+        )
+        self.assertEqual(settled["metal_color"], "match reference photo")
+        self.assertEqual(
+            estimate_record.vision_in_words(settled),
+            "a lab-grown diamond ring with a text feature in 18K gold, matching the reference photo",
+        )
+        self.assertNotIn("bezel", estimate_record.vision_in_words(settled))
+        self.assertNotIn("oval signet", estimate_record.vision_in_words(settled))
+        self.assertTrue(estimate_record.asks_to_recreate_reference("I lost this ring. Can you recreate it from the attached photo?"))
+        self.assertFalse(estimate_record.asks_to_recreate_reference("Can you make me a ring?"))
+
     def test_fancy_diamond_color_is_the_stone_name_not_a_grade(self) -> None:
         words = "Lab-grown yellow diamond stud earrings, just like the photo."
         settled = estimate_record.settle_fancy_diamonds(
@@ -10922,6 +10941,13 @@ class EarlierConversationTests(unittest.TestCase):
         self.assertTrue(all(field not in still_missing for field in ("earring_style", "stone_shape", "stone_cut", "setting_style")))
         untouched = {"piece_type": "earrings"}
         self.assertIs(estimate_record.settle_attachment_visuals(untouched, missing, image_attached=False), untouched)
+
+    def test_a_photo_without_a_recreation_request_does_not_hide_the_metal_color_question(self) -> None:
+        spec = {"piece_type": "ring", "metal": "gold", "metal_karat": 18,
+                "reference_images": "from the photo: a yellow metal ring"}
+        settled = estimate_record.settle_attachment_visuals(spec, ["metal_color"], image_attached=True)
+        self.assertNotIn("metal_color", settled)
+        self.assertEqual(pipeline.question_lines(["metal_color"]), ["Yellow, white, or rose?"])
 
     def test_a_prior_piece_confirmation_never_requests_an_image_already_attached(self) -> None:
         missing = [reading_check.PREFIX + "prior_piece"]

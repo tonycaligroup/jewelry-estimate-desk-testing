@@ -82,6 +82,7 @@ Dates are 2026. "Live" means a tester's real thread; "rehearsal" means a scripte
 | Seen | Symptom | Rule now | Version |
 |---|---|---|---|
 | 9 to 10 Sep live | Nothing was written to the spreadsheet for a day; no Rates tab | The sheet read built a URL with a space in "Cost sheet"; Python's HTTP client refused it and the push behind it never ran. Range URLs are escaped, a failing pull never stops the push, and a test hands the URL to the real client | 4.15.14 |
+| 13 Sep live | A lost ring recreation was described as a bezel oval signet and asked for gold color despite the attached photo | Explicit photo recreations are confirmed with only broad, safe visual language; the photo settles metal color as “match reference photo” but never supplies carat or another nonvisual fact | 4.15.27 |
 | 9 Sep live | Approving two cards in one message dropped one | One APPROVE per message; executors are idempotent | (chat) |
 | 9 Sep live | A phone-number reply crashed the cancellation branch | A local import shadowed a module name; removed | 4.15.9 |
 | 8 Sep live | A rendering run killed while filing its card rendered again on resume | A killed run resumes to the card and never renders twice | 4.13.x |

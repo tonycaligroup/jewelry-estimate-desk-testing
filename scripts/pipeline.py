@@ -965,8 +965,10 @@ def process_claim(
     specification = estimate_record.settle_carat_basis(
         specification, " ".join(reading_check.own_words(str(m.get("body") or "")) for m in digest.get("messages") or []
                                 if m.get("sent_by") == "customer"))
+    recreate_reference = image_attached and estimate_record.asks_to_recreate_reference(handled_words)
     specification = estimate_record.settle_attachment_visuals(
-        specification, spec_gate.missing_required_fields(specification, profile), image_attached
+        specification, spec_gate.missing_required_fields(specification, profile), image_attached,
+        recreate_reference=recreate_reference,
     )
     photo_evidence = " ".join(photos) or (estimate_record.ATTACHMENT_REFERENCE if image_attached else "")
     specification = estimate_record.settle_fancy_diamonds(specification, handled_words, photo_evidence)

@@ -2895,6 +2895,37 @@ class DetailsAndATimeInOneReplyTests(SideBranchTests):
             self.assertLess(body.index("your vision right"), body.index("Which metal"))
         self.run_branch(branch)
 
+    def test_a_lost_ring_recreation_uses_a_broad_photo_description_and_does_not_ask_color(self) -> None:
+        """Live 13 Sep: a photo recreation was called a bezel oval signet and asked which gold color despite the photo."""
+        def branch(ws: Path, world: World) -> None:
+            self._profile_with_rates(ws)
+            thread = "thread-remake-lost-ring"
+            world.example_description = "A yellow-gold ring with white pave diamonds and a large face carrying KOLO text."
+            world.spec = {
+                "piece_type": "oval signet ring", "stone_type": "diamond", "stone_origin": "lab-grown",
+                "metal": "gold", "metal_karat": 18, "finger_size": 10, "setting_style": "bezel",
+                "reference_images": "from the photo: an oval signet face with KOLO text detail in yellow metal",
+                "notes": "approximately 24 grams total",
+            }
+            world.customer_message(
+                "rr1", thread,
+                "Hey, I lost a custom ring, do you think you could recreate it? I have attached a photo. "
+                "It's 18k gold, all the diamonds are lab grown. I think it weighed about 24 grams total. "
+                "Size 10. Can I get an estimate?\n\nTony",
+                subject="Can you remake this", attachments=("lost-ring.jpg",),
+            )
+            summary = self.tick(ws, world)
+            self.assertEqual([item["outcome"] for item in summary["inline"]], ["followup_sent"], summary)
+            body = world.sent[-1]["body"]
+            self.assertIn("a lab-grown diamond ring with a text feature in 18K gold, matching the reference photo", body)
+            self.assertNotIn("bezel", body.lower())
+            self.assertNotIn("oval signet", body.lower())
+            self.assertNotRegex(body.lower(), r"yellow, white, or rose")
+            record = self.record(ws, self.only_estimate(ws))
+            self.assertEqual(record["specification"]["metal_color"], "match reference photo")
+            self.assertIn("stone_carat", record["missing_required_fields"], "a photo still cannot supply carat weight")
+        self.run_branch(branch)
+
     def test_a_pending_booking_card_keeps_the_estimate_from_asking_for_a_time(self) -> None:
         """The price card is approved before the booking card: the estimate says the visit is being confirmed separately."""
         def branch(ws: Path, world: World) -> None:

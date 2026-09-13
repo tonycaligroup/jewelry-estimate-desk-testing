@@ -2370,6 +2370,19 @@ def photo_reading(specification: dict[str, Any] | None) -> str:
     return text if text.lower().startswith("from the photo") else ""
 
 
+REFERENCE_RECREATION_NOTE = "customer asked to recreate the reference photo"
+_REFERENCE_RECREATION_RE = re.compile(
+    r"(?i)\b(?:re-?creat(?:e|ing)|re-?mak(?:e|ing)|replicat(?:e|ing)|reproduc(?:e|ing)|copy(?:ing)?)\b|"
+    r"\b(?:make|build|create)\s+(?:this|that|it|one like (?:this|that))\b"
+)
+_TEXT_FEATURE_RE = re.compile(r"(?i)\b(?:text|lettering|letters?|wording|words?|logo|initials?|name|monogram)\b")
+
+
+def asks_to_recreate_reference(own_words: str) -> bool:
+    """The customer asks to reproduce the attached object, rather than merely using it as inspiration."""
+    return bool(_REFERENCE_RECREATION_RE.search(str(own_words or "")))
+
+
 def vision_in_words(specification: dict[str, Any] | None, on_file: bool | str = False) -> str | None:
     """The customer's vision as a jeweler would say it back, when a photo came with the words (the owner, 9 September 2026).
 
@@ -2398,6 +2411,23 @@ def vision_in_words(specification: dict[str, Any] | None, on_file: bool | str = 
     if not piece and not stone:
         return None
     pair = is_pair(spec)
+    if REFERENCE_RECREATION_NOTE in photo_reading(spec).lower():
+        # A recreation photo is the design authority. Confirm only what is safe
+        # to name broadly; keep inferred construction language in the private
+        # record for the bench instead of presenting it as settled customer fact.
+        broad_piece = next((name for name in ("earrings", "ring", "pendant", "necklace", "bracelet", "chain", "band")
+                            if name in piece), piece)
+        origin = clean(spec.get("stone_origin")).lower()
+        stone_words = " ".join(word for word in (origin, stone) if word)
+        core = " ".join(word for word in (stone_words, broad_piece) if word)
+        head = core if core.startswith(("a ", "an ")) else ("an " if core[:1] in "aeiou" else "a ") + core
+        evidence = " ".join(str(spec.get(key) or "") for key in ("reference_images", "notes", "engraving"))
+        if _TEXT_FEATURE_RE.search(evidence):
+            head += " with a text feature"
+        metal = cost_components.extract_metal(spec).get("description")
+        if metal:
+            head += f" in {metal}"
+        return head + ", matching the reference photo"
     # The piece, named the way a jeweler says it: "sapphire stud earrings", "a sapphire halo ring".
     if "earring" in piece:
         head = " ".join(w for w in (stone, style, "earrings") if w)
@@ -2503,7 +2533,7 @@ ATTACHMENT_REFERENCE = "customer attached image; match its visual design"
 
 
 def settle_attachment_visuals(
-    specification: dict[str, Any], missing: list[str], image_attached: bool
+    specification: dict[str, Any], missing: list[str], image_attached: bool, recreate_reference: bool = False
 ) -> dict[str, Any]:
     """An attached image settles visual choices even when its machine reading fails.
 
@@ -2518,19 +2548,24 @@ def settle_attachment_visuals(
     settled = False
     for name in missing:
         index, field = split_field_name(name)
-        if field not in ATTACHMENT_VISUAL_FIELDS:
+        if field not in ATTACHMENT_VISUAL_FIELDS and not (recreate_reference and field == "metal_color"):
             continue
+        value = "match reference photo" if recreate_reference and field == "metal_color" else "jeweler's choice"
         if index is None:
             if not _present(result.get(field)):
-                result[field] = "jeweler's choice"
+                result[field] = value
                 settled = True
         elif 0 <= index < len(pieces) and not _present(pieces[index].get(field)):
-            pieces[index][field] = "jeweler's choice"
+            pieces[index][field] = value
             settled = True
     if pieces:
         result["pieces"] = pieces
     if settled and not _present(result.get("reference_images")):
         result["reference_images"] = ATTACHMENT_REFERENCE
+    if recreate_reference:
+        reference = str(result.get("reference_images") or ATTACHMENT_REFERENCE).strip()
+        if REFERENCE_RECREATION_NOTE not in reference.lower():
+            result["reference_images"] = f"{reference}; {REFERENCE_RECREATION_NOTE}"
     return result
 
 
