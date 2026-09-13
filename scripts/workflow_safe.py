@@ -1865,7 +1865,7 @@ def ask_out_of_scope(args: argparse.Namespace, note: str) -> dict[str, Any]:
 
 
 def send_acknowledgement(p: dict[str, Path], record: dict[str, Any], message_id: str, body: str, runner: Any) -> dict[str, Any]:
-    """Concierge mode: the one email that says the owner will work up the estimate; journaled, then the claim is complete."""
+    """Concierge mode: the owner-authorized holding email; journaled, then the claim is complete."""
     import gateway_token  # local import; only needed when sending
 
     customer_content_guard.validate_customer_text(body)
@@ -2420,6 +2420,19 @@ def answer_decision(
         return _answer_command_failed(args, p, root, question, outcome)
     if question["kind"] == "stuck_claim":
         return _answer_stuck_claim(args, workspace, p, root, question, outcome)
+    if question["kind"] == "concierge_next" and outcome == "acknowledge":
+        body = str((question.get("context") or {}).get("acknowledgement_body") or "").strip()
+        if not body:
+            raise ValueError("concierge acknowledgement body is missing")
+        record = estimate_record.read_object(
+            estimate_record.record_path(p["record_root"], question["estimate_id"])
+        )
+        _resume_parked_claim(p, message_id)
+        if question["status"] == "open":
+            owner_questions.record_decision(root, question, args.answer, outcome)
+        sent = send_acknowledgement(p, record, message_id, body, getattr(args, "runner", subprocess.run))
+        result.update(sent)
+        return result
     if question["kind"] == "followup_stalled" and outcome in {"skip", "ask_again"}:
         import pipeline  # local import: pipeline imports this module
 

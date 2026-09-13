@@ -28,9 +28,9 @@ from typing import Any, Callable
 
 SCHEMA_VERSION = 1
 QUESTION_KINDS = {"missing_rate", "same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed",
-                  "stuck_claim", "price_next", "rendering_next", "out_of_scope", "rate_save"}
+                  "stuck_claim", "price_next", "rendering_next", "out_of_scope", "rate_save", "concierge_next"}
 DECISION_KINDS = {"same_sender", "unclear_reply", "appointment_next", "followup_stalled", "command_failed", "stuck_claim",
-                  "price_next", "rendering_next", "out_of_scope", "rate_save"}
+                  "price_next", "rendering_next", "out_of_scope", "rate_save", "concierge_next"}
 # Fixed outcomes per decision kind, with the words an owner is likely to use.
 DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "same_sender": {
@@ -87,6 +87,10 @@ DECISION_OPTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "out_of_scope": {
         "quote": ("quote", "quote it", "estimate", "estimate it", "price it", "go ahead", "yes", "custom", "make it", "read it"),
         "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip", "no"),
+    },
+    "concierge_next": {
+        "acknowledge": ("acknowledge", "send acknowledgement", "tell them", "let them know", "send it"),
+        "handle_myself": ("handle", "i will", "i'll", "mine", "leave it", "myself", "i got it", "i have it", "skip"),
     },
 }
 

@@ -114,9 +114,9 @@ by default. **Concierge** is for a shop not ready to let the desk price: the
 desk gets the conversation to a call or a visit and then stops. The first
 email acknowledges, confirms the vision from a photo when there is one, asks
 only budget and timeframe, and offers times (one card); a reply that picks a
-time gets the booking card; a reply that pushes for a number gets one
-acknowledgement ("I will work up the estimate and get back to you") and the
-owner a nudge; every other reply is read for facts and left alone. What the
+time gets the booking card; a reply that pushes for a number is parked with
+nothing sent while the owner chooses "acknowledge" (the desk sends one neutral
+holding note) or "handle myself" (the owner takes the thread); every other reply is read for facts and left alone. What the
 customer said reaches the Customers and Cost sheet tabs as pending, for the
 owner's reference. The desk files no price card, sends no estimate and no
 renderings, and asks the owner for no details in this mode; the owner writes

@@ -16,6 +16,8 @@ longer fit together, not that a mock changed.
 
 from __future__ import annotations
 
+import argparse
+
 import ast
 import base64
 import io
@@ -3007,7 +3009,7 @@ class ConciergeModeTests(SideBranchTests):
             self.assertNotIn("asked", record["concierge"])
         self.run_branch(branch)
 
-    def test_a_customer_who_wants_a_number_gets_one_acknowledgement_and_the_owner_a_nudge(self) -> None:
+    def test_a_customer_who_wants_a_number_waits_for_the_owner_before_acknowledgement(self) -> None:
         def branch(ws: Path, world: World) -> None:
             self._concierge(ws)
             thread = "thread-concierge-number"
@@ -3024,13 +3026,20 @@ class ConciergeModeTests(SideBranchTests):
             world.spec = {**world.spec, "engraving": "our logo", "budget": "under 2000"}
             world.customer_message("cn2", thread, "I'd rather not come in, could you just send me a price? Budget under 2000, with our logo on the face.\n\nPat")
             summary = self.tick(ws, world)
-            self.assertEqual([i["outcome"] for i in summary["inline"]], ["acknowledged"], summary)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
+            self.assertEqual(len(world.sent), 1, "the desk sends nothing before the owner chooses")
+            question = [q for q in self.questions(ws, "open") if q["kind"] == "concierge_next"][-1]
+            self.assertIn("Nothing has been sent", question["text"])
+            self.assertIn("Still unknown", question["text"])
+            notice = [n["text"] for n in world.notices if not n["file"] and "Nothing has been sent" in n["text"]][-1]
+            self.assertIn("desk-answer", notice)
+            self.assertEqual(self.claim(ws, "cn2")["status"], "awaiting_owner")
+            answered = workflow_safe.answer_question(argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=owner_questions.reference(question["question_id"]),
+                answer="acknowledge", openclaw="openclaw", runner=world.run,
+            ))
+            self.assertEqual(answered["decision"], "acknowledge")
             self.assertIn("work up the estimate", world.sent[-1]["body"])
-            self.assertNotIn("?", world.sent[-1]["body"].split("\n\n", 1)[1].split("\n\n")[0], "no question in the acknowledgement")
-            nudge = [n for n in world.notices if not n["file"] and "would rather have a number" in n["text"]][-1]["text"]
-            self.assertNotIn("desk-answer", nudge)
-            self.assertIn("Still unknown", nudge)
-            self.assertIn("yours to write and send", nudge)
             self.assertEqual(self.claim(ws, "cn2")["status"], "processed")
             # A second push does not send a second acknowledgement, and nothing is ever priced.
             world.customer_message("cn3", thread, "Any update on the price?\n\nPat")
@@ -3039,6 +3048,35 @@ class ConciergeModeTests(SideBranchTests):
             self.assertEqual(len(world.sent), 2)
             self.assertEqual([q["kind"] for q in self.questions(ws, "open") if not q.get("dormant")], [])
             self.assertFalse(any(str(c["title"]).startswith("Price approval") for c in world.cards))
+        self.run_branch(branch)
+
+    def test_live_chain_number_request_can_be_left_to_the_owner_without_a_send(self) -> None:
+        def branch(ws: Path, world: World) -> None:
+            self._concierge(ws)
+            thread = "thread-concierge-chain"
+            world.spec = {"piece_type": "chain", "metal": "gold", "metal_karat": "18k"}
+            world.requested = ([], [])
+            world.customer_message("cc1", thread, "I am looking for an 18K gold chain and would like an estimate.\n\nTony")
+            summary = self.tick(ws, world)
+            offer = world.cards[-1]
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["appointment_approval_requested"], summary)
+            self.execute(ws, world, offer["payload"]["execute"], offer)
+            sent_before = len(world.sent)
+
+            world.customer_message("cc2", thread, "I would rather have a number than a visit. Could you send me an estimate?\n\nTony")
+            summary = self.tick(ws, world)
+            self.assertEqual([i["outcome"] for i in summary["inline"]], ["awaiting_owner"], summary)
+            self.assertEqual(len(world.sent), sent_before)
+            question = [q for q in self.questions(ws, "open") if q["kind"] == "concierge_next"][-1]
+            self.assertIn("dimensions", question["text"])
+            self.assertIn("metal color", question["text"])
+            answered = workflow_safe.answer_question(argparse.Namespace(
+                workspace=ws, base_dir=ROOT, question=owner_questions.reference(question["question_id"]),
+                answer="handle myself", openclaw="openclaw", runner=world.run,
+            ))
+            self.assertEqual(answered["decision"], "handle_myself")
+            self.assertEqual(len(world.sent), sent_before)
+            self.assertEqual(self.claim(ws, "cc2")["status"], "manual_review")
         self.run_branch(branch)
 
     def test_auto_mode_is_unchanged(self) -> None:

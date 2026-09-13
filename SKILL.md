@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.25
+version: 4.15.26
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -176,7 +176,9 @@ location and collect:
 4a. How the desk works the conversation, stored as `desk.mode`. The default
    is `concierge`: the first email acknowledges, confirms the vision, asks
    only budget and timeframe, and offers a call or a visit; the desk books it
-   and stops there. The owner writes and sends the estimate themselves; what
+   and stops there. If the customer declines the meeting and asks for a number,
+   nothing is sent until the owner chooses "acknowledge" or "handle myself".
+   The owner writes and sends the estimate themselves; what
    the customer said is on the Customers and Cost sheet tabs. `auto` is the
    opt-in: the desk asks the details by email, prices from the replies, and
    sends the approved estimate. Offer both in one sentence; a shop that does

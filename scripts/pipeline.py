@@ -1101,8 +1101,8 @@ def _concierge_reply(
 
     The first email acknowledges, confirms the vision, asks budget and
     timeframe, and offers times. A reply that picks a time gets the meeting
-    card. A reply that pushes for a number gets one acknowledgement and the
-    owner a nudge. Any other reply is read for facts and left alone; the
+    card. A reply that pushes for a number is parked while the owner chooses
+    whether to acknowledge it or handle the thread. Any other reply is read for facts and left alone; the
     facts reach the Cost sheet and Customers tabs for the owner, who writes
     and sends the estimate. No specification question ever reaches the
     customer, and the desk files no price card in this mode.
@@ -1133,7 +1133,7 @@ def _concierge_reply(
         return {"outcome": "appointment_approval_requested", "before_estimate": True, "concierge": True,
                 "asks": list(intent.get("ask_for") or []), "next": "done"}
     if estimate_record.asks_for_estimate(handled_words) and not (record.get("concierge") or {}).get("acknowledged"):
-        # They would rather have a number than a visit: one acknowledgement, and the owner works it up.
+        # They would rather have a number than a visit: the owner chooses before anything is sent.
         shop = (profile.get("shop") or {}).get("name") or "the shop"
         piece = owner_questions.summary_of_piece(specification) if specification else "your piece"
         body, _source = workflow_safe._draft_customer_email(
@@ -1143,14 +1143,27 @@ def _concierge_reply(
         body_path = Path(paths["customer_reply"])
         body_path.parent.mkdir(parents=True, exist_ok=True)
         body_path.write_text(body.rstrip("\n") + "\n", encoding="utf-8")
-        workflow_safe.send_acknowledgement(p, record, message_id, body_path.read_text(encoding="utf-8"), command_runner)
         who = kolo_safe._sender_display(str((record.get("route") or {}).get("recipient") or "the customer"))
         still = "; ".join(describe_missing(specification, missing)) if missing else "nothing"
-        kolo_safe.tell_owner(p["monitor_root"], f"{who} would rather have a number than a visit; I told them you will work up the estimate "
-                             f"and get back to them. My reading: {piece}. Still unknown: {still}. In concierge mode the estimate is "
-                             "yours to write and send; what they told me is on the Cost sheet and Customers tabs.",
-                             command_runner)
-        return {"outcome": "acknowledged", "next": "done"}
+        text = (
+            f"{who} would rather have a number than a visit for {piece}. Still unknown: {still}. Nothing has been sent. "
+            "Reply \"acknowledge\" to tell them you will work up the estimate and get back to them, "
+            "or \"handle myself\" to leave the thread to you."
+        )
+        root = owner_questions.questions_root(p["monitor_root"])
+        created, question = owner_questions.create_decision(
+            root, "concierge_next", estimate_id, message_id, text,
+            {"acknowledgement_body": body_path.read_text(encoding="utf-8"), "missing": list(missing), "piece": piece},
+        )
+        question = workflow_safe._attach_answer_command(root, p["monitor_root"], question)
+        if created:
+            owner_questions.deliver(
+                root, question, runner=command_runner,
+                extra_args=kolo_safe.owner_channel_args(p["monitor_root"]),
+            )
+        token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
+        inbox_monitor.park_item(p["monitor_root"], message_id, p["claim_root"], token, "concierge_owner_question")
+        return {"outcome": "awaiting_owner", "question_id": question["question_id"], "next": "done"}
     # Budget, a date, thanks: the facts are on the record; nothing to send, nothing to ask.
     token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
     kolo_safe.complete_claimed(p["monitor_root"], p["claim_root"], message_id, token)
