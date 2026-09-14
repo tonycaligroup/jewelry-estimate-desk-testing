@@ -268,6 +268,16 @@ class InstructionCoherenceTests(unittest.TestCase):
         self.assertIn("only after that command succeeds", skill)
         self.assertIn("does not route or deliver approval", skill)
 
+    def test_open_desk_answer_cannot_be_replaced_by_a_manual_model_workflow(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("An open `desk-answer` question is a deterministic command path", skill)
+        self.assertIn("preferred model is available", skill)
+        self.assertIn("plain-language \"approve\" can approve only", skill)
+        self.assertIn("structured card and provider evidence", skill)
+        self.assertIn("Unfortunately not available until Sept 23rd at 2pm", skill)
+        self.assertIn("Do not add budget, delivery-date, or specification questions", skill)
+        self.assertNotIn("pinned to\n`litellm-fireworks/qwen-3-7-plus`, no fallback", skill)
+
     def test_installer_is_the_only_configured_approver(self) -> None:
         profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
         self.assertNotIn("approver_name", profile["shop"])

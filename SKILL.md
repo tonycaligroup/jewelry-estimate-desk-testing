@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.31
+version: 4.15.32
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -75,10 +75,21 @@ and delivery commitment behind owner approval.
    `setup.owner_notification_medium: sms` only after success. This is a Kolo
    account command, not a Jewelry Desk command. Approval cards remain in
    Kolo's approval queue; never promise this preference routes them to SMS.
+17. An open `desk-answer` question is a deterministic command path, not a
+   drafting task. The owner's next reply must be passed verbatim to
+   `workflow_safe.py answer-question` before doing anything else, even when no
+   preferred model is available or the watcher is using the CLI. Never replace
+   that command with a hand-written appointment offer, approval request, Gmail
+   send, calendar write, record update, or conversational confirmation. A
+   plain-language "approve" can approve only a real Kolo approval card; it
+   never authorizes prose the session wrote itself. Never say an offer was
+   filed, sent, booked, approved, or confirmed without the corresponding
+   structured card and provider evidence returned by the desk.
 
-Run this skill through the dedicated Kolo agent pinned to
-`litellm-fireworks/qwen-3-7-plus`, no fallback; worker jobs use the same
-model with thinking off. If Kolo cannot verify the model, stop.
+The watcher resolves its configured model by served name using the profile pin
+or the tested preference list. Model resolution governs model calls only. It
+never blocks or changes deterministic owner-answer, approval, Gmail, calendar,
+or recovery commands, and it never permits the main session to imitate them.
 
 ## Bundled resources
 
@@ -828,7 +839,12 @@ output says `queued_for_tick`, the desk reads and prices on its next tick
 (within two minutes) and the card follows on its own. Tell the owner
 nothing in between. Never ask the owner a question of your
 own while a desk question is open, and never read their reply to the desk
-as consent for something you proposed.
+as consent for something you proposed. This command path does not need the
+drafting model. A model-resolution warning is never a reason to handle the
+answer manually. For example, after rejecting a booking, an answer such as
+"Unfortunately not available until Sept 23rd at 2pm" must be passed verbatim
+to the open appointment question. Do not calculate the weekday, compose an
+offer, ask for approval in prose, or claim anything reached the customer.
 
 ### Approved briefs: the desk runs them; you do nothing
 
@@ -954,6 +970,11 @@ refuses, tell the owner what it said and wait; never pick an answer, never
 re-run with a different one, and never choose a question by reading the
 questions folder. If it fails part way (a traceback), run the
 same command again: it carries on from where it stopped.
+
+In concierge mode, a replacement appointment offer remains scheduling only.
+Do not add budget, delivery-date, or specification questions to it. The owner
+handles those details during the consultation unless the desk's real workflow
+explicitly produced a different owner-approved customer message.
 
 ## Phase 5: records, follow-up, and cleanup
 
