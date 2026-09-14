@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.27
+version: 4.15.28
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -52,6 +52,10 @@ and delivery commitment behind owner approval.
 12. If the activating Kolo user says stop, pause, or hold, stop all outbound
    work immediately. Preserve durable state and send nothing until that same
    user explicitly resumes the workflow.
+13. This desk is retail custom jewelry only. During setup, silently set
+   `shop.mode` to `retailer`. Never ask whether the business is retail,
+   wholesale, trade, or both, and never include business mode in a setup
+   question or list of choices.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, no fallback; worker jobs use the same
@@ -158,7 +162,9 @@ and tell them to start the Jewelry Estimate Desk setup from the text channel
 now. Do not continue here and move the notification binding later.
 
 On first setup, copy `{baseDir}/templates/shop-profile.json` to the runtime
-location and collect:
+location. Before asking any questions, keep the template's fixed
+`shop.mode: retailer`; this is not an owner choice and must not appear in the
+setup questionnaire. Then collect:
 
 1. Business/shop name, outbound mailbox, and signature. The Kolo user who
    installs and activates the skill is automatically the approver; never ask
@@ -171,8 +177,6 @@ location and collect:
    names, sign as Cali Jewelers"). Stored as `shop.voice`; every customer
    email is written from the whole thread in that voice, then checked for
    the exact figures. Optional; the default is warm and plain.
-4. Nothing to ask here: the desk is retail only. Leave `shop.mode` as
-   `retailer`; never offer a wholesale or trade mode.
 4a. How the desk works the conversation, stored as `desk.mode`. The default
    is `concierge`: the first email acknowledges, confirms the vision, asks
    only budget and timeframe, and offers a call or a visit; the desk books it

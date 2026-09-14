@@ -832,7 +832,8 @@ closed by follow-up changes:
   "second piece" answer closes the thread to the owner for now; the desk does
   not yet reopen the gate or open a second estimate on the same thread.
 - Setup no longer asks retail or wholesale (4 September 2026); the profile
-  validator accepts `retailer` only. The wholesale email wording and the
+  validator accepts `retailer` only. This is a silent fixed value, never a
+  setup question or list of retail/wholesale/both choices. The wholesale email wording and the
   trade markup setting were removed on 6 September 2026. The tests that pin
   customer wording and phase order exist to keep the implementation faithful
   to this document.

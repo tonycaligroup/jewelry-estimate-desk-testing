@@ -231,6 +231,14 @@ class ProfileTests(unittest.TestCase):
 
 
 class InstructionCoherenceTests(unittest.TestCase):
+    def test_setup_never_offers_retail_wholesale_or_both(self) -> None:
+        profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual(profile["shop"]["mode"], "retailer")
+        self.assertIn("Never ask whether the business is retail", skill)
+        self.assertIn("must not appear in the\nsetup questionnaire", skill)
+        self.assertNotIn("Nothing to ask here: the desk is retail only", skill)
+
     def test_installer_is_the_only_configured_approver(self) -> None:
         profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
         self.assertNotIn("approver_name", profile["shop"])
