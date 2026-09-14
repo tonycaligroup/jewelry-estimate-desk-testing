@@ -194,6 +194,45 @@ def keep_summary(workspace: Path, summary: dict[str, Any]) -> None:
         pass
 
 
+def _discover_with_credential_recovery(
+    workspace: Path,
+    monitor_root: Path,
+    token: str,
+    managed_token: bool,
+) -> tuple[dict[str, Any], str]:
+    """Retry discovery once after an exact-mailbox-verified platform-token refresh."""
+    try:
+        return gmail_fetch.discover(monitor_root, token), token
+    except ValueError as exc:
+        if not managed_token or not gateway_token.is_auth_failure(exc):
+            raise
+        try:
+            replacement = gateway_token.refresh_token_file(workspace)
+            return gmail_fetch.discover(monitor_root, replacement), replacement
+        except (OSError, ValueError, json.JSONDecodeError) as refresh_error:
+            raise gateway_token.GatewayAuthenticationError(
+                "Gmail authentication failed and no replacement credential could be verified "
+                f"for the configured mailbox: {str(refresh_error)[:200]}"
+            ) from exc
+
+
+def _gmail_auth_notice(workspace: Path, base_dir: Path) -> str:
+    """One actionable owner message per UTC day; cron should not repeat raw errors."""
+    root = workspace / "estimate-desk" / "run-work"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    marker = root / f"gmail-auth-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.notice"
+    try:
+        marker.touch(mode=0o600, exist_ok=False)
+    except FileExistsError:
+        return "NO_REPLY"
+    return (
+        "Jewelry Estimate Desk cannot access Gmail: its private gateway credential was rejected, "
+        "and the current platform credential could not be verified for the configured mailbox. "
+        "Gmail may still appear connected in Kolo. Reconnect Gmail if needed, then run: "
+        f"python3 {base_dir}/scripts/gateway_token.py refresh --workspace {workspace}"
+    )
+
+
 def _inline_retry_candidates(p: dict[str, Path]) -> list[str]:
     """Processing claims the tick owns whose run ended without finishing: lapsed lease, no worker."""
     found: list[str] = []
@@ -620,7 +659,8 @@ def tick(
     if state["activation_state"] != "active":
         summary["skipped"] = state["activation_state"]
         return summary
-    if token is None:
+    managed_token = token is None
+    if managed_token:
         token = gateway_token.load_token()
 
     inbox_claim.reconcile_stale_notifications(p["claim_root"], STALE_AFTER_SECONDS)
@@ -638,7 +678,9 @@ def tick(
         owner_questions.questions_root(p["monitor_root"]), runner=runner,
         extra_args=kolo_safe.owner_channel_args(p["monitor_root"]),
     )
-    discovery = gmail_fetch.discover(p["monitor_root"], token)
+    discovery, token = _discover_with_credential_recovery(
+        workspace, p["monitor_root"], token, managed_token
+    )
     summary["discovered"] = discovery.get("discovered", 0)
     # The sweep of one-shot jobs is gone with the jobs (4.13.0); one fewer CLI call per tick (RELEASE-PLAN-4.14.md 2.2).
 
@@ -762,6 +804,9 @@ def main(argv: list[str] | None = None) -> int:
             args.max_workers,
         )
     except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
+        if isinstance(exc, gateway_token.GatewayAuthenticationError) or gateway_token.is_auth_failure(exc):
+            print(_gmail_auth_notice(args.workspace.resolve(), args.base_dir.resolve()))
+            return 0
         # Stdout is what the owner sees; stderr is what the run log keeps.
         print(f"Inbox monitor tick failed: {exc}")
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)

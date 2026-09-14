@@ -37,6 +37,16 @@ every pre-activation inquiry manually.
    `MATON_API_KEY_FILE` or `MATON_API_KEY`. This prevents a later
    process-environment change from silently swapping the Gmail gateway
    credential.
+   If readiness or the watcher reports Gmail HTTP 401 after the integration was
+   working, the private copy may predate a legitimate platform-token rotation.
+   Reconnect Gmail if necessary, then run the verified refresh. It replaces the
+   file only after the candidate can read the profile's exact outbound mailbox
+   and never prints either credential:
+
+   ```bash
+   python3 {baseDir}/scripts/gateway_token.py refresh \
+     --workspace '<absolute-workspace>'
+   ```
 2. Perform a read-only capability check. Verify that the Gmail integration can:
    use `after:<epoch-seconds>`, return integer `internalDate` epoch milliseconds,
    and enumerate every page until no `nextPageToken` remains. Write a private

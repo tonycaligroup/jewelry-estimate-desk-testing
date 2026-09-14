@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.32
+version: 4.15.33
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -144,6 +144,9 @@ or recovery commands, and it never permits the main session to imitate them.
   ambiguity handling, and a durable same-thread provider receipt.
 - `scripts/gmail_fetch.py`: perform paginated Gmail discovery and fetch claimed
   messages/threads through fixed Maton requests without model-built commands.
+- `scripts/gateway_token.py`: keep the private gateway credential authoritative;
+  after a 401, replace it only when the platform's current credential proves
+  read access to the profile's exact outbound mailbox.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
   key from the exact inbound Gmail message rather than a display name.
 - `scripts/rendering_materialize.py`: copy a PNG the desk rendered into its

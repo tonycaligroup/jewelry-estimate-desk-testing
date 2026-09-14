@@ -6109,6 +6109,70 @@ class GatewayTokenTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gateway_token.load_token({"MATON_API_KEY": "bad\ntoken"})
 
+    def test_stale_private_token_is_replaced_only_after_exact_mailbox_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            profile = workspace / "estimate-desk" / "shop-profile.json"
+            profile.parent.mkdir(parents=True)
+            profile.write_text(json.dumps({"shop": {"outbound_mailbox": "Sales@Example.com"}}), encoding="utf-8")
+            installed = Path(directory) / "secrets" / "maton-api-key"
+            installed.parent.mkdir()
+            installed.write_text("stale-token\n", encoding="utf-8")
+            os.chmod(installed, 0o600)
+            seen = []
+            def verify(token, mailbox):
+                seen.append((token, mailbox))
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", installed):
+                replacement = gateway_token.refresh_token_file(
+                    workspace, {"MATON_API_KEY": "current-token"}, verifier=verify
+                )
+            self.assertEqual(replacement, "current-token")
+            self.assertEqual(seen, [("current-token", "sales@example.com")])
+            self.assertEqual(installed.read_text(encoding="utf-8"), "current-token\n")
+            self.assertEqual(installed.stat().st_mode & 0o777, 0o600)
+
+    def test_unverified_refresh_preserves_the_existing_private_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            profile = workspace / "estimate-desk" / "shop-profile.json"
+            profile.parent.mkdir(parents=True)
+            profile.write_text(json.dumps({"shop": {"outbound_mailbox": "sales@example.com"}}), encoding="utf-8")
+            installed = Path(directory) / "maton-api-key"
+            installed.write_text("working-token\n", encoding="utf-8")
+            os.chmod(installed, 0o600)
+            def reject(token, mailbox):
+                raise ValueError("candidate belongs to another Gmail account")
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", installed):
+                with self.assertRaisesRegex(ValueError, "another Gmail account"):
+                    gateway_token.refresh_token_file(
+                        workspace, {"MATON_API_KEY": "wrong-token"}, verifier=reject
+                    )
+            self.assertEqual(installed.read_text(encoding="utf-8"), "working-token\n")
+
+    def test_watcher_retries_only_discovery_after_verified_refresh(self) -> None:
+        calls = []
+        def discover(root, token):
+            calls.append(token)
+            if token == "stale-token":
+                raise ValueError("Gmail gateway returned HTTP 401")
+            return {"discovered": 0}
+        with patch.object(inbox_watcher.gmail_fetch, "discover", side_effect=discover), \
+                patch.object(inbox_watcher.gateway_token, "refresh_token_file", return_value="current-token"):
+            result, token = inbox_watcher._discover_with_credential_recovery(
+                Path("/workspace"), Path("/workspace/estimate-desk/inbox-monitor"), "stale-token", True
+            )
+        self.assertEqual((result, token), ({"discovered": 0}, "current-token"))
+        self.assertEqual(calls, ["stale-token", "current-token"])
+
+    def test_gmail_auth_notice_is_actionable_and_deduplicated_daily(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first = inbox_watcher._gmail_auth_notice(workspace, Path("/skill"))
+            second = inbox_watcher._gmail_auth_notice(workspace, Path("/skill"))
+            self.assertIn("Gmail may still appear connected in Kolo", first)
+            self.assertIn("gateway_token.py refresh", first)
+            self.assertEqual(second, "NO_REPLY")
+
     def test_gmail_send_keeps_the_credential_out_of_argv(self) -> None:
         argv = gmail_safe.build_command(Path("/private/payload.json"))
         self.assertNotIn("Authorization", " ".join(argv))
