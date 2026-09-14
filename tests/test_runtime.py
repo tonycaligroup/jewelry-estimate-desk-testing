@@ -239,6 +239,14 @@ class InstructionCoherenceTests(unittest.TestCase):
         self.assertIn("must not appear in the\nsetup questionnaire", skill)
         self.assertNotIn("Nothing to ask here: the desk is retail only", skill)
 
+    def test_setup_must_ask_for_concierge_or_auto_mode(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("During every first setup, explicitly ask the owner to choose `concierge`", skill)
+        self.assertIn("Mandatory operating-mode question", skill)
+        self.assertIn("Would you like\n   concierge mode", skill)
+        self.assertIn("Do not continue past setup without asking this question", skill)
+        self.assertIn("never because the setup assistant omitted the question", skill)
+
     def test_installer_is_the_only_configured_approver(self) -> None:
         profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
         self.assertNotIn("approver_name", profile["shop"])

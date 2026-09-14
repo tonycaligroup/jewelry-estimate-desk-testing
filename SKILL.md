@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.28
+version: 4.15.29
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -56,6 +56,11 @@ and delivery commitment behind owner approval.
    `shop.mode` to `retailer`. Never ask whether the business is retail,
    wholesale, trade, or both, and never include business mode in a setup
    question or list of choices.
+14. During every first setup, explicitly ask the owner to choose `concierge`
+   or `auto` desk mode. This question is mandatory and must not be inferred
+   from their pricing model, communication style, or other answers. Default to
+   concierge only when the owner explicitly asks for the default or declines
+   to choose, never because the setup assistant omitted the question.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, no fallback; worker jobs use the same
@@ -177,16 +182,15 @@ setup questionnaire. Then collect:
    names, sign as Cali Jewelers"). Stored as `shop.voice`; every customer
    email is written from the whole thread in that voice, then checked for
    the exact figures. Optional; the default is warm and plain.
-4a. How the desk works the conversation, stored as `desk.mode`. The default
-   is `concierge`: the first email acknowledges, confirms the vision, asks
-   only budget and timeframe, and offers a call or a visit; the desk books it
-   and stops there. If the customer declines the meeting and asks for a number,
+4. Mandatory operating-mode question. Ask exactly once: "Would you like
+   concierge mode (recommended: the desk gathers the initial context, offers
+   and books a call or visit, then leaves the estimate to you) or auto mode
+   (the desk gathers the required details by email, prepares pricing, and sends
+   only owner-approved estimates)?" Store the answer as `desk.mode`. If the
+   customer declines a meeting in concierge mode and asks for a number,
    nothing is sent until the owner chooses "acknowledge" or "handle myself".
-   The owner writes and sends the estimate themselves; what
-   the customer said is on the Customers and Cost sheet tabs. `auto` is the
-   opt-in: the desk asks the details by email, prices from the replies, and
-   sends the approved estimate. Offer both in one sentence; a shop that does
-   not choose gets concierge.
+   Do not continue past setup without asking this question. If the owner
+   explicitly says to use the default or declines to choose, use `concierge`.
 5. Pricing model: cost-plus multiplier or target margin. For cost-plus, convert
    `25%` to `1.25` and confirm `$1,000 cost → $1,250 quote`. For target margin,
    store the decimal margin and confirm the resulting example price.
