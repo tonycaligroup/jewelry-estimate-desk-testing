@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.30
+version: 4.15.31
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -66,6 +66,15 @@ and delivery commitment behind owner approval.
    `setup.sheet_mirror_choice`; optional means the owner may choose `skip`, not
    that the setup assistant may omit the question. Readiness must fail until
    both this choice and `desk.mode` are recorded.
+16. Kolo's account notification preference controls proactive `notify-owner`
+   messages, not approval cards. During setup, align that preference with the
+   channel chosen for desk questions, notices, and previews. If they choose
+   SMS, first use `kolo set-notify-preference --show` and require an existing
+   SMS one-to-one in `connectedMediums`, then run
+   `kolo set-notify-preference --medium sms`; record
+   `setup.owner_notification_medium: sms` only after success. This is a Kolo
+   account command, not a Jewelry Desk command. Approval cards remain in
+   Kolo's approval queue; never promise this preference routes them to SMS.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, no fallback; worker jobs use the same
@@ -171,12 +180,30 @@ text-message notifications and this is not that text conversation, stop setup
 and tell them to start the Jewelry Estimate Desk setup from the text channel
 now. Do not continue here and move the notification binding later.
 
+Explain the separate Kolo proactive-notification setting at the same time.
+It controls `notify-owner` messages and does not route or deliver approval
+cards, which remain in Kolo's approval queue. Ask which medium they want. For
+SMS, run `kolo set-notify-preference --show` first; if `connectedMediums` does
+not include `sms`, tell them to start an SMS one-to-one and wait. Then run
+`kolo set-notify-preference --medium sms`; if it fails, show the error and do
+not claim SMS is configured. Record the successful choice as
+`setup.owner_notification_medium`. This does not replace the desk channel
+binding; both must be configured.
+
 On first setup, copy `{baseDir}/templates/shop-profile.json` to the runtime
 location. Before asking any questions, keep the template's fixed
 `shop.mode: retailer`; this is not an owner choice and must not appear in the
 setup questionnaire. Then collect:
 
-1. Business/shop name, outbound mailbox, and signature. The Kolo user who
+1. Business/shop name and outbound mailbox. Run
+   `python3 {baseDir}/scripts/gmail_identity.py --mailbox '<outbound mailbox>'`
+   to read only the exact matching Gmail send-as identity. Show the retrieved
+   display name and plain-text signature to the owner and ask whether to use
+   them or provide replacements. Empty values are normal: use `shop.name` as
+   `shop.sender_display_name` when Gmail has no display name, and ask for a
+   manual signature or leave `shop.signature_block` empty when Gmail has none.
+   Store only owner-confirmed values. Never select another alias and never
+   alter Gmail settings. The Kolo user who
    installs and activates the skill is automatically the approver; never ask
    for or configure a separate approver.
 2. Business address (street, city, state, zip) — used for calendar invites and
@@ -217,6 +244,12 @@ setup questionnaire. Then collect:
    setup from the channel they want, as described above. Approval cards always
    go to the approval queue. The notification-channel choice never changes the
    customer's original-channel routing.
+7a. Mandatory proactive-notification question. Explain that this preference
+   controls Kolo `notify-owner`, not approval cards. When they choose SMS,
+   verify `sms` appears in `connectedMediums`, run
+   `kolo set-notify-preference --medium sms`, and record `sms` in
+   `setup.owner_notification_medium` only after that command succeeds. Do not
+   describe this as a Jewelry Desk command or promise SMS approval delivery.
 8. Trust stage. Default to Stage 1.
 9. Scheduling. The calendar is the owner's primary Google Calendar, stored
    as `primary`; never ask for a calendar id. Only if the owner wants a

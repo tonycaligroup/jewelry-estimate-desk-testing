@@ -56,6 +56,7 @@ import gmail_route
 import gmail_classify
 import gmail_safe
 import gmail_fetch
+import gmail_identity
 import kolo_safe
 import route_ownership
 import validate_profile
@@ -252,10 +253,20 @@ class InstructionCoherenceTests(unittest.TestCase):
         errors = validate_profile.validate_profile(profile, require_setup=True)["errors"]
         self.assertTrue(any("choose concierge or auto" in error for error in errors), errors)
         self.assertTrue(any("create, adopt, or skip" in error for error in errors), errors)
+        self.assertTrue(any("proactive owner notifications" in error for error in errors), errors)
         profile["desk"]["mode"] = "concierge"
         profile["setup"]["sheet_mirror_choice"] = "skip"
+        profile["setup"]["owner_notification_medium"] = "sms"
         errors = validate_profile.validate_profile(profile, require_setup=True)["errors"]
         self.assertFalse(any("setup incomplete" in error for error in errors), errors)
+
+    def test_sms_setup_configures_kolos_proactive_owner_notification_preference(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("kolo set-notify-preference --medium sms", skill)
+        self.assertIn("account command, not a Jewelry Desk command", skill)
+        self.assertIn("both must be configured", skill)
+        self.assertIn("only after that command succeeds", skill)
+        self.assertIn("does not route or deliver approval", skill)
 
     def test_installer_is_the_only_configured_approver(self) -> None:
         profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
@@ -4206,6 +4217,19 @@ class GmailReplyTests(unittest.TestCase):
             "References: <earlier@example.net> <original@example.net>", message
         )
 
+    def test_confirmed_sender_name_and_signature_are_written_into_raw_mime(self) -> None:
+        payload = gmail_reply.build_reply(
+            self.route(), "Thanks for writing.", sender_display_name="Cali Jewels",
+            signature_block="David\nCali Jewels\n213-555-0100",
+        )
+        padding = "=" * (-len(payload["raw"]) % 4)
+        parsed = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(payload["raw"] + padding))
+        self.assertEqual(str(parsed["From"]), "Cali Jewels <sales@example.com>")
+        plain = parsed.get_body(preferencelist=("plain",)).get_content()
+        self.assertIn("Thanks for writing.\n\nDavid\nCali Jewels\n213-555-0100", plain)
+        self.assertEqual(plain.count("213-555-0100"), 1)
+
+
     def test_rendering_attachment_stays_in_original_thread(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "rendering.png"
@@ -4312,6 +4336,46 @@ class GmailReplyTests(unittest.TestCase):
                 customer_content_guard.validate_customer_text(body)
                 payload = gmail_reply.build_reply(self.route(), body)
                 self.assertEqual(payload["threadId"], self.route()["thread_id"])
+
+
+class GmailIdentityTests(unittest.TestCase):
+    class Response:
+        def __init__(self, value: dict) -> None:
+            self.value = json.dumps(value).encode("utf-8")
+
+        def read(self):
+            return self.value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def test_exact_alias_is_retrieved_and_html_signature_becomes_safe_text(self) -> None:
+        def opener(request, timeout=30):
+            self.assertTrue(request.full_url.endswith("/settings/sendAs"))
+            return self.Response({"sendAs": [
+                {"sendAsEmail": "other@example.com", "displayName": "Other"},
+                {"sendAsEmail": "Sales@Example.com", "displayName": "Cali Jewels", "isPrimary": True,
+                 "signature": "<div>David<br><b>Cali Jewels</b><img src='https://track/pixel'><script>bad()</script></div>"},
+            ]})
+        result = gmail_identity.retrieve("sales@example.com", "tok", opener=opener)
+        self.assertEqual(result["send_as_email"], "sales@example.com")
+        self.assertEqual(result["display_name"], "Cali Jewels")
+        self.assertEqual(result["signature_block"], "David\nCali Jewels")
+        self.assertNotIn("bad", result["signature_block"])
+        self.assertNotIn("track", result["signature_block"])
+
+    def test_empty_identity_uses_empty_values_and_an_alias_mismatch_fails(self) -> None:
+        empty = lambda request, timeout=30: self.Response({"sendAs": [
+            {"sendAsEmail": "sales@example.com", "displayName": "", "signature": ""}
+        ]})
+        result = gmail_identity.retrieve("sales@example.com", "tok", opener=empty)
+        self.assertEqual((result["display_name"], result["signature_block"]), ("", ""))
+        mismatch = lambda request, timeout=30: self.Response({"sendAs": [{"sendAsEmail": "other@example.com"}]})
+        with self.assertRaisesRegex(ValueError, "no unique send-as identity"):
+            gmail_identity.retrieve("sales@example.com", "tok", opener=mismatch)
 
 
 class GmailRouteTests(unittest.TestCase):

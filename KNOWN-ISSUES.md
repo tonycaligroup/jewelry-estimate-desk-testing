@@ -86,6 +86,8 @@ Dates are 2026. "Live" means a tester's real thread; "rehearsal" means a scripte
 | 13 Sep UAT | Setup asked whether the business was retail, wholesale, or both | Retailer is a silent fixed profile value, promoted to a non-negotiable setup lock and removed from the numbered collection list | 4.15.28 |
 | 13 Sep UAT | Setup silently used its default without asking whether the owner wanted concierge or auto mode | The operating-mode question is a mandatory setup gate; omission cannot count as choosing the default | 4.15.29 |
 | 13 Sep UAT | A fresh setup still omitted both concierge/auto and Google Sheets choices despite prose requiring them | Fresh profiles carry unresolved machine-validated choices; readiness names and blocks on either omission | 4.15.30 |
+| 13 Sep UAT | Kolo showed approval cards only in its queue and setup confused that with proactive SMS routing | Setup now says the Kolo preference controls `notify-owner`, requires an existing SMS one-to-one, and never promises that it routes approval cards | 4.15.31 |
+| 13 Sep UAT | Customer mail showed only the bare email address as sender; Gmail's configured signature was not available to raw sends | Setup reads and confirms the exact send-as identity, falls back to the shop name and manual/no signature, and every MIME send includes the confirmed name and signature | 4.15.31 |
 | 9 Sep live | Approving two cards in one message dropped one | One APPROVE per message; executors are idempotent | (chat) |
 | 9 Sep live | A phone-number reply crashed the cancellation branch | A local import shadowed a module name; removed | 4.15.9 |
 | 8 Sep live | A rendering run killed while filing its card rendered again on resume | A killed run resumes to the card and never renders twice | 4.13.x |

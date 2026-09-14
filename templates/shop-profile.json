@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "setup": {
+    "owner_notification_medium": null,
     "sheet_mirror_choice": null
   },
   "shop": {
@@ -12,6 +13,7 @@
       "zip": ""
     },
     "website": "",
+    "sender_display_name": "",
     "mode": "retailer",
     "outbound_mailbox": "",
     "cc_always": [],

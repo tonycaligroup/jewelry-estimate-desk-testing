@@ -635,12 +635,28 @@ def finish_processed(
     )
 
 
+def _build_customer_reply(
+    monitor_root: Path, route: dict[str, Any], body: str, attachment: Any = None
+) -> dict[str, str]:
+    """Build mail with the locally confirmed shop identity; Gmail adds neither name nor signature to raw MIME."""
+    try:
+        profile = read_object(monitor_root.resolve().parent / "shop-profile.json")
+    except (OSError, ValueError):
+        profile = {}
+    shop = profile.get("shop") if isinstance(profile.get("shop"), dict) else {}
+    sender_name = str(shop.get("sender_display_name") or shop.get("name") or "").strip()
+    signature = str(shop.get("signature_block") or "").strip()
+    return gmail_reply.build_reply(
+        route, body, attachment, sender_display_name=sender_name, signature_block=signature,
+    )
+
+
 def send_spec_followup(args: argparse.Namespace) -> dict[str, Any]:
     route = read_object(args.route)
     body = args.body.read_text(encoding="utf-8")
     # The payload built by an earlier run is reused: same Message-ID, same
     # journal binding, so a retry after a crash verifies instead of refusing.
-    _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body))
+    _reuse_or_build_payload(args.gmail_payload, lambda: _build_customer_reply(args.monitor_root, route, body))
     receipt = gmail_safe.send_reply_claimed(
         args.claim_root,
         args.message_id,
@@ -1013,7 +1029,7 @@ def send_approved_estimate(args: argparse.Namespace) -> dict[str, Any]:
         body, approved["owner_approved_price"]
     )
     images = [Path(str(i)) for i in (getattr(args, "images", None) or [])]
-    payload = _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body, images or None))
+    payload = _reuse_or_build_payload(args.gmail_payload, lambda: _build_customer_reply(args.monitor_root, route, body, images or None))
     receipt = gmail_safe.send_reply_claimed(
         args.claim_root,
         message_id,
@@ -1075,7 +1091,7 @@ def send_rendering(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("estimate record route must be an object")
     body = args.body.read_text(encoding="utf-8")
     customer_content_guard.validate_customer_text(body)
-    payload = _reuse_or_build_payload(args.gmail_payload, lambda: gmail_reply.build_reply(route, body, args.images))
+    payload = _reuse_or_build_payload(args.gmail_payload, lambda: _build_customer_reply(args.monitor_root, route, body, list(args.images)))
     receipt = gmail_safe.send_reply_claimed(
         args.claim_root,
         args.message_id,
@@ -1874,7 +1890,7 @@ def send_acknowledgement(p: dict[str, Path], record: dict[str, Any], message_id:
     work_dir = p["monitor_root"].resolve().parent / "work" / f"acknowledge-{inbox_claim.claim_key(message_id)[:16]}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
-    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body))
+    _reuse_or_build_payload(payload_path, lambda: _build_customer_reply(p["monitor_root"], record["route"], body))
     token = inbox_claim.authoritative_claim_token(p["claim_root"], message_id)
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], message_id, token, f"acknowledged:{record['estimate_id']}:{message_id}",
@@ -2973,7 +2989,7 @@ def book_approved_appointment(args: argparse.Namespace) -> dict[str, Any]:
         body, images = _bundle_with_partner(p, partner, "appointment", body, shop)
     customer_content_guard.validate_customer_text(body)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
-    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body, images or None))
+    _reuse_or_build_payload(payload_path, lambda: _build_customer_reply(p["monitor_root"], record["route"], body, images or None))
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], args.message_id, None,
         f"appointment_confirmation:{args.estimate_id}:{args.message_id}",
@@ -3102,7 +3118,7 @@ def _send_times(p: dict[str, Path], record: dict[str, Any], message_id: str, opt
     work_dir = p["monitor_root"].resolve().parent / "work" / f"offer-{inbox_claim.claim_key(message_id)[:16]}-{label}"
     work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload_path, response_path = work_dir / "gmail-payload.json", work_dir / "gmail-provider-response.json"
-    _reuse_or_build_payload(payload_path, lambda: gmail_reply.build_reply(record["route"], body))
+    _reuse_or_build_payload(payload_path, lambda: _build_customer_reply(p["monitor_root"], record["route"], body))
     delivery = gmail_safe.send_reply_claimed(
         p["claim_root"], message_id, None, f"times_offered:{record['estimate_id']}:{message_id}:{label}",
         payload_path, response_path, gateway_token.load_token(), runner=runner, allow_processed_claim=True,
@@ -3808,7 +3824,7 @@ def send_approved_estimate_brief(args: argparse.Namespace) -> dict[str, Any]:
         images.append(image)
     sent = send_approved_estimate(argparse.Namespace(
         images=images,
-        claim_root=p["claim_root"], record_root=p["record_root"], estimate_id=args.estimate_id,
+        monitor_root=p["monitor_root"], claim_root=p["claim_root"], record_root=p["record_root"], estimate_id=args.estimate_id,
         approved=work_dir / "approved.json", body=work_dir / "customer-reply.txt",
         gmail_payload=work_dir / "gmail-send.json", provider_response=work_dir / "gmail-provider-response.json",
         record_output=work_dir / "current-record.json", message_id=None, current_state=None,

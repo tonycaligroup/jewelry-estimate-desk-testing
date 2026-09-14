@@ -10,7 +10,7 @@ import mimetypes
 import re
 import sys
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -69,6 +69,8 @@ def build_reply(
     route: dict[str, Any],
     body: str,
     attachment: Path | Sequence[Path] | None = None,
+    sender_display_name: str | None = None,
+    signature_block: str | None = None,
 ) -> dict[str, str]:
     if route.get("channel") != "gmail":
         raise ValueError("route.channel must be gmail")
@@ -83,7 +85,15 @@ def build_reply(
     if identity_key != email_identity_key(recipient):
         raise ValueError("route.identity_key does not match route.recipient")
     subject = require_text(route, "original_subject")
-    body = validate_customer_text(plain_text(body))
+    body = plain_text(body)
+    signature = "\n".join(
+        plain_text(line).strip()
+        for line in str(signature_block or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if plain_text(line).strip()
+    )
+    if signature and not body.rstrip().endswith(signature):
+        body = body.rstrip() + "\n\n" + signature
+    body = validate_customer_text(body)
 
     raw_references = route.get("references", [])
     if not isinstance(raw_references, list):
@@ -96,7 +106,10 @@ def build_reply(
         references.append(original_message_id)
 
     message = EmailMessage()
-    message["From"] = mailbox
+    display_name = str(sender_display_name or "").strip()
+    if any(character in display_name for character in "\r\n"):
+        raise ValueError("sender display name must be one line")
+    message["From"] = formataddr((display_name, mailbox)) if display_name else mailbox
     message["To"] = recipient
     message["Subject"] = reply_subject(subject)
     message["Date"] = formatdate(localtime=False, usegmt=True)

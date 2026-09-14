@@ -94,6 +94,9 @@ def validate_profile(data: Any, require_setup: bool = False) -> dict[str, Any]:
             sheet_choice = setup_block.get("sheet_mirror_choice")
             if sheet_choice not in ("create", "adopt", "skip"):
                 errors.append("setup incomplete: ask the owner to create, adopt, or skip the Google Sheets mirror")
+            notification_medium = setup_block.get("owner_notification_medium")
+            if notification_medium not in ("kolo_chat", "sms", "slack"):
+                errors.append("setup incomplete: ask where Kolo should deliver proactive owner notifications")
 
     mirror_block = data.get("mirror")
     if mirror_block is not None:
@@ -153,6 +156,10 @@ def validate_profile(data: Any, require_setup: bool = False) -> dict[str, Any]:
     website = _read_path(data, "shop.website")
     if not isinstance(website, str) or not website.strip():
         missing_fields.append("shop.website")
+    for field in ("sender_display_name", "signature_block"):
+        value = _read_path(data, f"shop.{field}")
+        if value is not None and (not isinstance(value, str) or "\r" in value or (field == "sender_display_name" and "\n" in value)):
+            errors.append(f"shop.{field} must be safe text" + (" on one line" if field == "sender_display_name" else ""))
 
     stage = _read_path(data, "autonomy.trust_stage")
     if type(stage) is not int or stage not in {1, 2, 3}:
