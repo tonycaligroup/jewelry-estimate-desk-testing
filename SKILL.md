@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.29
+version: 4.15.30
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -61,6 +61,11 @@ and delivery commitment behind owner approval.
    from their pricing model, communication style, or other answers. Default to
    concierge only when the owner explicitly asks for the default or declines
    to choose, never because the setup assistant omitted the question.
+15. During every first setup, explicitly ask whether to create a Google Sheet,
+   adopt an existing Sheet, or skip the mirror. Record that choice in
+   `setup.sheet_mirror_choice`; optional means the owner may choose `skip`, not
+   that the setup assistant may omit the question. Readiness must fail until
+   both this choice and `desk.mode` are recorded.
 
 Run this skill through the dedicated Kolo agent pinned to
 `litellm-fireworks/qwen-3-7-plus`, no fallback; worker jobs use the same
@@ -191,6 +196,7 @@ setup questionnaire. Then collect:
    nothing is sent until the owner chooses "acknowledge" or "handle myself".
    Do not continue past setup without asking this question. If the owner
    explicitly says to use the default or declines to choose, use `concierge`.
+   Write the resulting choice to `desk.mode`; do not leave it absent or null.
 5. Pricing model: cost-plus multiplier or target margin. For cost-plus, convert
    `25%` to `1.25` and confirm `$1,000 cost → $1,250 quote`. For target margin,
    store the decimal margin and confirm the resulting example price.
@@ -307,6 +313,11 @@ adopt a Sheet without their choice. If Google Sheets is not connected, tell
 the owner that the desk can wait while they connect it and continue only when
 they are ready; leaving the mirror off must not block the rest of setup or
 activation.
+
+Record `setup.sheet_mirror_choice` as `create`, `adopt`, or `skip`. The setup
+command records `create` and `adopt` automatically; when the owner chooses not
+to use a Sheet, write `skip` before readiness. Never delete the `setup` block
+from a fresh profile to bypass these required choices.
 
 To set it up once, in the desk session:
 

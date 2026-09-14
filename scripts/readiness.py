@@ -46,7 +46,7 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
     # Profile
     try:
         profile = validate_profile.load_profile(desk / "shop-profile.json")
-        result = validate_profile.validate_profile(profile)
+        result = validate_profile.validate_profile(profile, require_setup=True)
         add("shop profile", "PASS" if result.get("ready") else "FAIL", "; ".join(result.get("errors", []))[:200])
     except (OSError, ValueError) as exc:
         profile = {}

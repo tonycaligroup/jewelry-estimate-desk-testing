@@ -247,6 +247,16 @@ class InstructionCoherenceTests(unittest.TestCase):
         self.assertIn("Do not continue past setup without asking this question", skill)
         self.assertIn("never because the setup assistant omitted the question", skill)
 
+    def test_fresh_profile_cannot_pass_until_mode_and_sheet_choices_are_recorded(self) -> None:
+        profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
+        errors = validate_profile.validate_profile(profile, require_setup=True)["errors"]
+        self.assertTrue(any("choose concierge or auto" in error for error in errors), errors)
+        self.assertTrue(any("create, adopt, or skip" in error for error in errors), errors)
+        profile["desk"]["mode"] = "concierge"
+        profile["setup"]["sheet_mirror_choice"] = "skip"
+        errors = validate_profile.validate_profile(profile, require_setup=True)["errors"]
+        self.assertFalse(any("setup incomplete" in error for error in errors), errors)
+
     def test_installer_is_the_only_configured_approver(self) -> None:
         profile = json.loads((ROOT / "templates" / "shop-profile.json").read_text())
         self.assertNotIn("approver_name", profile["shop"])
@@ -7156,12 +7166,15 @@ class SheetMirrorTests(unittest.TestCase):
             self.assertEqual((mirror["kind"], mirror["id"]), ("google_sheets", "SHEET1"))
             profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text())
             self.assertEqual(profile["mirror"]["url"], "https://docs.google.com/spreadsheets/d/SHEET1/edit")
+            self.assertEqual(profile["setup"]["sheet_mirror_choice"], "create")
             created = [c for c in gateway.calls if c[0] == "POST" and c[1].endswith("/spreadsheets")]
             self.assertEqual([t["properties"]["title"] for t in created[0][2]["sheets"]], list(sheet_mirror.TABS))
             self.assertTrue(any("batchUpdate" in c[1] for c in gateway.calls), "the formatting was applied")
             adopted = sheet_mirror.setup(ws, url="https://docs.google.com/spreadsheets/d/1xHcGuYORewIu9rEjxR6pY1oWwDtosrUuz-mjuUDaUNA/edit?gid=0#gid=0",
                                          token="tok", opener=gateway)
             self.assertEqual(adopted["id"], "1xHcGuYORewIu9rEjxR6pY1oWwDtosrUuz-mjuUDaUNA")
+            profile = json.loads((ws / "estimate-desk" / "shop-profile.json").read_text())
+            self.assertEqual(profile["setup"]["sheet_mirror_choice"], "adopt")
 
     def test_push_rewrites_the_tabs_from_the_records_and_the_ledger_and_skips_when_unchanged(self) -> None:
         import ledger

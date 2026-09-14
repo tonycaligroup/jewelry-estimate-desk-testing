@@ -209,6 +209,9 @@ def setup(workspace: Path, url: str | None = None, token: str | None = None, ope
     except OSError:
         pass  # formatting is cosmetic; readiness re-applies it
     profile["mirror"] = {"kind": "google_sheets", "id": sheet_id, "url": sheet_url, "title": title}
+    setup_block = profile.setdefault("setup", {})
+    if isinstance(setup_block, dict):
+        setup_block["sheet_mirror_choice"] = "adopt" if url else "create"
     profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
     # The state remembers which tabs exist, so the first push does not check again; a tab added by a later
     # version is created by that version's first push.

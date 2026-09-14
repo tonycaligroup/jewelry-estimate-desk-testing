@@ -85,6 +85,7 @@ Dates are 2026. "Live" means a tester's real thread; "rehearsal" means a scripte
 | 13 Sep live | A lost ring recreation was described as a bezel oval signet and asked for gold color despite the attached photo | Explicit photo recreations are confirmed with only broad, safe visual language; the photo settles metal color as “match reference photo” but never supplies carat or another nonvisual fact | 4.15.27 |
 | 13 Sep UAT | Setup asked whether the business was retail, wholesale, or both | Retailer is a silent fixed profile value, promoted to a non-negotiable setup lock and removed from the numbered collection list | 4.15.28 |
 | 13 Sep UAT | Setup silently used its default without asking whether the owner wanted concierge or auto mode | The operating-mode question is a mandatory setup gate; omission cannot count as choosing the default | 4.15.29 |
+| 13 Sep UAT | A fresh setup still omitted both concierge/auto and Google Sheets choices despite prose requiring them | Fresh profiles carry unresolved machine-validated choices; readiness names and blocks on either omission | 4.15.30 |
 | 9 Sep live | Approving two cards in one message dropped one | One APPROVE per message; executors are idempotent | (chat) |
 | 9 Sep live | A phone-number reply crashed the cancellation branch | A local import shadowed a module name; removed | 4.15.9 |
 | 8 Sep live | A rendering run killed while filing its card rendered again on resume | A killed run resumes to the card and never renders twice | 4.13.x |

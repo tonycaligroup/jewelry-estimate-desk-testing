@@ -28,7 +28,7 @@ def _read_path(data: dict[str, Any], path: str) -> Any:
     return value
 
 
-def validate_profile(data: Any) -> dict[str, Any]:
+def validate_profile(data: Any, require_setup: bool = False) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"errors": ["profile must be a JSON object"], "missing_fields": []}
 
@@ -80,6 +80,21 @@ def validate_profile(data: Any) -> dict[str, Any]:
             errors.append("desk.mode must be concierge (the desk books the call, the owner gathers the details) or auto "
                           "(the desk asks the details by email)")
 
+    # Fresh profiles carry this block so the setup CLI and readiness can prove
+    # that optional choices were actually presented. Runtime validation does
+    # not re-gate an already activated desk; legacy profiles remain compatible.
+    setup_block = data.get("setup")
+    if require_setup and setup_block is not None:
+        if not isinstance(setup_block, dict):
+            errors.append("setup must be an object")
+        else:
+            desk_mode = desk_block.get("mode") if isinstance(desk_block, dict) else None
+            if desk_mode not in ("concierge", "auto"):
+                errors.append("setup incomplete: ask the owner to choose concierge or auto mode")
+            sheet_choice = setup_block.get("sheet_mirror_choice")
+            if sheet_choice not in ("create", "adopt", "skip"):
+                errors.append("setup incomplete: ask the owner to create, adopt, or skip the Google Sheets mirror")
+
     mirror_block = data.get("mirror")
     if mirror_block is not None:
         if not isinstance(mirror_block, dict):
@@ -89,6 +104,9 @@ def validate_profile(data: Any) -> dict[str, Any]:
                 errors.append("mirror.kind must be google_sheets (OneDrive/Office 365 later)")
             if not isinstance(mirror_block.get("id"), str) or not mirror_block["id"].strip():
                 errors.append("mirror.id must be the spreadsheet's id (sheet_mirror.py setup writes it)")
+    if require_setup and isinstance(setup_block, dict) and setup_block.get("sheet_mirror_choice") in ("create", "adopt"):
+        if not isinstance(mirror_block, dict) or not str(mirror_block.get("id") or "").strip():
+            errors.append("setup incomplete: finish the chosen Google Sheets setup or change the choice to skip")
     desk_block = data.get("desk")
     if desk_block is not None:
         if not isinstance(desk_block, dict):
@@ -265,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ready": False, "errors": [str(exc)], "missing_fields": []}))
         return 2
 
-    result = validate_profile(data)
+    result = validate_profile(data, require_setup=True)
     errors = result["errors"]
     missing_fields = result["missing_fields"]
     ready = not errors
