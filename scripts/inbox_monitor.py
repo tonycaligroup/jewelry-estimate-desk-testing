@@ -255,6 +255,46 @@ def durable_cron_binding_path(root: Path) -> Path:
     return root.resolve().parent / "work" / "cron-binding.json"
 
 
+CRON_CONTEXT_STAMP = "readiness-cron-context.json"
+CRON_CONTEXT_MAX_AGE_SECONDS = 24 * 3600
+
+
+def require_cron_context_readiness(root: Path, now: float | None = None) -> dict[str, Any]:
+    """First activation needs a passing readiness run from the watcher's own shell, today, for this version.
+
+    The stamp is written by `readiness.py --cron-context`. It proves the cron
+    job's environment (HOME, uid, credential source) matches what the
+    interactive session saw, which is where the 14 September 2026 incident
+    could not be told apart from a stale file (14 September 2026).
+    """
+    import skill_version
+
+    path = root.resolve().parent / "work" / CRON_CONTEXT_STAMP
+    try:
+        stamp = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            "activation requires a passing readiness run in cron context first: "
+            "run readiness.py --cron-context and fix every FAIL"
+        ) from exc
+    if not isinstance(stamp, dict) or stamp.get("ready") is not True:
+        raise ValueError("the last readiness run in cron context did not pass; fix every FAIL and run it again")
+    installed = skill_version.installed()
+    if stamp.get("version") != installed:
+        raise ValueError(
+            f"the readiness run in cron context was for version {stamp.get('version')}, "
+            f"the installed version is {installed}; run it again"
+        )
+    try:
+        at = datetime.fromisoformat(str(stamp.get("at"))).timestamp()
+    except (TypeError, ValueError) as exc:
+        raise ValueError("the readiness stamp in cron context has no usable timestamp; run it again") from exc
+    current = time.time() if now is None else now
+    if current - at > CRON_CONTEXT_MAX_AGE_SECONDS:
+        raise ValueError("the readiness run in cron context is older than a day; run it again")
+    return stamp
+
+
 def persist_cron_binding(root: Path, value: Any) -> Path:
     """Keep the exact validated binding needed for later safe reset/reconfiguration."""
     cron_config_helper.validate_binding(value)
@@ -1218,6 +1258,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.root, read_json(args.capabilities), read_json(args.cron_config)
             )
         elif args.command == "activate":
+            require_cron_context_readiness(args.root)
             result = activate(args.root, read_json(args.cron_config))
         elif args.command == "reconfigure-prepare":
             result = prepare_reconfiguration(

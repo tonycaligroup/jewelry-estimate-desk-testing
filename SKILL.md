@@ -1,6 +1,6 @@
 ---
 name: jewelry-estimate-desk-testing
-version: 4.15.33
+version: 4.15.34
 description: Prepare and route custom-jewelry estimates from inbound customer inquiries through specification intake, owner price approval, customer reply, scheduling, rendering, and follow-up. Use for retail custom-jewelry estimate workflows; do not use for wholesale or trade pricing, appraisals, insurance valuations, payments, disputes, or unapproved outbound prices.
 metadata:
   openclaw:
@@ -144,9 +144,14 @@ or recovery commands, and it never permits the main session to imitate them.
   ambiguity handling, and a durable same-thread provider receipt.
 - `scripts/gmail_fetch.py`: perform paginated Gmail discovery and fetch claimed
   messages/threads through fixed Maton requests without model-built commands.
-- `scripts/gateway_token.py`: keep the private gateway credential authoritative;
-  after a 401, replace it only when the platform's current credential proves
-  read access to the profile's exact outbound mailbox.
+- `scripts/gateway_token.py`: resolve the gateway credential and say where it
+  came from: the platform's `MATON_API_KEY` first, then `MATON_API_KEY_FILE`,
+  then the fallback file. Nothing replaces a credential on its own; `refresh`
+  is an operator command for installations with no environment key.
+- `scripts/auth_health.py`: the watcher's read-only Gmail preflight (one
+  send-as request; the configured mailbox must appear exactly once), the
+  durable health record it keeps, and the once-a-day owner notice through the
+  bound channel. Only a successful watcher preflight clears the active failure.
 - `scripts/gmail_route.py`: derive the recipient and private customer identity
   key from the exact inbound Gmail message rather than a display name.
 - `scripts/rendering_materialize.py`: copy a PNG the desk rendered into its
@@ -282,10 +287,15 @@ setup questionnaire. Then collect:
     watcher job. Outside those hours nothing is read and nothing is sent.
 11. Readiness. Before enabling the cron, and after any platform change, run
     `python3 {baseDir}/scripts/readiness.py --workspace '<absolute-workspace>'
-    --base-dir '{baseDir}'` and fix every FAIL: profile, calendar and windows,
-    activation binding, monitor state, the inline judgment model, audit-trail
-    access (rejections are read from it), the Kolo backend, and the watcher
-    job. It changes nothing and contacts no customer.
+    --base-dir '{baseDir}' --cron-context` and fix every FAIL: profile,
+    calendar and windows, activation binding, monitor state, the inline
+    judgment model, the Gmail gateway and send-as authorization for the
+    outbound mailbox, the authentication health record, audit-trail access
+    (rejections are read from it), the Kolo backend, and the watcher job.
+    `--cron-context` runs the checks under the watcher job's own shell line,
+    prints HOME, uid, and the credential source it sees, and leaves the stamp
+    that first activation requires. It changes nothing and contacts no
+    customer.
 12. After setup succeeds, tell an owner using text-message notifications that
     the best practice is to reply directly to the individual desk message,
     rather than send a new standalone text. On iPhone, long-press the message,

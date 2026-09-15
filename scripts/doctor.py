@@ -24,6 +24,7 @@ from typing import Any
 
 import brief_registry
 import estimate_record
+import auth_health
 import gateway_token
 import inbox_claim
 import cron_config
@@ -73,6 +74,13 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
         held = rehearsal.held(monitor_root, claim_root)
         add("rehearsal_mode", "REHEARSAL MODE", rehearsal.banner(state) + f"; {len(held)} message(s) held for live",
             lines["rehearsal_off"], level="info")
+    # The watcher's Gmail preflight record: reported here, never cleared here.
+    # Only a successful watcher preflight clears the active failure.
+    health = auth_health.load_record(workspace)
+    active = health.get("active_failure")
+    if isinstance(active, dict):
+        add("gmail_auth", "gmail credential", auth_health.describe(health),
+            f"{active.get('repair')}; the next successful watcher tick clears this")
     try:
         items = inbox_monitor.all_queue_items(monitor_root)
     except (OSError, ValueError) as exc:

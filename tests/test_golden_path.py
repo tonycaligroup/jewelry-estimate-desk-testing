@@ -230,6 +230,11 @@ class World:
         return {"gmail_message": paths["gmail_message"], "gmail_thread": paths["gmail_thread"]}
 
     def fake_fetch_json(self, path: str, params, token: str, opener=None) -> dict:
+        if path == "settings/sendAs":
+            # The watcher's preflight (14 September 2026): the shop's mailbox is an alias
+            # of the connected account. Not a counted service call, so armed faults and
+            # call counts keep landing on the reads and sends the scenarios are about.
+            return {"sendAs": [{"sendAsEmail": SHOP_MAILBOX, "isPrimary": True, "isDefault": True}]}
         self._service("gmail_read")
         match = re.fullmatch(r"threads/([^/]+)", path)
         if not match:

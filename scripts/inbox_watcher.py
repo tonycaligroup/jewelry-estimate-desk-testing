@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+import auth_health
 import cron_config
 import gateway_token
 import gmail_fetch
@@ -194,43 +195,30 @@ def keep_summary(workspace: Path, summary: dict[str, Any]) -> None:
         pass
 
 
-def _discover_with_credential_recovery(
+def gmail_preflight(
     workspace: Path,
+    base_dir: Path,
     monitor_root: Path,
     token: str,
-    managed_token: bool,
-) -> tuple[dict[str, Any], str]:
-    """Retry discovery once after an exact-mailbox-verified platform-token refresh."""
-    try:
-        return gmail_fetch.discover(monitor_root, token), token
-    except ValueError as exc:
-        if not managed_token or not gateway_token.is_auth_failure(exc):
-            raise
-        try:
-            replacement = gateway_token.refresh_token_file(workspace)
-            return gmail_fetch.discover(monitor_root, replacement), replacement
-        except (OSError, ValueError, json.JSONDecodeError) as refresh_error:
-            raise gateway_token.GatewayAuthenticationError(
-                "Gmail authentication failed and no replacement credential could be verified "
-                f"for the configured mailbox: {str(refresh_error)[:200]}"
-            ) from exc
+    credential_source: str,
+    mailbox: str,
+    runner: Runner,
+) -> dict[str, Any]:
+    """One read-only send-as check before any approval, rejection, or customer work.
 
-
-def _gmail_auth_notice(workspace: Path, base_dir: Path) -> str:
-    """One actionable owner message per UTC day; cron should not repeat raw errors."""
-    root = workspace / "estimate-desk" / "run-work"
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    marker = root / f"gmail-auth-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.notice"
-    try:
-        marker.touch(mode=0o600, exist_ok=False)
-    except FileExistsError:
-        return "NO_REPLY"
-    return (
-        "Jewelry Estimate Desk cannot access Gmail: its private gateway credential was rejected, "
-        "and the current platform credential could not be verified for the configured mailbox. "
-        "Gmail may still appear connected in Kolo. Reconnect Gmail if needed, then run: "
-        f"python3 {base_dir}/scripts/gateway_token.py refresh --workspace {workspace}"
+    A pass clears the active failure in the health record. A failure records
+    itself, tells the owner once a day through the bound channel, and the tick
+    stops with NO_REPLY on stdout. The watcher never replaces a credential
+    (14 September 2026).
+    """
+    result = auth_health.preflight(
+        workspace, token, credential_source, mailbox, version=skill_version.installed(base_dir)
     )
+    if result["status"] == auth_health.PASSED:
+        return result
+    text = auth_health.notice_text(result["status"], mailbox, workspace, base_dir)
+    result["notice"] = auth_health.notify_if_due(workspace, monitor_root, result["status"], text, runner)
+    return result
 
 
 def _inline_retry_candidates(p: dict[str, Path]) -> list[str]:
@@ -659,9 +647,19 @@ def tick(
     if state["activation_state"] != "active":
         summary["skipped"] = state["activation_state"]
         return summary
-    managed_token = token is None
-    if managed_token:
-        token = gateway_token.load_token()
+    if token is None:
+        token, token_source = gateway_token.load_token_with_source()
+    else:
+        token_source = "provided"
+    # Authentication, and authorization to send as the configured mailbox,
+    # are proven before any approval executes or any rejection is read. A
+    # failure is recorded, told once a day, and ends the tick quietly.
+    mailbox = str(((profile_loaded or {}).get("shop") or {}).get("outbound_mailbox") or "") if isinstance(profile_loaded, dict) else ""
+    auth = gmail_preflight(workspace, base_dir, p["monitor_root"], token, token_source, mailbox, runner)
+    summary["auth"] = {k: auth[k] for k in ("status", "http_status", "notice") if k in auth}
+    if auth["status"] != auth_health.PASSED:
+        summary["skipped"] = "gmail_auth"
+        return summary
 
     inbox_claim.reconcile_stale_notifications(p["claim_root"], STALE_AFTER_SECONDS)
     kolo_safe.reconcile_stale_claims(
@@ -678,9 +676,7 @@ def tick(
         owner_questions.questions_root(p["monitor_root"]), runner=runner,
         extra_args=kolo_safe.owner_channel_args(p["monitor_root"]),
     )
-    discovery, token = _discover_with_credential_recovery(
-        workspace, p["monitor_root"], token, managed_token
-    )
+    discovery = gmail_fetch.discover(p["monitor_root"], token)
     summary["discovered"] = discovery.get("discovered", 0)
     # The sweep of one-shot jobs is gone with the jobs (4.13.0); one fewer CLI call per tick (RELEASE-PLAN-4.14.md 2.2).
 
@@ -804,10 +800,10 @@ def main(argv: list[str] | None = None) -> int:
             args.max_workers,
         )
     except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
-        if isinstance(exc, gateway_token.GatewayAuthenticationError) or gateway_token.is_auth_failure(exc):
-            print(_gmail_auth_notice(args.workspace.resolve(), args.base_dir.resolve()))
-            return 0
         # Stdout is what the owner sees; stderr is what the run log keeps.
+        # An authentication failure never lands here: the preflight records
+        # it, tells the owner through the bound channel, and the tick returns
+        # NO_REPLY with exit 0 after persisting its summary.
         print(f"Inbox monitor tick failed: {exc}")
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2

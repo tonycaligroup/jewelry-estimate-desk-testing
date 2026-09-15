@@ -868,12 +868,26 @@ closed by follow-up changes:
   or claim a send, booking, or confirmation without desk and provider evidence.
   Concierge replacement offers remain scheduling-only and do not restart
   specification gathering (13 September 2026).
-- The private Maton token remains authoritative, but no longer becomes stale
-  forever after a legitimate platform credential rotation. A Gmail 401 causes
-  one retry with the current platform credential only after a read-only send-as
-  check proves the profile's exact mailbox. A failed or wrong-account candidate
-  leaves the private file untouched and produces one concise owner notice per
-  day instead of duplicated raw cron output (14 September 2026).
+- Before any approval executes or any rejection is read, the watcher proves
+  its Gmail credential with one read-only send-as request and requires the
+  configured outbound mailbox to appear exactly once. The platform's
+  `MATON_API_KEY` is read first, then `MATON_API_KEY_FILE`, then the fallback
+  file, and nothing in the watcher replaces a credential. A failure is
+  classified by HTTP status, never by message text: 401 `gateway_key_rejected`,
+  403 with "No active connection" `integration_disconnected`, another 403
+  `gateway_forbidden`, a 200 without the alias `outbound_mailbox_not_authorized`
+  (the right account may have lost the alias, so it is not called a wrong
+  account), a duplicate or malformed list `invalid_gateway_response`. The
+  durable health record keeps the last success, the active failure, and the
+  last failure; only a successful watcher preflight clears the active failure,
+  and readiness and the doctor report it read-only. The owner hears once a
+  day per class through the bound owner channel, with the one line to run, and
+  cron stdout stays `NO_REPLY` at exit 0 after the summary and record are
+  written; a failed notice is retried on a later tick. Readiness has a
+  `--cron-context` mode that runs under the watcher job's own shell line and
+  stamps the run; first activation requires that stamp (14 September 2026;
+  the tester's 401 that prompted this cleared on its own, both keys valid,
+  and the desk had kept no record of it).
 - The rules that read a customer's own words (meeting sentences, 'I don't know', a piece the shop made, an earlier conversation, pair carats, millimetre sizes, phone numbers, call or visit, periods of days, technical questions, greeting the right person) are listed in one table, `scripts/words.py`, each with the live phrases from tester threads it must keep reading right; `tests/test_words.py` runs every phrase. A tester's new phrasing becomes a row there before a rule changes (10 September 2026). The estimate record itself is described key by key in `RECORD-SCHEMA.md`, checked against the code by `tests/test_record_schema.py`.
 - A meeting is a visit unless the customer asks for a call in words (phone, call, zoom, video); a phone number in a signature is kept for the Customers tab and the invitation but never turns a visit into a call, and a visit's confirmation may never say the shop will call them (the guard rejects the draft). 'Bring them in' and 'show you' are visit words. After a meeting is booked, a courtesy note ('See you tomorrow!', 'Thanks, looking forward to it', with or without a signature) sends nothing: the claim is done, the facts stay on the record, the rest is settled at the meeting. When a later message does need questions, the questions email says the rest can be settled when you meet and does not invite them to come by. Live, 9 September 2026 (David): a visit was confirmed as 'I'll call you at (310) 810-3004', then 'See you tomorrow!' got a questionnaire that invited him to come by.
 

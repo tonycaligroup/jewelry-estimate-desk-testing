@@ -25,28 +25,40 @@ every pre-activation inquiry manually.
    replace a different activating user. Never ask for an approver name or email.
    Isolated cron runs do not call `sessions_list`; `workflow_safe.py` loads this
    binding itself when it requests approval.
-   Install the desk-owned gateway token before creating the watcher. This
-   copies the current gateway token into a private `0600` file and never prints
-   its value:
+   The gateway credential is the platform's `MATON_API_KEY` in the environment,
+   then a file named by `MATON_API_KEY_FILE`, then the fallback file at
+   `~/.openclaw/secrets/maton-api-key`. The environment is what the platform
+   keeps current, so it wins; `python3 {baseDir}/scripts/gateway_token.py
+   source` prints which one is in use, never its value. Install the fallback
+   file only on a pod whose environment carries no key:
 
    ```bash
    python3 {baseDir}/scripts/gateway_token.py install
    ```
 
-   Once this file exists, the desk always uses it in preference to
-   `MATON_API_KEY_FILE` or `MATON_API_KEY`. This prevents a later
-   process-environment change from silently swapping the Gmail gateway
-   credential.
-   If readiness or the watcher reports Gmail HTTP 401 after the integration was
-   working, the private copy may predate a legitimate platform-token rotation.
-   Reconnect Gmail if necessary, then run the verified refresh. It replaces the
-   file only after the candidate can read the profile's exact outbound mailbox
-   and never prints either credential:
+   Every tick begins with one read-only Gmail send-as request, before any
+   approval executes: the outbound mailbox must appear exactly once. A failure
+   is recorded by class in `estimate-desk/run-work/gmail-auth-health.json`,
+   the owner is told once a day through the bound channel, and the tick ends
+   with `NO_REPLY`. Only a later successful watcher tick clears the active
+   failure; readiness and the doctor report it and never clear it. Repairs by
+   class:
 
-   ```bash
-   python3 {baseDir}/scripts/gateway_token.py refresh \
-     --workspace '<absolute-workspace>'
-   ```
+   - `gateway_key_rejected` (HTTP 401): `kolo gateway restart`, then readiness
+     in cron context. A key rotation does not restart the gateway, so the job
+     keeps the old value until the restart.
+   - `integration_disconnected` (HTTP 403 "No active connection"): reconnect
+     Gmail in Settings > Integrations, then readiness.
+   - `gateway_forbidden` (another 403), `invalid_gateway_response`: run
+     readiness and report its Gmail lines.
+   - `outbound_mailbox_not_authorized` (200 without the alias): verify the
+     connected Gmail account and its "Send mail as" settings. The right
+     account may simply have lost the alias; this is not called a wrong account.
+
+   `gateway_token.py refresh --workspace '<absolute-workspace>'` remains for an
+   installation with no environment key: it replaces the fallback file only
+   after the candidate proves the profile's mailbox, and prints neither
+   credential. It is not the 401 repair.
 2. Perform a read-only capability check. Verify that the Gmail integration can:
    use `after:<epoch-seconds>`, return integer `internalDate` epoch milliseconds,
    and enumerate every page until no `nextPageToken` remains. Write a private
@@ -120,8 +132,20 @@ every pre-activation inquiry manually.
    `<workspace>/estimate-desk/work/cron-binding.json`. Activation repairs that
    durable copy when called again with the same verified binding.
 
-7. Activate only against that exact verified binding, then enable the same job
-   ID. Re-read it once more and require `enabled: true` and a successful
+7. Run readiness in cron context and fix every FAIL. It re-runs the checks
+   under the watcher job's own shell line (`sh -lc` with the same environment
+   import), prints the HOME, uid, and credential source that shell sees, and
+   stamps a passing run at `estimate-desk/work/readiness-cron-context.json`.
+   Activation refuses to proceed without a passing stamp from today for the
+   installed version:
+
+   ```bash
+   python3 {baseDir}/scripts/readiness.py --workspace '<absolute-workspace>' \
+     --base-dir '{baseDir}' --cron-context
+   ```
+
+   Then activate only against that exact verified binding, and enable the same
+   job ID. Re-read it once more and require `enabled: true` and a successful
    `bind-live` result equal to `cron-binding.json`:
 
    ```bash

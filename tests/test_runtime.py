@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import approval_guard
 import artwork
+import auth_health
+import skill_version
 import brief_registry
 import activation_binding
 import business_state_reset
@@ -6071,42 +6073,43 @@ class CostComponentsTests(unittest.TestCase):
 
 
 class GatewayTokenTests(unittest.TestCase):
-    def test_token_file_takes_precedence_and_must_be_private(self) -> None:
+    def test_environment_key_is_read_first_then_the_configured_file(self) -> None:
+        """Precedence since 14 September 2026: MATON_API_KEY, then MATON_API_KEY_FILE, then the fallback file."""
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "maton-api-key"
             path.write_text("file-token\n", encoding="utf-8")
             os.chmod(path, 0o600)
-            env = {"MATON_API_KEY_FILE": str(path), "MATON_API_KEY": "env-token"}
             with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path(directory) / "not-installed"):
-                self.assertEqual(gateway_token.load_token(env), "file-token")
+                both = {"MATON_API_KEY_FILE": str(path), "MATON_API_KEY": "env-token"}
+                self.assertEqual(gateway_token.load_token_with_source(both), ("env-token", "environment"))
+                file_only = {"MATON_API_KEY_FILE": str(path)}
+                self.assertEqual(gateway_token.load_token_with_source(file_only), ("file-token", "configured_file"))
+                self.assertEqual(gateway_token.load_token(file_only), "file-token")
                 os.chmod(path, 0o640)
                 with self.assertRaisesRegex(ValueError, "group or others"):
-                    gateway_token.load_token(env)
+                    gateway_token.load_token(file_only)
                 os.chmod(path, 0o600)
                 path.write_text("two words\n", encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "usable token"):
-                    gateway_token.load_token(env)
+                    gateway_token.load_token(file_only)
                 with self.assertRaisesRegex(ValueError, "does not exist"):
                     gateway_token.load_token({"MATON_API_KEY_FILE": str(Path(directory) / "missing")})
 
-    def test_desk_token_cannot_be_replaced_by_environment_changes(self) -> None:
+    def test_fallback_file_is_read_only_without_an_environment_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             desk_token = Path(directory) / "desk" / "maton-api-key"
-            stale_token = Path(directory) / "stale-maton-api-key"
-            stale_token.write_text("stale-token\n", encoding="utf-8")
-            os.chmod(stale_token, 0o600)
-            env = {"MATON_API_KEY_FILE": str(stale_token), "MATON_API_KEY": "also-stale"}
             with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", desk_token):
-                self.assertEqual(gateway_token.install_token_file({"MATON_API_KEY": "desk-token"}), desk_token)
+                self.assertEqual(gateway_token.install_token_file({"MATON_API_KEY": "installed-token"}), desk_token)
                 self.assertEqual(desk_token.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(gateway_token.load_token(env), "desk-token")
+                # A rotated platform key wins over the copy installed at activation.
+                self.assertEqual(gateway_token.load_token_with_source({"MATON_API_KEY": "rotated-token"}), ("rotated-token", "environment"))
+                self.assertEqual(gateway_token.load_token_with_source({}), ("installed-token", "fallback_file"))
 
-    def test_environment_variable_is_only_a_fallback(self) -> None:
+    def test_no_credential_anywhere_is_a_named_error(self) -> None:
         with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path("/nonexistent/maton-api-key")):
-            self.assertEqual(gateway_token.load_token({"MATON_API_KEY": "env-token"}), "env-token")
-            with self.assertRaisesRegex(ValueError, "MATON_API_KEY_FILE"):
+            with self.assertRaisesRegex(ValueError, "no fallback file"):
                 gateway_token.load_token({})
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "not a usable token"):
                 gateway_token.load_token({"MATON_API_KEY": "bad\ntoken"})
 
     def test_stale_private_token_is_replaced_only_after_exact_mailbox_verification(self) -> None:
@@ -6149,29 +6152,11 @@ class GatewayTokenTests(unittest.TestCase):
                     )
             self.assertEqual(installed.read_text(encoding="utf-8"), "working-token\n")
 
-    def test_watcher_retries_only_discovery_after_verified_refresh(self) -> None:
-        calls = []
-        def discover(root, token):
-            calls.append(token)
-            if token == "stale-token":
-                raise ValueError("Gmail gateway returned HTTP 401")
-            return {"discovered": 0}
-        with patch.object(inbox_watcher.gmail_fetch, "discover", side_effect=discover), \
-                patch.object(inbox_watcher.gateway_token, "refresh_token_file", return_value="current-token"):
-            result, token = inbox_watcher._discover_with_credential_recovery(
-                Path("/workspace"), Path("/workspace/estimate-desk/inbox-monitor"), "stale-token", True
-            )
-        self.assertEqual((result, token), ({"discovered": 0}, "current-token"))
-        self.assertEqual(calls, ["stale-token", "current-token"])
-
-    def test_gmail_auth_notice_is_actionable_and_deduplicated_daily(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            first = inbox_watcher._gmail_auth_notice(workspace, Path("/skill"))
-            second = inbox_watcher._gmail_auth_notice(workspace, Path("/skill"))
-            self.assertIn("Gmail may still appear connected in Kolo", first)
-            self.assertIn("gateway_token.py refresh", first)
-            self.assertEqual(second, "NO_REPLY")
+    def test_the_watcher_never_replaces_a_credential(self) -> None:
+        """The refresh command stays an operator tool; nothing in the tick calls it (14 September 2026)."""
+        source = (ROOT / "scripts" / "inbox_watcher.py").read_text(encoding="utf-8")
+        self.assertNotIn("refresh_token_file", source)
+        self.assertNotIn("install_token_file", source)
 
     def test_gmail_send_keeps_the_credential_out_of_argv(self) -> None:
         argv = gmail_safe.build_command(Path("/private/payload.json"))
@@ -6186,6 +6171,244 @@ class GatewayTokenTests(unittest.TestCase):
         gmail_safe.run_command(argv, runner=runner, stdin_text=config)
         self.assertEqual(runner.call_args.kwargs["input"], config)
         self.assertNotIn("secret-token", " ".join(runner.call_args.args[0]))
+
+
+class AuthPreflightTests(unittest.TestCase):
+    """Authentication and send authorization are proven before any approval executes (14 September 2026)."""
+
+    MAILBOX = "shop@example.com"
+
+    @staticmethod
+    def http_error(status: int, body: bytes = b"") -> Any:
+        def opener(request, timeout=30):
+            raise HTTPError(request.full_url, status, "error", {}, io.BytesIO(body))
+        return opener
+
+    @staticmethod
+    def send_as(value: Any) -> Any:
+        def opener(request, timeout=30):
+            return io.BytesIO(json.dumps(value).encode("utf-8"))
+        return opener
+
+    def failing_probe(self, status: str = auth_health.GATEWAY_KEY_REJECTED, http_status: int = 401) -> dict:
+        return {"status": status, "http_status": http_status, "check": auth_health.CHECK}
+
+    def test_gateway_errors_are_typed_by_status_and_still_value_errors(self) -> None:
+        with self.assertRaises(gmail_fetch.GatewayHTTPError) as caught:
+            gmail_fetch.fetch_json("settings/sendAs", None, "tok", self.http_error(401, b'{"error":"key rejected"}'))
+        self.assertEqual(caught.exception.status, 401)
+        self.assertIsInstance(caught.exception, ValueError)
+        self.assertTrue(str(caught.exception).startswith("Gmail gateway returned HTTP 401"))
+        self.assertIn("key rejected", caught.exception.detail)
+
+    def test_the_classification_table(self) -> None:
+        one = {"sendAs": [{"sendAsEmail": "Shop@Example.com", "isPrimary": True}]}
+        self.assertEqual(auth_health.probe("tok", self.MAILBOX, self.http_error(401))["status"], auth_health.GATEWAY_KEY_REJECTED)
+        self.assertEqual(
+            auth_health.probe("tok", self.MAILBOX, self.http_error(403, b'{"error":"No active connection for google-mail"}'))["status"],
+            auth_health.INTEGRATION_DISCONNECTED,
+        )
+        self.assertEqual(auth_health.probe("tok", self.MAILBOX, self.http_error(403, b'{"error":"quota"}'))["status"], auth_health.GATEWAY_FORBIDDEN)
+        self.assertEqual(
+            auth_health.probe("tok", self.MAILBOX, self.send_as({"sendAs": [{"sendAsEmail": "other@example.com"}]}))["status"],
+            auth_health.OUTBOUND_MAILBOX_NOT_AUTHORIZED,
+        )
+        twice = {"sendAs": [{"sendAsEmail": "shop@example.com"}, {"sendAsEmail": "SHOP@example.com"}]}
+        self.assertEqual(auth_health.probe("tok", self.MAILBOX, self.send_as(twice))["status"], auth_health.INVALID_GATEWAY_RESPONSE)
+        self.assertEqual(auth_health.probe("tok", self.MAILBOX, self.send_as({"sendAs": "no"}))["status"], auth_health.INVALID_GATEWAY_RESPONSE)
+        passed = auth_health.probe("tok", self.MAILBOX, self.send_as(one))
+        self.assertEqual((passed["status"], passed["http_status"]), (auth_health.PASSED, 200))
+        # Not an authentication failure: the existing error behaviour stands.
+        with self.assertRaises(gmail_fetch.GatewayHTTPError):
+            auth_health.probe("tok", self.MAILBOX, self.http_error(500))
+        # Classification reads the status field, never the message text.
+        self.assertIsNone(auth_health.classify_error(ValueError("Gmail gateway returned HTTP 401")))
+
+    def test_preflight_runs_before_approvals_and_stops_the_tick(self) -> None:
+        harness = WatcherTickTests("test_tick_does_nothing_while_reconfiguring")
+        harness.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = harness.workspace(directory, [("inquiry-1", "thread-1", {})])
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-1"}', ""))
+            with (
+                patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+                patch.object(auth_health, "probe", return_value=self.failing_probe()),
+                patch.object(inbox_watcher.gmail_fetch, "discover", side_effect=harness.fake_discover) as discover,
+                patch.object(workflow_safe, "handle_approved_briefs", return_value=[]) as approved,
+                patch.object(workflow_safe, "handle_rejected_briefs", return_value=[]) as rejected,
+            ):
+                summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=runner, token="t")
+            approved.assert_not_called()
+            rejected.assert_not_called()
+            discover.assert_not_called()
+            self.assertEqual(summary["skipped"], "gmail_auth")
+            self.assertEqual(summary["message"], "NO_REPLY")
+            self.assertEqual(summary["auth"]["status"], auth_health.GATEWAY_KEY_REJECTED)
+            record = auth_health.load_record(ws)
+            active = record["active_failure"]
+            self.assertEqual(active["class"], auth_health.GATEWAY_KEY_REJECTED)
+            self.assertEqual(active["http_status"], 401)
+            self.assertEqual(active["credential_source"], "provided")
+            self.assertTrue(active["cron_context"])
+            self.assertEqual(active["version"], skill_version.installed(ROOT))
+            self.assertEqual(record["last_failure"], active)
+            notices = [c.args[0] for c in runner.call_args_list if c.args and c.args[0][:2] == ["kolo", "notify-owner"]]
+            self.assertEqual(len(notices), 1)
+            text = notices[0][notices[0].index("-m") + 1]
+            self.assertIn("kolo gateway restart", text)
+            self.assertIn("--cron-context", text)
+            self.assertNotIn("Bearer", text)
+            self.assertNotIn("t\n", text)
+            self.assertEqual(record["notice"]["class"], auth_health.GATEWAY_KEY_REJECTED)
+            self.assertEqual(summary["auth"]["notice"], {"sent": True, "reason": "sent"})
+
+    def test_notice_goes_once_a_day_retries_after_a_failed_send_and_never_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            monitor_root = ws / "estimate-desk" / "inbox-monitor"
+            status = auth_health.GATEWAY_KEY_REJECTED
+            auth_health.save_record(ws, {**auth_health.load_record(ws), "active_failure": {"class": status}})
+            broken = Mock(side_effect=subprocess.CalledProcessError(1, ["kolo"], "", "backend down"))
+            first = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=broken)
+            self.assertEqual(first["sent"], False)
+            notice = auth_health.load_record(ws)["notice"]
+            self.assertNotIn("sent_on", notice)
+            self.assertEqual(notice["attempts"], 1)
+            self.assertIn("backend down", notice["last_error"])
+            self.assertEqual(auth_health.load_record(ws)["active_failure"]["class"], status)
+            working = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            second = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=working)
+            self.assertEqual(second, {"sent": True, "reason": "sent"})
+            notice = auth_health.load_record(ws)["notice"]
+            self.assertEqual(notice["sent_on"], datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+            self.assertNotIn("last_error", notice)
+            third = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=working)
+            self.assertEqual(third["sent"], False)
+            self.assertEqual(working.call_count, 1)
+            # A different class the same day is a different notice.
+            self.assertTrue(auth_health.notice_due(auth_health.load_record(ws), auth_health.INTEGRATION_DISCONNECTED))
+            # Tomorrow it is due again.
+            tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+            self.assertTrue(auth_health.notice_due(auth_health.load_record(ws), status, now=tomorrow))
+
+    def test_a_successful_preflight_clears_only_the_active_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            with patch.object(auth_health, "probe", return_value=self.failing_probe(auth_health.OUTBOUND_MAILBOX_NOT_AUTHORIZED, 200)):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            self.assertEqual(auth_health.load_record(ws)["active_failure"]["class"], auth_health.OUTBOUND_MAILBOX_NOT_AUTHORIZED)
+            with patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}):
+                result = auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            self.assertEqual(result["status"], auth_health.PASSED)
+            record = auth_health.load_record(ws)
+            self.assertIsNone(record["active_failure"])
+            self.assertEqual(record["last_failure"]["class"], auth_health.OUTBOUND_MAILBOX_NOT_AUTHORIZED)
+            self.assertIsNotNone(record["last_success_at"])
+
+    def test_an_authentication_failure_tick_prints_no_reply_exits_zero_and_keeps_its_summary(self) -> None:
+        harness = WatcherTickTests("test_tick_does_nothing_while_reconfiguring")
+        harness.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = harness.workspace(directory, [])
+            out = io.StringIO()
+            with (
+                patch.dict(os.environ, {"MATON_API_KEY": "env-token"}),
+                patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+                patch.object(inbox_watcher, "_resolve_tick_model"),
+                patch.object(auth_health, "probe", return_value=self.failing_probe(auth_health.INTEGRATION_DISCONNECTED, 403)),
+                patch.object(kolo_safe, "tell_owner") as tell,
+                patch("sys.stdout", out),
+            ):
+                code = inbox_watcher.main(["--workspace", str(ws), "--base-dir", str(ROOT), "--owner-target", "kolo:test-owner"])
+            self.assertEqual(code, 0)
+            self.assertEqual(out.getvalue(), "NO_REPLY\n")
+            self.assertEqual(tell.call_count, 1)
+            self.assertIn("Reconnect Gmail in Settings > Integrations", tell.call_args.args[1])
+            log = json.loads((ws / "estimate-desk" / "run-work" / "tick-log.json").read_text(encoding="utf-8"))
+            self.assertEqual(log[-1]["auth"]["status"], auth_health.INTEGRATION_DISCONNECTED)
+            self.assertEqual(log[-1]["skipped"], "gmail_auth")
+            self.assertEqual(auth_health.load_record(ws)["active_failure"]["credential_source"], "environment")
+
+    def readiness_runner(self, argv, **kwargs):
+        if argv[:3] == ["openclaw", "infer", "model"]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True, "capability": "model.run", "outputs": [{"text": '{"ok":true}'}]}), "")
+        if argv[:2] == ["kolo", "audit-query"]:
+            return subprocess.CompletedProcess(argv, 0, '{"status": "ok", "events": []}', "")
+        if argv[:2] == ["kolo", "ping"]:
+            return subprocess.CompletedProcess(argv, 0, "pong", "")
+        if argv[:3] == ["openclaw", "cron", "list"]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"jobs": [{"name": "jed-inbox-monitor", "enabled": True, "schedule": "*/2 7-23 * * 1-6"}]}), "")
+        return subprocess.CompletedProcess(argv, 1, "", "unexpected")
+
+    def test_readiness_reports_the_record_and_never_clears_it(self) -> None:
+        import readiness
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            (ws / "estimate-desk" / "inbox-monitor").mkdir(parents=True)
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps({"shop": {"outbound_mailbox": self.MAILBOX}}), encoding="utf-8")
+            with patch.object(auth_health, "probe", return_value=self.failing_probe()):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            before = auth_health.load_record(ws)
+            with (
+                patch.object(gateway_token, "load_token_with_source", return_value=("tok", "environment")),
+                patch.object(gmail_fetch, "fetch_json", return_value={"resultSizeEstimate": 3}),
+                patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}),
+            ):
+                rows = {r["check"]: r for r in readiness.checks(ws, ROOT, "openclaw", runner=self.readiness_runner)}
+            self.assertEqual(rows["gmail gateway"]["status"], "PASS")
+            self.assertIn("credential from environment", rows["gmail gateway"]["detail"])
+            self.assertEqual(rows["gmail send-as"]["status"], "PASS")
+            self.assertEqual(rows["gmail auth record"]["status"], "WARN")
+            self.assertIn("recovery is visible now", rows["gmail auth record"]["detail"])
+            self.assertEqual(auth_health.load_record(ws), before)  # read-only
+            with (
+                patch.object(gateway_token, "load_token_with_source", return_value=("tok", "environment")),
+                patch.object(gmail_fetch, "fetch_json", return_value={"resultSizeEstimate": 3}),
+                patch.object(auth_health, "probe", return_value=self.failing_probe()),
+            ):
+                rows = {r["check"]: r for r in readiness.checks(ws, ROOT, "openclaw", runner=self.readiness_runner)}
+            self.assertEqual(rows["gmail send-as"]["status"], "FAIL")
+            self.assertIn("gateway_key_rejected", rows["gmail send-as"]["detail"])
+            self.assertEqual(rows["gmail auth record"]["status"], "FAIL")
+            self.assertEqual(auth_health.load_record(ws), before)
+
+    def test_the_doctor_reports_the_active_failure_without_clearing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            (ws / "estimate-desk").mkdir(parents=True)
+            with patch.object(auth_health, "probe", return_value=self.failing_probe()):
+                auth_health.preflight(ws, "tok", "fallback_file", self.MAILBOX, "4.15.34")
+            found = [f for f in doctor.scan(ws) if f["code"] == "gmail_auth"]
+            self.assertEqual(len(found), 1)
+            self.assertEqual(found[0]["level"], "repair")
+            self.assertIn("gateway_key_rejected", found[0]["detail"])
+            self.assertIn("credential from fallback_file", found[0]["detail"])
+            self.assertIn("kolo gateway restart", found[0]["repair"])
+            self.assertIsNotNone(auth_health.load_record(ws)["active_failure"])
+
+    def test_activation_requires_a_fresh_passing_cron_context_readiness_stamp(self) -> None:
+        import readiness
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            root = ws / "estimate-desk" / "inbox-monitor"
+            root.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "cron context"):
+                inbox_monitor.require_cron_context_readiness(root)
+            version = skill_version.installed(ROOT)
+            readiness.cron_context_row(ws, version, [{"status": "PASS"}, {"status": "FAIL"}])
+            with self.assertRaisesRegex(ValueError, "did not pass"):
+                inbox_monitor.require_cron_context_readiness(root)
+            readiness.cron_context_row(ws, "0.0.1", [{"status": "PASS"}])
+            with self.assertRaisesRegex(ValueError, "installed version"):
+                inbox_monitor.require_cron_context_readiness(root)
+            row = readiness.cron_context_row(ws, version, [{"status": "PASS"}])
+            self.assertEqual(row["status"], "PASS")
+            self.assertIn("uid=", row["detail"])
+            stamp = inbox_monitor.require_cron_context_readiness(root)
+            self.assertTrue(stamp["ready"])
+            self.assertEqual(stamp["home"], os.environ.get("HOME", ""))
+            with self.assertRaisesRegex(ValueError, "older than a day"):
+                inbox_monitor.require_cron_context_readiness(root, now=time.time() + 2 * 86400)
 
 
 
@@ -6867,6 +7090,7 @@ class WatcherTickTests(unittest.TestCase):
             runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-1", "name": "jed-worker"}', ""))
         with (
             patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+            patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}),
             patch.object(inbox_watcher.gmail_fetch, "discover", side_effect=self.fake_discover),
             patch.object(inbox_watcher.gmail_fetch, "fetch_claimed", side_effect=self.fake_fetch),
             patch.object(workflow_safe, "mirror_record"),

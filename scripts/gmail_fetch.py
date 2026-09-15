@@ -28,6 +28,18 @@ PAGE_SIZE = 100
 Opener = Callable[..., Any]
 
 
+class GatewayHTTPError(ValueError):
+    """The gateway answered with an HTTP error; `status` is what callers classify on, never the message text.
+
+    A `ValueError` subclass so every existing caller keeps working (14 September 2026).
+    """
+
+    def __init__(self, status: int, detail: str = "") -> None:
+        self.status = int(status)
+        self.detail = detail
+        super().__init__(f"Gmail gateway returned HTTP {self.status}" + (f": {detail}" if detail else ""))
+
+
 def require_token(value: str) -> str:
     if not value or any(character in value for character in "\r\n"):
         raise ValueError("MATON_API_KEY is missing or invalid")
@@ -55,7 +67,7 @@ def fetch_json(
             detail = exc.read().decode("utf-8", "replace")[:200].replace("\n", " ")
         except (OSError, ValueError):
             detail = ""
-        raise ValueError(f"Gmail gateway returned HTTP {exc.code}" + (f": {detail}" if detail else "")) from exc
+        raise GatewayHTTPError(exc.code, detail) from exc
     except URLError as exc:
         raise ValueError("Gmail gateway request failed") from exc
     except json.JSONDecodeError as exc:

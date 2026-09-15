@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -108,15 +110,46 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
         except Exception as exc:  # noqa: BLE001 - a readiness check reports, never crashes
             add("inline judgment", "FAIL", f"model {model}: {exc}")
 
-    # Gmail gateway (the watcher's first call every tick)
+    # Gmail gateway (the watcher's first call every tick), then the same
+    # send-as preflight the watcher runs before any approval, read-only here.
+    gmail_live = False
     try:
+        import auth_health
         import gateway_token
         import gmail_fetch
 
-        listing = gmail_fetch.fetch_json("messages", {"maxResults": 1}, gateway_token.load_token())
-        add("gmail gateway", "PASS", f"inbox reachable, {listing.get('resultSizeEstimate', '?')} message(s) visible")
+        token, source = gateway_token.load_token_with_source()
+        listing = gmail_fetch.fetch_json("messages", {"maxResults": 1}, token)
+        add("gmail gateway", "PASS",
+            f"inbox reachable, {listing.get('resultSizeEstimate', '?')} message(s) visible; credential from {source}")
+        try:
+            profile = json.loads((workspace / "estimate-desk" / "shop-profile.json").read_text(encoding="utf-8"))
+            mailbox = str(((profile.get("shop") or {}) if isinstance(profile, dict) else {}).get("outbound_mailbox") or "")
+        except (OSError, ValueError):
+            mailbox = ""
+        probe = auth_health.probe(token, mailbox)
+        gmail_live = probe["status"] == auth_health.PASSED
+        add("gmail send-as", "PASS" if gmail_live else "FAIL",
+            f"{mailbox} authorized" if gmail_live else f"{probe['status']} (HTTP {probe['http_status']}): {auth_health.REPAIRS.get(probe['status'], '')}")
     except Exception as exc:  # noqa: BLE001 - a readiness check reports, never crashes
         add("gmail gateway", "FAIL", str(exc))
+
+    # The watcher's authentication health record: reported, never written here.
+    try:
+        import auth_health
+
+        health = auth_health.load_record(workspace)
+        active = health.get("active_failure")
+        if not isinstance(active, dict):
+            add("gmail auth record", "PASS", auth_health.describe(health))
+        elif gmail_live:
+            add("gmail auth record", "WARN",
+                f"recorded {active.get('class')} since {active.get('at')}; recovery is visible now, "
+                "the next successful watcher tick clears the recorded incident")
+        else:
+            add("gmail auth record", "FAIL", auth_health.describe(health))
+    except Exception as exc:  # noqa: BLE001
+        add("gmail auth record", "WARN", f"could not read: {exc}")
 
     # Audit trail (rejections are read from it)
     proc = _run(["kolo", "audit-query", "--page-size", "1"], runner)
@@ -168,20 +201,81 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-dir", type=Path, required=True)
     parser.add_argument("--openclaw", default="openclaw")
     parser.add_argument("--expect", default=None, help="the version the owner published; a mismatch is a FAIL")
+    parser.add_argument("--cron-context", action="store_true",
+                        help="run these checks under the watcher job's own shell line (sh -lc with the same env import)")
+    parser.add_argument("--in-cron-context", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     import skill_version
 
-    version = skill_version.installed(args.base_dir.resolve())
+    workspace, base_dir = args.workspace.resolve(), args.base_dir.resolve()
+    if args.cron_context:
+        return run_in_cron_context(workspace, base_dir, args.openclaw, args.expect)
+    version = skill_version.installed(base_dir)
     print(f"version: {version}")
-    results = checks(args.workspace.resolve(), args.base_dir.resolve(), args.openclaw)
+    results = checks(workspace, base_dir, args.openclaw)
     if args.expect:
         results.insert(0, {"check": "installed version", "status": "PASS" if version == args.expect else "FAIL",
                            "detail": f"installed {version}, expected {args.expect}"})
+    if args.in_cron_context:
+        results.insert(0, cron_context_row(workspace, version, results))
     for row in results:
         print(f"{row['status']:4} {row['check']}: {row['detail']}")
     failed = [r for r in results if r["status"] == "FAIL"]
     print("READY" if not failed else f"NOT READY ({len(failed)} failed)")
     return 0 if not failed else 1
+
+
+STAMP_FILE = "readiness-cron-context.json"
+
+
+def stamp_path(workspace: Path) -> Path:
+    """Where a passing cron-context run leaves its proof; activation requires it (14 September 2026)."""
+    return workspace / "estimate-desk" / "work" / STAMP_FILE
+
+
+def cron_context_row(workspace: Path, version: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+    """The first line of a cron-context run: the shell the watcher gets, and the stamp activation reads."""
+    import gateway_token
+    import workflow_safe
+
+    try:
+        source = gateway_token.load_token_with_source()[1]
+    except (OSError, ValueError):
+        source = "none"
+    ready = not any(r["status"] == "FAIL" for r in results)
+    facts = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "version": version,
+        "ready": ready,
+        "home": os.environ.get("HOME", ""),
+        "uid": os.getuid(),
+        "credential_source": source,
+        "litellm_base_url_set": bool(os.environ.get("LITELLM_BASE_URL")),
+    }
+    try:
+        workflow_safe.write_private(stamp_path(workspace), facts)
+        stamped = "stamped"
+    except OSError as exc:
+        stamped = f"stamp not written: {exc}"
+    return {"check": "cron context", "status": "PASS",
+            "detail": f"HOME={facts['home']} uid={facts['uid']} credential from {source}; {stamped}"}
+
+
+def run_in_cron_context(workspace: Path, base_dir: Path, openclaw: str, expect: str | None) -> int:
+    """Re-run this script the way the watcher job runs: `sh -lc` with the same environment import line."""
+    import cron_config
+
+    inner = (
+        f"{cron_config.LITELLM_ENV_IMPORT} python3 {base_dir}/scripts/readiness.py "
+        f"--workspace {workspace} --base-dir {base_dir} --openclaw {openclaw} --in-cron-context"
+        + (f" --expect {expect}" if expect else "")
+    )
+    print("cron context: sh -lc, the watcher's own environment import")
+    proc = subprocess.run(["sh", "-lc", inner], capture_output=True, text=True, timeout=600)
+    sys.stdout.write(proc.stdout)
+    if proc.stderr.strip():
+        sys.stderr.write(proc.stderr)
+    return proc.returncode
 
 
 if __name__ == "__main__":

@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Resolve the Maton gateway token without leaving it in the agent's environment.
+"""Resolve the Maton gateway token and say where it came from.
 
-The token used to be read from `MATON_API_KEY` in the process environment and
-passed to curl in argv, so any process listing or any improvised shell command
-could lift it. On 2 Sep 2026 the main session did exactly that. The bundled
-scripts now prefer the desk-owned private file at
-`~/.openclaw/secrets/maton-api-key` whenever it exists. `MATON_API_KEY_FILE`
-can name a migration source until that file is installed. The file must be
-owned by the caller and readable by nobody else. The environment variable
-remains a final fallback so an existing installation keeps working until the
-operator installs the desk-owned copy.
+Precedence, explicit since 14 September 2026: the platform's `MATON_API_KEY`
+in the process environment, then a file named by `MATON_API_KEY_FILE`, then
+the desk's private fallback file at `~/.openclaw/secrets/maton-api-key`.
+
+The fallback file used to win. That made a copy installed once at activation
+authoritative forever, while the platform rotated the key underneath it (the
+tester's pod on 14 September held a file from 11 September and a newer key in
+the environment; rotated keys overlap for a while, so both still worked that
+day). The environment is what the platform keeps current, so it is read
+first. The file is kept only for installations with no environment key, and
+`refresh` remains an explicit operator command for those; nothing here, and
+nothing in the watcher, replaces a credential on its own.
+
+Every file read must be a regular file owned by the caller and readable by
+nobody else. No function prints a token.
 """
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import secrets
 import stat
 import sys
@@ -25,9 +31,9 @@ from typing import Any, Callable, Mapping
 
 DEFAULT_TOKEN_FILE = Path.home() / ".openclaw" / "secrets" / "maton-api-key"
 
-
-class GatewayAuthenticationError(ValueError):
-    """The active private credential failed and no verified replacement was available."""
+SOURCE_ENVIRONMENT = "environment"
+SOURCE_CONFIGURED_FILE = "configured_file"
+SOURCE_FALLBACK_FILE = "fallback_file"
 
 
 def _valid(token: str) -> bool:
@@ -51,33 +57,28 @@ def read_token_file(path: Path) -> str:
     return token
 
 
-def load_token(environ: Mapping[str, str] | None = None) -> str:
-    """Return the desk-owned token, else a configured file or legacy variable."""
+def load_token_with_source(environ: Mapping[str, str] | None = None) -> tuple[str, str]:
+    """The token and its source: environment, configured_file, or fallback_file."""
     env = os.environ if environ is None else environ
+    token = env.get("MATON_API_KEY", "")
+    if _valid(token):
+        return token, SOURCE_ENVIRONMENT
+    configured = env.get("MATON_API_KEY_FILE")
+    if configured:
+        return read_token_file(Path(configured).expanduser()), SOURCE_CONFIGURED_FILE
     if DEFAULT_TOKEN_FILE.exists():
-        return read_token_file(DEFAULT_TOKEN_FILE)
-    configured = env.get("MATON_API_KEY_FILE")
-    if configured:
-        return read_token_file(Path(configured).expanduser())
-    token = env.get("MATON_API_KEY", "")
-    if not _valid(token):
-        raise ValueError(
-            "MATON_API_KEY is missing or invalid: set MATON_API_KEY_FILE to a "
-            "0600 file holding the gateway token"
-        )
-    return token
+        return read_token_file(DEFAULT_TOKEN_FILE), SOURCE_FALLBACK_FILE
+    if token:
+        raise ValueError("MATON_API_KEY is present but not a usable token")
+    raise ValueError(
+        "MATON_API_KEY is missing: the platform environment carries no gateway token, "
+        "MATON_API_KEY_FILE is unset, and no fallback file is installed"
+    )
 
 
-def candidate_token(environ: Mapping[str, str] | None = None) -> str:
-    """Read the platform's current candidate, deliberately ignoring the installed copy."""
-    env = os.environ if environ is None else environ
-    configured = env.get("MATON_API_KEY_FILE")
-    if configured:
-        return read_token_file(Path(configured).expanduser())
-    token = env.get("MATON_API_KEY", "")
-    if not _valid(token):
-        raise ValueError("no current platform gateway token is available for verified refresh")
-    return token
+def load_token(environ: Mapping[str, str] | None = None) -> str:
+    """The token alone, for callers that only send it."""
+    return load_token_with_source(environ)[0]
 
 
 def _replace_token_file(token: str) -> Path:
@@ -104,12 +105,29 @@ def _replace_token_file(token: str) -> Path:
     return DEFAULT_TOKEN_FILE
 
 
+def candidate_token(environ: Mapping[str, str] | None = None) -> str:
+    """The platform's current token, deliberately ignoring the fallback file."""
+    env = os.environ if environ is None else environ
+    token = env.get("MATON_API_KEY", "")
+    if _valid(token):
+        return token
+    configured = env.get("MATON_API_KEY_FILE")
+    if configured:
+        return read_token_file(Path(configured).expanduser())
+    raise ValueError("no current platform gateway token is available for a verified refresh")
+
+
 def refresh_token_file(
     workspace: Path,
     environ: Mapping[str, str] | None = None,
     verifier: Callable[[str, str], Any] | None = None,
 ) -> str:
-    """Replace the private token only after it proves access to the configured mailbox."""
+    """Operator command: replace the fallback file only after the candidate proves the configured mailbox.
+
+    Relevant only to an installation with no environment key; with one present the
+    fallback file is never read. Not the normal 401 repair (that is `kolo gateway
+    restart`, then readiness in cron context).
+    """
     profile_path = Path(workspace) / "estimate-desk" / "shop-profile.json"
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -129,13 +147,8 @@ def refresh_token_file(
     return replacement
 
 
-def is_auth_failure(error: BaseException) -> bool:
-    text = str(error).lower()
-    return "http 401" in text or "invalid authentication credentials" in text
-
-
 def install_token_file(environ: Mapping[str, str] | None = None) -> Path:
-    """Create the desk-owned token file once, without exposing its value."""
+    """Create the fallback file once from the current platform token, without exposing its value."""
     env = os.environ if environ is None else environ
     if DEFAULT_TOKEN_FILE.exists():
         read_token_file(DEFAULT_TOKEN_FILE)
@@ -149,7 +162,7 @@ def install_token_file(environ: Mapping[str, str] | None = None) -> Path:
         if not _valid(token):
             raise ValueError(
                 "MATON_API_KEY is missing or invalid: provide the current gateway "
-                "token before installing the desk-owned copy"
+                "token before installing the fallback copy"
             )
 
     DEFAULT_TOKEN_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -176,11 +189,17 @@ def main(argv: list[str] | None = None) -> int:
             path = install_token_file()
             print(f"gateway token ready at {path}")
             return 0
+        if args == ["source"]:
+            print(load_token_with_source()[1])
+            return 0
         if len(args) == 3 and args[:2] == ["refresh", "--workspace"]:
             refresh_token_file(Path(args[2]).resolve())
             print(f"gateway token refreshed and verified at {DEFAULT_TOKEN_FILE}")
             return 0
-        print("usage: gateway_token.py install | refresh --workspace <absolute-workspace>", file=sys.stderr)
+        print(
+            "usage: gateway_token.py install | source | refresh --workspace <absolute-workspace>",
+            file=sys.stderr,
+        )
         return 2
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
