@@ -78,7 +78,11 @@ def scan(workspace: Path) -> list[dict[str, Any]]:
     # Only a successful watcher preflight clears the active failure.
     health = auth_health.load_record(workspace)
     active = health.get("active_failure")
-    if isinstance(active, dict):
+    if health.get("unreadable"):
+        add("gmail_auth_record_unreadable", "gmail credential record", auth_health.describe(health),
+            "nothing to run; the next watcher preflight moves the unreadable file aside and starts a new record",
+            level="info")
+    elif isinstance(active, dict):
         add("gmail_auth", "gmail credential", auth_health.describe(health),
             f"{active.get('repair')}; the next successful watcher tick clears this")
     try:

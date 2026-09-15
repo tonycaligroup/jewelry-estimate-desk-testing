@@ -41,12 +41,18 @@ def _valid(token: str) -> bool:
 
 
 def read_token_file(path: Path) -> str:
+    """A regular file, not a symlink, owned by the caller, readable by nobody else, holding one token."""
     try:
-        mode = path.stat().st_mode
+        info = path.lstat()
     except FileNotFoundError as exc:
         raise ValueError(f"gateway token file {path} does not exist") from exc
+    mode = info.st_mode
+    if stat.S_ISLNK(mode):
+        raise ValueError(f"gateway token file {path} must not be a symbolic link")
     if not stat.S_ISREG(mode):
         raise ValueError(f"gateway token file {path} must be a regular file")
+    if info.st_uid != os.geteuid():
+        raise ValueError(f"gateway token file {path} must be owned by the user running the desk")
     if mode & 0o077:
         raise ValueError(
             f"gateway token file {path} must not be readable by group or others"
@@ -57,19 +63,47 @@ def read_token_file(path: Path) -> str:
     return token
 
 
+_PINNED: tuple[str, str] | None = None
+
+
+def pin(token: str, source: str) -> None:
+    """Freeze the credential for the rest of this process: every later loader returns the one the preflight proved.
+
+    The watcher pins right after its preflight passes, so an approval executor
+    that reloads the token cannot pick up a file that changed mid-tick (14
+    September 2026).
+    """
+    global _PINNED
+    if not _valid(token):
+        raise ValueError("cannot pin an invalid gateway token")
+    _PINNED = (token, source)
+
+
+def unpin() -> None:
+    global _PINNED
+    _PINNED = None
+
+
 def load_token_with_source(environ: Mapping[str, str] | None = None) -> tuple[str, str]:
-    """The token and its source: environment, configured_file, or fallback_file."""
+    """The token and its source: environment, configured_file, or fallback_file.
+
+    A present but malformed `MATON_API_KEY` is an error, never a fall-through
+    to a file: a broken platform environment must be seen, not masked by a
+    stale copy.
+    """
+    if _PINNED is not None:
+        return _PINNED
     env = os.environ if environ is None else environ
     token = env.get("MATON_API_KEY", "")
     if _valid(token):
         return token, SOURCE_ENVIRONMENT
+    if token.strip():
+        raise ValueError("MATON_API_KEY is present but not a usable token")
     configured = env.get("MATON_API_KEY_FILE")
     if configured:
         return read_token_file(Path(configured).expanduser()), SOURCE_CONFIGURED_FILE
     if DEFAULT_TOKEN_FILE.exists():
         return read_token_file(DEFAULT_TOKEN_FILE), SOURCE_FALLBACK_FILE
-    if token:
-        raise ValueError("MATON_API_KEY is present but not a usable token")
     raise ValueError(
         "MATON_API_KEY is missing: the platform environment carries no gateway token, "
         "MATON_API_KEY_FILE is unset, and no fallback file is installed"

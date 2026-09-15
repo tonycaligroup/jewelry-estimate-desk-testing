@@ -6112,6 +6112,48 @@ class GatewayTokenTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not a usable token"):
                 gateway_token.load_token({"MATON_API_KEY": "bad\ntoken"})
 
+    def test_a_malformed_environment_key_never_falls_through_to_a_file(self) -> None:
+        """A broken platform environment is seen, not masked by a stale copy (Codex review, 14 September 2026)."""
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "maton-api-key"
+            installed.write_text("installed-token\n", encoding="utf-8")
+            os.chmod(installed, 0o600)
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", installed):
+                with self.assertRaisesRegex(ValueError, "not a usable token"):
+                    gateway_token.load_token({"MATON_API_KEY": "two words"})
+                with self.assertRaisesRegex(ValueError, "not a usable token"):
+                    gateway_token.load_token({"MATON_API_KEY": "x y", "MATON_API_KEY_FILE": str(installed)})
+                # An empty variable is absent, not malformed.
+                self.assertEqual(gateway_token.load_token({"MATON_API_KEY": ""}), "installed-token")
+
+    def test_token_files_must_be_owned_by_the_caller_and_never_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            real = Path(directory) / "real"
+            real.write_text("file-token\n", encoding="utf-8")
+            os.chmod(real, 0o600)
+            link = Path(directory) / "link"
+            link.symlink_to(real)
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                gateway_token.read_token_file(link)
+            fake_stat = os.lstat(real)
+            class Other:
+                st_mode, st_uid = fake_stat.st_mode, fake_stat.st_uid + 1
+            with patch.object(Path, "lstat", return_value=Other()):
+                with self.assertRaisesRegex(ValueError, "owned by the user"):
+                    gateway_token.read_token_file(real)
+
+    def test_a_pinned_credential_is_what_every_later_loader_returns(self) -> None:
+        try:
+            gateway_token.pin("proved-token", "environment")
+            self.assertEqual(gateway_token.load_token_with_source({"MATON_API_KEY": "other"}), ("proved-token", "environment"))
+            self.assertEqual(gateway_token.load_token({}), "proved-token")
+            with self.assertRaises(ValueError):
+                gateway_token.pin("bad token", "environment")
+        finally:
+            gateway_token.unpin()
+        with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path("/nonexistent/maton-api-key")):
+            self.assertEqual(gateway_token.load_token({"MATON_API_KEY": "other"}), "other")
+
     def test_stale_private_token_is_replaced_only_after_exact_mailbox_verification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
@@ -6285,11 +6327,19 @@ class AuthPreflightTests(unittest.TestCase):
             third = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=working)
             self.assertEqual(third["sent"], False)
             self.assertEqual(working.call_count, 1)
-            # A different class the same day is a different notice.
-            self.assertTrue(auth_health.notice_due(auth_health.load_record(ws), auth_health.INTEGRATION_DISCONNECTED))
-            # Tomorrow it is due again.
+            # A different class the same day is a different notice, and sending
+            # it does not make the first class due again (alternating 401/403
+            # outcomes notify once each per day).
+            other = auth_health.INTEGRATION_DISCONNECTED
+            self.assertTrue(auth_health.notice_due(auth_health.load_record(ws), other))
+            self.assertEqual(auth_health.notify_if_due(ws, monitor_root, other, "text", runner=working)["sent"], True)
+            self.assertFalse(auth_health.notice_due(auth_health.load_record(ws), status))
+            self.assertFalse(auth_health.notice_due(auth_health.load_record(ws), other))
+            self.assertEqual(working.call_count, 2)
+            # Tomorrow both are due again.
             tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
             self.assertTrue(auth_health.notice_due(auth_health.load_record(ws), status, now=tomorrow))
+            self.assertTrue(auth_health.notice_due(auth_health.load_record(ws), other, now=tomorrow))
 
     def test_a_successful_preflight_clears_only_the_active_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6328,6 +6378,149 @@ class AuthPreflightTests(unittest.TestCase):
             self.assertEqual(log[-1]["auth"]["status"], auth_health.INTEGRATION_DISCONNECTED)
             self.assertEqual(log[-1]["skipped"], "gmail_auth")
             self.assertEqual(auth_health.load_record(ws)["active_failure"]["credential_source"], "environment")
+
+    def test_the_real_send_as_request_precedes_every_approval_and_pins_the_credential(self) -> None:
+        """Ordering with the real preflight path, not a stubbed probe (Codex review, 14 September 2026)."""
+        harness = WatcherTickTests("test_tick_does_nothing_while_reconfiguring")
+        harness.setUp()
+        order: list[str] = []
+        def fetch_json(path, params, token, opener=None):
+            order.append(f"gmail:{path}:{token}")
+            self.assertEqual(path, "settings/sendAs")
+            return {"sendAs": [{"sendAsEmail": "SHOP@example.com"}]}
+        def approved(workspace, runner=None):
+            order.append("approvals")
+            # An executor reloading the credential gets the one the preflight proved.
+            self.assertEqual(gateway_token.load_token({"MATON_API_KEY": "something-else"}), "t")
+            return []
+        def rejected(workspace, runner=None):
+            order.append("rejections")
+            return []
+        with tempfile.TemporaryDirectory() as directory:
+            ws = harness.workspace(directory, [])
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, '{"id": "job-1"}', ""))
+            try:
+                with (
+                    patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+                    patch.object(gmail_fetch, "fetch_json", side_effect=fetch_json),
+                    patch.object(inbox_watcher.gmail_fetch, "discover", side_effect=lambda *a, **k: order.append("discovery") or {"discovered": 0}),
+                    patch.object(workflow_safe, "handle_approved_briefs", side_effect=approved),
+                    patch.object(workflow_safe, "handle_rejected_briefs", side_effect=rejected),
+                    patch.object(inbox_watcher.owner_questions, "send_due_reminders", side_effect=lambda *a, **k: order.append("reminders") or 0),
+                ):
+                    summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=runner, token="t")
+            finally:
+                gateway_token.unpin()
+            self.assertEqual(order[:4], ["gmail:settings/sendAs:t", "rejections", "approvals", "reminders"])
+            self.assertIn("discovery", order)
+            self.assertEqual(summary["auth"]["status"], auth_health.PASSED)
+            self.assertIsNone(auth_health.load_record(ws)["active_failure"])
+            self.assertIsNotNone(auth_health.load_record(ws)["last_success_at"])
+
+    def test_a_failing_preflight_suppresses_reminders_and_persists_before_notifying(self) -> None:
+        harness = WatcherTickTests("test_tick_does_nothing_while_reconfiguring")
+        harness.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = harness.workspace(directory, [])
+            log = ws / "estimate-desk" / "run-work" / "tick-log.json"
+            seen_at_send = {}
+            def tell(monitor_root, text, runner=None):
+                # By the time the owner is told, the summary and the record are on disk.
+                seen_at_send["log"] = json.loads(log.read_text(encoding="utf-8"))[-1]
+                seen_at_send["record"] = auth_health.load_record(ws)
+            with (
+                patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+                patch.object(auth_health, "probe", return_value=self.failing_probe()),
+                patch.object(inbox_watcher.owner_questions, "send_due_reminders") as reminders,
+                patch.object(kolo_safe, "tell_owner", side_effect=tell),
+            ):
+                summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=Mock(), token="t")
+            reminders.assert_not_called()
+            self.assertEqual(seen_at_send["log"]["skipped"], "gmail_auth")
+            self.assertEqual(seen_at_send["log"]["auth"]["status"], auth_health.GATEWAY_KEY_REJECTED)
+            self.assertEqual(seen_at_send["record"]["active_failure"]["class"], auth_health.GATEWAY_KEY_REJECTED)
+            self.assertNotIn("sent_on", seen_at_send["record"]["notice"])  # delivery is recorded after the send
+            self.assertEqual(summary["auth"]["notice"], {"sent": True, "reason": "sent"})
+            self.assertTrue(summary["summary_kept"])
+            self.assertEqual(len(json.loads(log.read_text(encoding="utf-8"))), 1)
+
+    def test_readiness_never_writes_the_record(self) -> None:
+        import readiness
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            (ws / "estimate-desk" / "inbox-monitor").mkdir(parents=True)
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps({"shop": {"outbound_mailbox": self.MAILBOX}}), encoding="utf-8")
+            with patch.object(auth_health, "probe", return_value=self.failing_probe()):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            with (
+                patch.object(gateway_token, "load_token_with_source", return_value=("tok", "environment")),
+                patch.object(gmail_fetch, "fetch_json", return_value={"resultSizeEstimate": 3}),
+                patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}),
+                patch.object(auth_health, "save_record") as save,
+                patch.object(workflow_safe, "write_private") as write,
+            ):
+                rows = {r["check"]: r for r in readiness.checks(ws, ROOT, "openclaw", runner=self.readiness_runner)}
+                self.assertEqual(rows["gmail auth record"]["status"], "WARN")
+                findings = doctor.scan(ws)
+            save.assert_not_called()
+            write.assert_not_called()
+            self.assertEqual([f["code"] for f in findings if f["code"].startswith("gmail_auth")], ["gmail_auth"])
+
+    def test_an_unreadable_record_is_reported_and_moved_aside_not_overwritten(self) -> None:
+        import readiness
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            (ws / "estimate-desk" / "inbox-monitor").mkdir(parents=True)
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps({"shop": {"outbound_mailbox": self.MAILBOX}}), encoding="utf-8")
+            path = auth_health.record_path(ws)
+            path.parent.mkdir(parents=True)
+            path.write_text("{not json", encoding="utf-8")
+            record = auth_health.load_record(ws)
+            self.assertIn("not JSON", record["unreadable"])
+            self.assertIn("unreadable", auth_health.describe(record))
+            with (
+                patch.object(gateway_token, "load_token_with_source", return_value=("tok", "environment")),
+                patch.object(gmail_fetch, "fetch_json", return_value={"resultSizeEstimate": 3}),
+                patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}),
+            ):
+                rows = {r["check"]: r for r in readiness.checks(ws, ROOT, "openclaw", runner=self.readiness_runner)}
+            self.assertEqual(rows["gmail auth record"]["status"], "WARN")
+            self.assertIn("unreadable", rows["gmail auth record"]["detail"])
+            self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
+            self.assertEqual([f["level"] for f in doctor.scan(ws) if f["code"] == "gmail_auth_record_unreadable"], ["info"])
+            with patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            kept = list(path.parent.glob("gmail-auth-health.corrupt-*.json"))
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0].read_text(encoding="utf-8"), "{not json")
+            fresh = auth_health.load_record(ws)
+            self.assertNotIn("unreadable", fresh)
+            self.assertIsNotNone(fresh["last_success_at"])
+
+    def test_the_record_lock_serialises_two_ticks(self) -> None:
+        """Two overlapping failure ticks send one notice, not two (Codex review, 14 September 2026)."""
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            monitor_root = ws / "estimate-desk" / "inbox-monitor"
+            status = auth_health.GATEWAY_KEY_REJECTED
+            gate = threading.Barrier(2)
+            sends: list[float] = []
+            def slow_send(monitor_root, text, runner=None):
+                sends.append(time.monotonic())
+                time.sleep(0.2)
+            results: list[dict] = []
+            def worker():
+                gate.wait()
+                results.append(auth_health.notify_if_due(ws, monitor_root, status, "text", runner=Mock()))
+            with patch.object(kolo_safe, "tell_owner", side_effect=slow_send):
+                threads = [threading.Thread(target=worker) for _ in range(2)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+            self.assertEqual(sorted(r["sent"] for r in results), [False, True])
+            self.assertEqual(len(sends), 1)
+            self.assertEqual(auth_health.load_record(ws)["notice"]["attempts"], 1)
 
     def readiness_runner(self, argv, **kwargs):
         if argv[:3] == ["openclaw", "infer", "model"]:
@@ -6401,14 +6594,78 @@ class AuthPreflightTests(unittest.TestCase):
             readiness.cron_context_row(ws, "0.0.1", [{"status": "PASS"}])
             with self.assertRaisesRegex(ValueError, "installed version"):
                 inbox_monitor.require_cron_context_readiness(root)
-            row = readiness.cron_context_row(ws, version, [{"status": "PASS"}])
+            row = readiness.cron_context_row(ws, version, [{"status": "PASS"}, {"status": "WARN"}])
             self.assertEqual(row["status"], "PASS")
             self.assertIn("uid=", row["detail"])
             stamp = inbox_monitor.require_cron_context_readiness(root)
             self.assertTrue(stamp["ready"])
             self.assertEqual(stamp["home"], os.environ.get("HOME", ""))
-            with self.assertRaisesRegex(ValueError, "older than a day"):
+            # From today, in UTC: yesterday but under 24 hours old is refused, and so is a future stamp.
+            with self.assertRaisesRegex(ValueError, "not from today"):
                 inbox_monitor.require_cron_context_readiness(root, now=time.time() + 2 * 86400)
+            stamp_file = readiness.stamp_path(ws)
+            written = json.loads(stamp_file.read_text(encoding="utf-8"))
+            yesterday_late = (datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(minutes=30))
+            written["at"] = yesterday_late.isoformat()
+            stamp_file.write_text(json.dumps(written), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not from today"):
+                inbox_monitor.require_cron_context_readiness(root)
+            written["at"] = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+            stamp_file.write_text(json.dumps(written), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not from today|in the future"):
+                inbox_monitor.require_cron_context_readiness(root)
+            written["at"] = "2026-09-14T12:00:00"  # naive
+            stamp_file.write_text(json.dumps(written), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "no usable timestamp"):
+                inbox_monitor.require_cron_context_readiness(root)
+            # A stamp the readiness run could not write is a FAIL, never a PASS that activation then refuses.
+            with patch.object(workflow_safe, "write_private", side_effect=OSError("read-only")):
+                failed = readiness.cron_context_row(ws, version, [{"status": "PASS"}])
+            self.assertEqual(failed["status"], "FAIL")
+            self.assertIn("stamp not written", failed["detail"])
+
+    def test_readiness_before_first_activation_can_stamp_a_ready_run(self) -> None:
+        """A prepared, not yet active, monitor is a warning, so the stamp activation needs can exist (Codex review, 14 September 2026)."""
+        import readiness
+        helper = IntakeTests("test_intake_cli_prints_the_result")
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory) / "ws"
+            monitor_root = ws / "estimate-desk" / "inbox-monitor"
+            monitor_root.parent.mkdir(parents=True)
+            inbox_monitor.prepare(monitor_root, helper.capabilities(), helper.cron())
+            (ws / "estimate-desk" / "shop-profile.json").write_text(json.dumps({"shop": {"outbound_mailbox": self.MAILBOX}}), encoding="utf-8")
+            with (
+                patch.object(gateway_token, "load_token_with_source", return_value=("tok", "environment")),
+                patch.object(gmail_fetch, "fetch_json", return_value={"resultSizeEstimate": 3}),
+                patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}),
+            ):
+                rows = readiness.checks(ws, ROOT, "openclaw", runner=self.readiness_runner)
+            status = {r["check"]: r for r in rows}
+            self.assertEqual(status["monitor state"]["status"], "WARN")
+            self.assertIn("not yet activated", status["monitor state"]["detail"])
+            # The stamp counts only FAIL rows; the shop profile and calendar rows fail in this bare workspace,
+            # so prove the rule on the rows that matter for activation.
+            activation_rows = [r for r in rows if r["check"] in ("monitor state", "gmail gateway", "gmail send-as", "gmail auth record")]
+            self.assertTrue(all(r["status"] != "FAIL" for r in activation_rows), activation_rows)
+            readiness.cron_context_row(ws, skill_version.installed(ROOT), activation_rows)
+            self.assertTrue(inbox_monitor.require_cron_context_readiness(monitor_root)["ready"])
+
+    def test_cron_context_re_exec_quotes_every_path(self) -> None:
+        import readiness
+        seen = {}
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            return subprocess.CompletedProcess(argv, 0, "READY\n", "")
+        with patch.object(readiness.subprocess, "run", side_effect=fake_run), patch("sys.stdout", io.StringIO()):
+            code = readiness.run_in_cron_context(Path("/tmp/my work space"), Path("/tmp/skill dir"), "openclaw", "4.15.34")
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["argv"][:2], ["sh", "-lc"])
+        line = seen["argv"][2]
+        self.assertTrue(line.startswith(cron_config.LITELLM_ENV_IMPORT))
+        self.assertIn("'/tmp/my work space'", line)
+        self.assertIn("'/tmp/skill dir/scripts/readiness.py'", line)
+        self.assertIn("--in-cron-context", line)
+        self.assertIn("--expect 4.15.34", line)
 
 
 

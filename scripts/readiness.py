@@ -78,7 +78,12 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
     # Monitor state
     try:
         state = inbox_monitor.load_monitor_state(monitor_root)
-        add("monitor state", "PASS" if state.get("activation_state") == "active" else "FAIL", str(state.get("activation_state")))
+        activation = str(state.get("activation_state"))
+        # "prepared" is the state readiness is meant to run in before first
+        # activation (the cron-context stamp gates that activation), so it is
+        # a warning, not a failure (14 September 2026).
+        add("monitor state", "PASS" if activation == "active" else ("WARN" if activation == "prepared" else "FAIL"),
+            activation + (" (not yet activated)" if activation == "prepared" else ""))
     except (OSError, ValueError) as exc:
         add("monitor state", "FAIL", str(exc))
 
@@ -140,7 +145,9 @@ def checks(workspace: Path, base_dir: Path, openclaw: str, runner: Runner = subp
 
         health = auth_health.load_record(workspace)
         active = health.get("active_failure")
-        if not isinstance(active, dict):
+        if health.get("unreadable"):
+            add("gmail auth record", "WARN", auth_health.describe(health))
+        elif not isinstance(active, dict):
             add("gmail auth record", "PASS", auth_health.describe(health))
         elif gmail_live:
             add("gmail auth record", "WARN",
@@ -254,22 +261,26 @@ def cron_context_row(workspace: Path, version: str, results: list[dict[str, Any]
     }
     try:
         workflow_safe.write_private(stamp_path(workspace), facts)
-        stamped = "stamped"
+        status, stamped = "PASS", "stamped"
     except OSError as exc:
-        stamped = f"stamp not written: {exc}"
-    return {"check": "cron context", "status": "PASS",
+        # Without the stamp the next activation is refused, so this is a FAIL.
+        status, stamped = "FAIL", f"stamp not written: {exc}"
+    return {"check": "cron context", "status": status,
             "detail": f"HOME={facts['home']} uid={facts['uid']} credential from {source}; {stamped}"}
 
 
 def run_in_cron_context(workspace: Path, base_dir: Path, openclaw: str, expect: str | None) -> int:
     """Re-run this script the way the watcher job runs: `sh -lc` with the same environment import line."""
     import cron_config
+    import shlex
 
-    inner = (
-        f"{cron_config.LITELLM_ENV_IMPORT} python3 {base_dir}/scripts/readiness.py "
-        f"--workspace {workspace} --base-dir {base_dir} --openclaw {openclaw} --in-cron-context"
-        + (f" --expect {expect}" if expect else "")
-    )
+    argv = ["python3", str(base_dir / "scripts" / "readiness.py"), "--workspace", str(workspace),
+            "--base-dir", str(base_dir), "--openclaw", openclaw, "--in-cron-context"]
+    if expect:
+        argv += ["--expect", expect]
+    # Every operator-supplied path is quoted; the env import line is the
+    # watcher's own, verbatim from cron_config.
+    inner = cron_config.LITELLM_ENV_IMPORT + " " + " ".join(shlex.quote(part) for part in argv)
     print("cron context: sh -lc, the watcher's own environment import")
     proc = subprocess.run(["sh", "-lc", inner], capture_output=True, text=True, timeout=600)
     sys.stdout.write(proc.stdout)

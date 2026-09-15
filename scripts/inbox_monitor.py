@@ -256,7 +256,7 @@ def durable_cron_binding_path(root: Path) -> Path:
 
 
 CRON_CONTEXT_STAMP = "readiness-cron-context.json"
-CRON_CONTEXT_MAX_AGE_SECONDS = 24 * 3600
+CRON_CONTEXT_FUTURE_TOLERANCE_SECONDS = 300  # clock skew between the stamp and this check
 
 
 def require_cron_context_readiness(root: Path, now: float | None = None) -> dict[str, Any]:
@@ -286,12 +286,16 @@ def require_cron_context_readiness(root: Path, now: float | None = None) -> dict
             f"the installed version is {installed}; run it again"
         )
     try:
-        at = datetime.fromisoformat(str(stamp.get("at"))).timestamp()
+        stamped_at = datetime.fromisoformat(str(stamp.get("at")))
+        if stamped_at.tzinfo is None:
+            raise ValueError("naive timestamp")
     except (TypeError, ValueError) as exc:
         raise ValueError("the readiness stamp in cron context has no usable timestamp; run it again") from exc
-    current = time.time() if now is None else now
-    if current - at > CRON_CONTEXT_MAX_AGE_SECONDS:
-        raise ValueError("the readiness run in cron context is older than a day; run it again")
+    current = datetime.now(timezone.utc) if now is None else datetime.fromtimestamp(now, timezone.utc)
+    if stamped_at.astimezone(timezone.utc).date() != current.date():
+        raise ValueError("the readiness run in cron context is not from today (UTC); run it again")
+    if (stamped_at - current).total_seconds() > CRON_CONTEXT_FUTURE_TOLERANCE_SECONDS:
+        raise ValueError("the readiness stamp in cron context is dated in the future; check the clock and run it again")
     return stamp
 
 

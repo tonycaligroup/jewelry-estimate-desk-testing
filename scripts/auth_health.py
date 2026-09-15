@@ -11,18 +11,22 @@ alias), so it is classified as the mailbox not being authorized.
 The record at `estimate-desk/run-work/gmail-auth-health.json` keeps the last
 success, the active failure, and the last failure for evidence. Only a
 successful watcher preflight clears the active failure; readiness and the
-doctor report it and never write here. The owner hears once a day, through
-the bound owner channel, never through cron stdout, and the notice carries no
-response body, credential, or header (14 September 2026).
+doctor report it and never write here. The owner hears once a day per class,
+through the bound owner channel, never through cron stdout, and the notice
+carries no response body, credential, or header. Every read-modify-write of
+the record holds a file lock, so two overlapping ticks cannot double-send a
+notice or clear a failure the other is recording (14 September 2026).
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import subprocess
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import gmail_fetch
 import kolo_safe
@@ -30,6 +34,7 @@ import workflow_safe
 
 
 RECORD_FILE = "gmail-auth-health.json"
+LOCK_FILE = "gmail-auth-health.lock"
 CHECK = "settings/sendAs"
 
 PASSED = "passed"
@@ -66,13 +71,20 @@ def _empty_record() -> dict[str, Any]:
 
 
 def load_record(workspace: Path) -> dict[str, Any]:
-    """The record, or an empty one; a corrupt file reads as empty and is rewritten on the next preflight."""
+    """The record; a missing file reads as empty, an unreadable one reads as empty and says so in `unreadable`."""
+    path = record_path(workspace)
     try:
-        value = json.loads(record_path(workspace).read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return _empty_record()
+    except OSError as exc:
+        return {**_empty_record(), "unreadable": f"cannot read: {exc}"[:200]}
+    try:
+        value = json.loads(text)
+    except ValueError as exc:
+        return {**_empty_record(), "unreadable": f"not JSON: {exc}"[:200]}
     if not isinstance(value, dict):
-        return _empty_record()
+        return {**_empty_record(), "unreadable": "not a JSON object"}
     record = _empty_record()
     record.update({k: value.get(k) for k in ("last_success_at", "active_failure", "last_failure") if k in value})
     record["notice"] = value.get("notice") if isinstance(value.get("notice"), dict) else {}
@@ -80,7 +92,33 @@ def load_record(workspace: Path) -> dict[str, Any]:
 
 
 def save_record(workspace: Path, record: dict[str, Any]) -> None:
-    workflow_safe.write_private(record_path(workspace), record)
+    """Write the record; an unreadable predecessor is moved aside first so the evidence is never overwritten."""
+    path = record_path(workspace)
+    clean = {k: v for k, v in record.items() if k != "unreadable"}
+    if record.get("unreadable") and path.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        try:
+            path.replace(path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}"))
+        except OSError:
+            pass
+    workflow_safe.write_private(path, clean)
+
+
+@contextmanager
+def _locked(workspace: Path) -> Iterator[None]:
+    """One writer at a time for the record: two ticks overlapping never both send, never race a clear."""
+    lock = record_path(workspace).with_name(LOCK_FILE)
+    lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with lock.open("a", encoding="utf-8") as handle:
+        try:
+            lock.chmod(0o600)
+        except OSError:
+            pass
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _now(now: datetime | None) -> datetime:
@@ -148,29 +186,30 @@ def preflight(
     cron_context: bool = True,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Probe, then update the record: a pass clears only the active failure; a failure becomes active and last."""
+    """Probe, then update the record under the lock: a pass clears only the active failure; a failure becomes active and last."""
     result = probe(token, mailbox, opener)
-    record = load_record(workspace)
     at = _now(now).isoformat()
-    if result["status"] == PASSED:
-        record["last_success_at"] = at
-        record["active_failure"] = None
-    else:
-        entry = {
-            "at": at,
-            "version": version,
-            "http_status": result["http_status"],
-            "class": result["status"],
-            "credential_source": credential_source,
-            "cron_context": bool(cron_context),
-            "check": CHECK,
-            "repair": REPAIRS.get(result["status"], "run the readiness check"),
-            "last_success_at": record.get("last_success_at"),
-        }
-        record["active_failure"] = entry
-        record["last_failure"] = entry
-    save_record(workspace, record)
-    return {**result, "record": record}
+    with _locked(workspace):
+        record = load_record(workspace)
+        if result["status"] == PASSED:
+            record["last_success_at"] = at
+            record["active_failure"] = None
+        else:
+            entry = {
+                "at": at,
+                "version": version,
+                "http_status": result["http_status"],
+                "class": result["status"],
+                "credential_source": credential_source,
+                "cron_context": bool(cron_context),
+                "check": CHECK,
+                "repair": REPAIRS.get(result["status"], "run the readiness check"),
+                "last_success_at": record.get("last_success_at"),
+            }
+            record["active_failure"] = entry
+            record["last_failure"] = entry
+        save_record(workspace, record)
+    return {**result, "record": {k: v for k, v in record.items() if k != "unreadable"}}
 
 
 def notice_text(status: str, mailbox: str, workspace: Path, base_dir: Path) -> str:
@@ -198,10 +237,11 @@ def notice_text(status: str, mailbox: str, workspace: Path, base_dir: Path) -> s
 
 
 def notice_due(record: dict[str, Any], status: str, now: datetime | None = None) -> bool:
-    """Once per UTC day per class: a confirmed send today for this class means not due."""
+    """Once per UTC day per class, each class with its own day; alternating classes never re-notify within a day."""
     notice = record.get("notice") if isinstance(record.get("notice"), dict) else {}
+    sent = notice.get("sent") if isinstance(notice.get("sent"), dict) else {}
     today = _now(now).strftime("%Y-%m-%d")
-    return not (notice.get("sent_on") == today and notice.get("class") == status)
+    return sent.get(status) != today
 
 
 def notify_if_due(
@@ -217,35 +257,41 @@ def notify_if_due(
     Delivery is recorded apart from the failure itself. A failed send keeps the
     failure recorded and leaves the day unsent, so a later tick tries again.
     `kolo notify-owner` gives no delivery receipt; the command's success is the
-    strongest confirmation the platform offers.
+    strongest confirmation the platform offers. The lock is held across the
+    send so an overlapping tick cannot send the same notice.
     """
-    record = load_record(workspace)
-    if not notice_due(record, status, now):
-        return {"sent": False, "reason": "already sent today"}
-    moment = _now(now)
-    notice = dict(record.get("notice") or {})
-    notice["attempts"] = int(notice.get("attempts") or 0) + 1
-    notice["last_attempt_at"] = moment.isoformat()
-    try:
-        kolo_safe.tell_owner(monitor_root, text, runner=runner)
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        words = str(exc)
-        for extra in (getattr(exc, "stderr", None), getattr(exc, "stdout", None)):
-            if isinstance(extra, str) and extra.strip():
-                words += ": " + extra.strip()
-        notice["last_error"] = words[:200]
+    with _locked(workspace):
+        record = load_record(workspace)
+        if not notice_due(record, status, now):
+            return {"sent": False, "reason": "already sent today"}
+        moment = _now(now)
+        notice = dict(record.get("notice") or {})
+        notice["attempts"] = int(notice.get("attempts") or 0) + 1
+        notice["last_attempt_at"] = moment.isoformat()
+        try:
+            kolo_safe.tell_owner(monitor_root, text, runner=runner)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            words = str(exc)
+            for extra in (getattr(exc, "stderr", None), getattr(exc, "stdout", None)):
+                if isinstance(extra, str) and extra.strip():
+                    words += ": " + extra.strip()
+            notice["last_error"] = words[:200]
+            record["notice"] = notice
+            save_record(workspace, record)
+            return {"sent": False, "reason": "notify failed; will retry on a later tick"}
+        sent = dict(notice.get("sent") or {}) if isinstance(notice.get("sent"), dict) else {}
+        sent[status] = moment.strftime("%Y-%m-%d")
+        notice.update({"sent": sent, "sent_on": sent[status], "sent_at": moment.isoformat(), "class": status})
+        notice.pop("last_error", None)
         record["notice"] = notice
         save_record(workspace, record)
-        return {"sent": False, "reason": "notify failed; will retry on a later tick"}
-    notice.update({"sent_on": moment.strftime("%Y-%m-%d"), "sent_at": moment.isoformat(), "class": status})
-    notice.pop("last_error", None)
-    record["notice"] = notice
-    save_record(workspace, record)
-    return {"sent": True, "reason": "sent"}
+        return {"sent": True, "reason": "sent"}
 
 
 def describe(record: dict[str, Any]) -> str:
     """One line for readiness and the doctor."""
+    if record.get("unreadable"):
+        return f"record unreadable ({record['unreadable']}); the next watcher preflight moves it aside and starts a new one"
     active = record.get("active_failure")
     if not isinstance(active, dict):
         last = record.get("last_success_at")

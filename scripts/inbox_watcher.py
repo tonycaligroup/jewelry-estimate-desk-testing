@@ -215,10 +215,18 @@ def gmail_preflight(
         workspace, token, credential_source, mailbox, version=skill_version.installed(base_dir)
     )
     if result["status"] == auth_health.PASSED:
-        return result
-    text = auth_health.notice_text(result["status"], mailbox, workspace, base_dir)
-    result["notice"] = auth_health.notify_if_due(workspace, monitor_root, result["status"], text, runner)
+        # Every later loader in this process returns the credential the
+        # preflight proved, executors included; a file that changes mid-tick
+        # cannot be picked up unproven.
+        gateway_token.pin(token, credential_source)
     return result
+
+
+def _notify_auth_failure(
+    workspace: Path, base_dir: Path, monitor_root: Path, status: str, mailbox: str, runner: Runner
+) -> dict[str, Any]:
+    text = auth_health.notice_text(status, mailbox, workspace, base_dir)
+    return auth_health.notify_if_due(workspace, monitor_root, status, text, runner)
 
 
 def _inline_retry_candidates(p: dict[str, Path]) -> list[str]:
@@ -632,6 +640,7 @@ def tick(
     mark_tick(workspace, started=datetime.now(timezone.utc).isoformat(), message_id=None, step=None)
     judge.reset_stats()
     image_provider.reset_model_resolution()
+    gateway_token.unpin()
     profile_loaded = validate_profile.load_profile(p["shop_profile"])
     profile_result = validate_profile.validate_profile(profile_loaded)
     if not profile_result.get("ready"):
@@ -656,9 +665,17 @@ def tick(
     # failure is recorded, told once a day, and ends the tick quietly.
     mailbox = str(((profile_loaded or {}).get("shop") or {}).get("outbound_mailbox") or "") if isinstance(profile_loaded, dict) else ""
     auth = gmail_preflight(workspace, base_dir, p["monitor_root"], token, token_source, mailbox, runner)
-    summary["auth"] = {k: auth[k] for k in ("status", "http_status", "notice") if k in auth}
+    summary["auth"] = {k: auth[k] for k in ("status", "http_status") if k in auth}
     if auth["status"] != auth_health.PASSED:
+        # Persist first (the record is already written), then tell the owner,
+        # then record the delivery outcome apart from the failure itself. A
+        # notify that hangs and gets the tick killed still leaves the summary.
         summary["skipped"] = "gmail_auth"
+        keep_summary(workspace, summary)
+        summary["summary_kept"] = True
+        summary["auth"]["notice"] = _notify_auth_failure(
+            workspace, base_dir, p["monitor_root"], auth["status"], mailbox, runner
+        )
         return summary
 
     inbox_claim.reconcile_stale_notifications(p["claim_root"], STALE_AFTER_SECONDS)
@@ -809,7 +826,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.summary is not None:
         workflow_safe.write_private(args.summary, summary)
-    keep_summary(args.workspace.resolve(), summary)
+    if not summary.pop("summary_kept", False):
+        keep_summary(args.workspace.resolve(), summary)
     print(summary["message"])
     return 0
 
