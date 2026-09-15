@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -28,16 +29,31 @@ PAGE_SIZE = 100
 Opener = Callable[..., Any]
 
 
+_SECRET_SHAPES = (
+    re.compile(r"(?i)authorization\s*:\s*[^\s,;\"']+(\s+[^\s,;\"']+)?"),
+    re.compile(r"(?i)bearer\s+[^\s,;\"']+"),
+    re.compile(r"[A-Za-z0-9_\-]{24,}"),  # a key-shaped run; the gateway masks its own, this catches the rest
+)
+
+
+def redact(text: str) -> str:
+    """The provider's words with anything key-shaped or header-shaped replaced, before they reach any output or state."""
+    for shape in _SECRET_SHAPES:
+        text = shape.sub("***", text)
+    return text
+
+
 class GatewayHTTPError(ValueError):
     """The gateway answered with an HTTP error; `status` is what callers classify on, never the message text.
 
-    A `ValueError` subclass so every existing caller keeps working (14 September 2026).
+    A `ValueError` subclass so every existing caller keeps working. `detail` is
+    the provider's wording, redacted (14 September 2026).
     """
 
     def __init__(self, status: int, detail: str = "") -> None:
         self.status = int(status)
-        self.detail = detail
-        super().__init__(f"Gmail gateway returned HTTP {self.status}" + (f": {detail}" if detail else ""))
+        self.detail = redact(detail)
+        super().__init__(f"Gmail gateway returned HTTP {self.status}" + (f": {self.detail}" if self.detail else ""))
 
 
 def require_token(value: str) -> str:

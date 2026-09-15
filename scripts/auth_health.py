@@ -85,22 +85,47 @@ def load_record(workspace: Path) -> dict[str, Any]:
         return {**_empty_record(), "unreadable": f"not JSON: {exc}"[:200]}
     if not isinstance(value, dict):
         return {**_empty_record(), "unreadable": "not a JSON object"}
+    problem = _shape_problem(value)
+    if problem:
+        return {**_empty_record(), "unreadable": problem}
     record = _empty_record()
     record.update({k: value.get(k) for k in ("last_success_at", "active_failure", "last_failure") if k in value})
     record["notice"] = value.get("notice") if isinstance(value.get("notice"), dict) else {}
     return record
 
 
+def _shape_problem(value: dict[str, Any]) -> str | None:
+    """Structural corruption reads as unreadable, never as healthy: a failure entry that is not one is not 'no failure'."""
+    if value.get("schema", 1) != 1:
+        return f"unsupported schema {value.get('schema')!r}"
+    if value.get("last_success_at") is not None and not isinstance(value.get("last_success_at"), str):
+        return "last_success_at is not a timestamp"
+    for key in ("active_failure", "last_failure"):
+        entry = value.get(key)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            return f"{key} is not a failure entry"
+        if entry.get("class") not in FAILURE_CLASSES:
+            return f"{key} has an unknown class {entry.get('class')!r}"
+        if not isinstance(entry.get("at"), str):
+            return f"{key} has no timestamp"
+    if "notice" in value and value.get("notice") is not None and not isinstance(value.get("notice"), dict):
+        return "notice is not an object"
+    return None
+
+
 def save_record(workspace: Path, record: dict[str, Any]) -> None:
-    """Write the record; an unreadable predecessor is moved aside first so the evidence is never overwritten."""
+    """Write the record; an unreadable predecessor is moved aside first, and if it cannot be, nothing is written over it."""
     path = record_path(workspace)
     clean = {k: v for k, v in record.items() if k != "unreadable"}
     if record.get("unreadable") and path.exists():
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        moment = datetime.now(timezone.utc)
+        aside = path.with_name(f"{path.stem}.corrupt-{moment.strftime('%Y%m%dT%H%M%S')}-{moment.microsecond:06d}{path.suffix}")
         try:
-            path.replace(path.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}"))
-        except OSError:
-            pass
+            path.replace(aside)
+        except OSError as exc:
+            raise OSError(f"cannot move the unreadable authentication record aside, so it is left untouched: {exc}") from exc
     workflow_safe.write_private(path, clean)
 
 
@@ -264,6 +289,12 @@ def notify_if_due(
         record = load_record(workspace)
         if not notice_due(record, status, now):
             return {"sent": False, "reason": "already sent today"}
+        # Bound to the failure that is active now: an overlapping tick may have
+        # passed its preflight and cleared this one since it was recorded, in
+        # which case saying "the desk cannot use Gmail" would be false.
+        active = record.get("active_failure")
+        if not isinstance(active, dict) or active.get("class") != status:
+            return {"sent": False, "reason": "failure no longer active"}
         moment = _now(now)
         notice = dict(record.get("notice") or {})
         notice["attempts"] = int(notice.get("attempts") or 0) + 1

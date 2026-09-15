@@ -891,9 +891,14 @@ closed by follow-up changes:
   credential the preflight proved is pinned for the rest of the tick, so an
   executor that reloads it cannot pick up a file that changed mid-tick; the
   record is written under a file lock, so two overlapping ticks never send
-  the same notice or race a clear; a malformed environment key is an error,
-  never a fall-through to a file; an unreadable record is reported and moved
-  aside, never overwritten (14 September 2026; the tester's 401 that
+  the same notice, and a notice goes only while its failure is still the
+  active one, so a tick that recorded a failure never announces it after
+  another tick recovered; the tick summary must be on disk before the owner
+  is told, or the notice waits for the next tick; a malformed environment
+  key, whitespace included, is an error, never a fall-through to a file; an
+  unreadable or structurally invalid record is reported and moved aside,
+  never overwritten, and the provider's error words are redacted of anything
+  key-shaped before they reach any output or state (14 September 2026; the tester's 401 that
   prompted this cleared on its own, both keys valid, and the desk had kept
   no record of it).
 - The rules that read a customer's own words (meeting sentences, 'I don't know', a piece the shop made, an earlier conversation, pair carats, millimetre sizes, phone numbers, call or visit, periods of days, technical questions, greeting the right person) are listed in one table, `scripts/words.py`, each with the live phrases from tester threads it must keep reading right; `tests/test_words.py` runs every phrase. A tester's new phrasing becomes a row there before a rule changes (10 September 2026). The estimate record itself is described key by key in `RECORD-SCHEMA.md`, checked against the code by `tests/test_record_schema.py`.

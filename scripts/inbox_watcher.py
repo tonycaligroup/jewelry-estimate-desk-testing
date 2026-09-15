@@ -177,8 +177,8 @@ def mark_tick(workspace: Path, **fields: Any) -> None:
             pass
 
 
-def keep_summary(workspace: Path, summary: dict[str, Any]) -> None:
-    """The last ticks' summaries, on disk, so a handoff or a deferral is never lost with the process."""
+def keep_summary(workspace: Path, summary: dict[str, Any]) -> bool:
+    """The last ticks' summaries, on disk, so a handoff or a deferral is never lost with the process. True when written."""
     try:
         root = workspace / "estimate-desk" / "run-work"
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -192,7 +192,8 @@ def keep_summary(workspace: Path, summary: dict[str, Any]) -> None:
         entries.append({"at": datetime.now(timezone.utc).isoformat(), **{k: v for k, v in summary.items() if k != "message"}})
         workflow_safe.write_private(path, entries[-TICK_LOG_KEEP:])
     except (OSError, ValueError):
-        pass
+        return False
+    return True
 
 
 def gmail_preflight(
@@ -616,6 +617,23 @@ def tick(
     token: str | None = None,
     judge_runner: Runner = subprocess.run,
 ) -> dict[str, Any]:
+    """One tick. The credential the preflight proves is pinned for the tick's duration and released at its end, however it ends."""
+    try:
+        return _tick(workspace, base_dir, owner_target, openclaw, max_workers, runner, token, judge_runner)
+    finally:
+        gateway_token.unpin()
+
+
+def _tick(
+    workspace: Path,
+    base_dir: Path,
+    owner_target: str,
+    openclaw: str,
+    max_workers: int | None,
+    runner: Runner,
+    token: str | None,
+    judge_runner: Runner,
+) -> dict[str, Any]:
     p = paths_for(workspace)
     rehearsal_state = rehearsal.apply(workspace)
     summary: dict[str, Any] = {
@@ -671,11 +689,16 @@ def tick(
         # then record the delivery outcome apart from the failure itself. A
         # notify that hangs and gets the tick killed still leaves the summary.
         summary["skipped"] = "gmail_auth"
-        keep_summary(workspace, summary)
-        summary["summary_kept"] = True
-        summary["auth"]["notice"] = _notify_auth_failure(
-            workspace, base_dir, p["monitor_root"], auth["status"], mailbox, runner
-        )
+        kept = keep_summary(workspace, summary)
+        summary["summary_kept"] = kept
+        if kept:
+            summary["auth"]["notice"] = _notify_auth_failure(
+                workspace, base_dir, p["monitor_root"], auth["status"], mailbox, runner
+            )
+        else:
+            # Nothing durable says this tick happened, so the owner is not told
+            # yet; the record still holds the failure and the next tick retries.
+            summary["auth"]["notice"] = {"sent": False, "reason": "tick summary not persisted; notice deferred"}
         return summary
 
     inbox_claim.reconcile_stale_notifications(p["claim_root"], STALE_AFTER_SECONDS)
@@ -824,9 +847,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Inbox monitor tick failed: {exc}")
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
+    kept = summary.pop("summary_kept", False)  # a tick-internal flag, not part of any summary anyone reads
     if args.summary is not None:
         workflow_safe.write_private(args.summary, summary)
-    if not summary.pop("summary_kept", False):
+    if not kept:
         keep_summary(args.workspace.resolve(), summary)
     print(summary["message"])
     return 0

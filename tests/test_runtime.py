@@ -6123,7 +6123,13 @@ class GatewayTokenTests(unittest.TestCase):
                     gateway_token.load_token({"MATON_API_KEY": "two words"})
                 with self.assertRaisesRegex(ValueError, "not a usable token"):
                     gateway_token.load_token({"MATON_API_KEY": "x y", "MATON_API_KEY_FILE": str(installed)})
-                # An empty variable is absent, not malformed.
+                # Whitespace is present and malformed, not absent (second Codex review).
+                for present in (" ", "\t", "\n"):
+                    with self.assertRaisesRegex(ValueError, "not a usable token"):
+                        gateway_token.load_token({"MATON_API_KEY": present})
+                    with self.assertRaisesRegex(ValueError, "not a usable token"):
+                        gateway_token.candidate_token({"MATON_API_KEY": present, "MATON_API_KEY_FILE": str(installed)})
+                # Only the literal empty variable is absent.
                 self.assertEqual(gateway_token.load_token({"MATON_API_KEY": ""}), "installed-token")
 
     def test_token_files_must_be_owned_by_the_caller_and_never_symlinks(self) -> None:
@@ -6309,7 +6315,8 @@ class AuthPreflightTests(unittest.TestCase):
             ws = Path(directory)
             monitor_root = ws / "estimate-desk" / "inbox-monitor"
             status = auth_health.GATEWAY_KEY_REJECTED
-            auth_health.save_record(ws, {**auth_health.load_record(ws), "active_failure": {"class": status}})
+            with patch.object(auth_health, "probe", return_value=self.failing_probe()):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
             broken = Mock(side_effect=subprocess.CalledProcessError(1, ["kolo"], "", "backend down"))
             first = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=broken)
             self.assertEqual(first["sent"], False)
@@ -6332,6 +6339,8 @@ class AuthPreflightTests(unittest.TestCase):
             # outcomes notify once each per day).
             other = auth_health.INTEGRATION_DISCONNECTED
             self.assertTrue(auth_health.notice_due(auth_health.load_record(ws), other))
+            with patch.object(auth_health, "probe", return_value=self.failing_probe(other, 403)):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
             self.assertEqual(auth_health.notify_if_due(ws, monitor_root, other, "text", runner=working)["sent"], True)
             self.assertFalse(auth_health.notice_due(auth_health.load_record(ws), status))
             self.assertFalse(auth_health.notice_due(auth_health.load_record(ws), other))
@@ -6503,6 +6512,8 @@ class AuthPreflightTests(unittest.TestCase):
             ws = Path(directory)
             monitor_root = ws / "estimate-desk" / "inbox-monitor"
             status = auth_health.GATEWAY_KEY_REJECTED
+            with patch.object(auth_health, "probe", return_value=self.failing_probe()):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
             gate = threading.Barrier(2)
             sends: list[float] = []
             def slow_send(monitor_root, text, runner=None):
@@ -6521,6 +6532,117 @@ class AuthPreflightTests(unittest.TestCase):
             self.assertEqual(sorted(r["sent"] for r in results), [False, True])
             self.assertEqual(len(sends), 1)
             self.assertEqual(auth_health.load_record(ws)["notice"]["attempts"], 1)
+
+    def test_a_notice_is_bound_to_the_failure_that_is_still_active(self) -> None:
+        """A tick that recorded a failure never announces it after an overlapping tick recovered (second Codex review)."""
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            monitor_root = ws / "estimate-desk" / "inbox-monitor"
+            status = auth_health.GATEWAY_KEY_REJECTED
+            with patch.object(auth_health, "probe", return_value=self.failing_probe()):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            # Another tick passes and clears the failure before this one gets to notify.
+            with patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            runner = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            result = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=runner)
+            self.assertEqual(result, {"sent": False, "reason": "failure no longer active"})
+            runner.assert_not_called()
+            # A different active class does not satisfy a notice for this one either.
+            with patch.object(auth_health, "probe", return_value=self.failing_probe(auth_health.INTEGRATION_DISCONNECTED, 403)):
+                auth_health.preflight(ws, "tok", "environment", self.MAILBOX, "4.15.34")
+            self.assertEqual(auth_health.notify_if_due(ws, monitor_root, status, "text", runner=runner)["sent"], False)
+            self.assertEqual(auth_health.notify_if_due(ws, monitor_root, auth_health.INTEGRATION_DISCONNECTED, "text", runner=runner)["sent"], True)
+
+    def test_no_durable_summary_means_no_notice_this_tick(self) -> None:
+        harness = WatcherTickTests("test_tick_does_nothing_while_reconfiguring")
+        harness.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = harness.workspace(directory, [])
+            with (
+                patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+                patch.object(auth_health, "probe", return_value=self.failing_probe()),
+                patch.object(inbox_watcher, "keep_summary", return_value=False),
+                patch.object(kolo_safe, "tell_owner") as tell,
+            ):
+                summary = inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=Mock(), token="t")
+            tell.assert_not_called()
+            self.assertFalse(summary["summary_kept"])
+            self.assertIn("deferred", summary["auth"]["notice"]["reason"])
+            self.assertEqual(auth_health.load_record(ws)["active_failure"]["class"], auth_health.GATEWAY_KEY_REJECTED)
+
+    def test_structural_corruption_reads_as_unreadable_and_is_never_overwritten_when_it_cannot_be_moved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ws = Path(directory)
+            path = auth_health.record_path(ws)
+            path.parent.mkdir(parents=True)
+            for broken in (
+                {"schema": 99},
+                {"active_failure": "corrupt"},
+                {"active_failure": {"class": "made_up", "at": "2026-09-14T00:00:00+00:00"}},
+                {"last_failure": {"class": auth_health.GATEWAY_KEY_REJECTED}},
+                {"last_success_at": 12345},
+                {"notice": "no"},
+            ):
+                path.write_text(json.dumps(broken), encoding="utf-8")
+                record = auth_health.load_record(ws)
+                self.assertIn("unreadable", record, broken)
+                self.assertIsNone(record["active_failure"])
+            with patch.object(Path, "replace", side_effect=OSError("busy")):
+                with self.assertRaisesRegex(OSError, "left untouched"):
+                    auth_health.save_record(ws, auth_health.load_record(ws))
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"notice": "no"})
+
+    def test_gateway_words_are_redacted_before_they_go_anywhere(self) -> None:
+        body = b'{"error":"You provided an invalid Maton API key: mtn_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789. Authorization: Bearer abc.def"}'
+        with self.assertRaises(gmail_fetch.GatewayHTTPError) as caught:
+            gmail_fetch.fetch_json("settings/sendAs", None, "tok", self.http_error(401, body))
+        text = str(caught.exception) + caught.exception.detail
+        self.assertNotIn("ABCDEFGHIJKLMNOPQRSTUVWXYZ", text)
+        self.assertNotIn("Bearer abc", text)
+        self.assertNotIn("Authorization: Bearer", text)
+        self.assertIn("invalid Maton API key", caught.exception.detail)
+        self.assertEqual(gmail_fetch.redact("integration is not connected"), "integration is not connected")
+
+    def test_the_pin_is_released_when_the_tick_ends_however_it_ends(self) -> None:
+        harness = WatcherTickTests("test_tick_does_nothing_while_reconfiguring")
+        harness.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = harness.workspace(directory, [])
+            with (
+                patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+                patch.object(auth_health, "probe", return_value={"status": auth_health.PASSED, "http_status": 200, "check": auth_health.CHECK}),
+                patch.object(inbox_watcher.gmail_fetch, "discover", side_effect=RuntimeError("boom")),
+                patch.object(workflow_safe, "handle_approved_briefs", return_value=[]),
+                patch.object(workflow_safe, "handle_rejected_briefs", return_value=[]),
+                patch.object(inbox_watcher.owner_questions, "send_due_reminders", return_value=0),
+            ):
+                with self.assertRaises(RuntimeError):
+                    inbox_watcher.tick(ws, ROOT, "kolo:test-owner", "openclaw", runner=Mock(), token="t")
+            with patch.object(gateway_token, "DEFAULT_TOKEN_FILE", Path("/nonexistent/maton-api-key")):
+                self.assertEqual(gateway_token.load_token({"MATON_API_KEY": "after"}), "after")
+
+    def test_the_explicit_summary_file_carries_no_internal_flag(self) -> None:
+        harness = WatcherTickTests("test_tick_does_nothing_while_reconfiguring")
+        harness.setUp()
+        with tempfile.TemporaryDirectory() as directory:
+            ws = harness.workspace(directory, [])
+            out = Path(directory) / "summary.json"
+            with (
+                patch.dict(os.environ, {"MATON_API_KEY": "env-token"}),
+                patch.object(inbox_watcher.validate_profile, "validate_profile", return_value={"ready": True, "errors": []}),
+                patch.object(inbox_watcher, "_resolve_tick_model"),
+                patch.object(auth_health, "probe", return_value=self.failing_probe()),
+                patch.object(kolo_safe, "tell_owner"),
+                patch("sys.stdout", io.StringIO()),
+            ):
+                inbox_watcher.main(["--workspace", str(ws), "--base-dir", str(ROOT), "--owner-target", "kolo:test-owner", "--summary", str(out)])
+            written = json.loads(out.read_text(encoding="utf-8"))
+            self.assertNotIn("summary_kept", written)
+            self.assertEqual(written["skipped"], "gmail_auth")
+            log = json.loads((ws / "estimate-desk" / "run-work" / "tick-log.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(log), 1)
+            self.assertNotIn("summary_kept", log[0])
 
     def readiness_runner(self, argv, **kwargs):
         if argv[:3] == ["openclaw", "infer", "model"]:

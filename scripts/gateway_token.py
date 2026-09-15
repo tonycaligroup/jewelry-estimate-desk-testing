@@ -57,7 +57,23 @@ def read_token_file(path: Path) -> str:
         raise ValueError(
             f"gateway token file {path} must not be readable by group or others"
         )
-    token = path.read_text(encoding="utf-8").strip()
+    # Read through a descriptor opened without following links and checked
+    # again, so the file checked is the file read.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"gateway token file {path} cannot be opened: {exc.strerror}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid() or opened.st_mode & 0o077:
+            raise ValueError(f"gateway token file {path} changed while being read")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            token = handle.read().strip()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if not _valid(token):
         raise ValueError(f"gateway token file {path} does not contain a usable token")
     return token
@@ -97,7 +113,8 @@ def load_token_with_source(environ: Mapping[str, str] | None = None) -> tuple[st
     token = env.get("MATON_API_KEY", "")
     if _valid(token):
         return token, SOURCE_ENVIRONMENT
-    if token.strip():
+    if token != "":
+        # Anything present, whitespace included, is a malformed value, not an absent one.
         raise ValueError("MATON_API_KEY is present but not a usable token")
     configured = env.get("MATON_API_KEY_FILE")
     if configured:
@@ -145,6 +162,8 @@ def candidate_token(environ: Mapping[str, str] | None = None) -> str:
     token = env.get("MATON_API_KEY", "")
     if _valid(token):
         return token
+    if token != "":
+        raise ValueError("MATON_API_KEY is present but not a usable token")
     configured = env.get("MATON_API_KEY_FILE")
     if configured:
         return read_token_file(Path(configured).expanduser())
