@@ -583,9 +583,12 @@ def review_reason_text(reason_code: str) -> str:
     return REVIEW_REASON_TEXT.get(reason_code, reason_code.replace("_", " "))
 
 
-def tell_owner(monitor_root: Path | None, text: str, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> None:
-    """One plain sentence to the owner's channel (an acceptance, a cancellation): a fact they must know, not a decision."""
-    run_command(["kolo", "notify-owner", "-m", TITLE_PREFIX + text, *owner_channel_args(monitor_root)], runner=runner)
+def tell_owner(monitor_root: Path | None, text: str, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> subprocess.CompletedProcess[str]:
+    """One plain sentence to the owner's channel (an acceptance, a cancellation): a fact they must know, not a decision.
+
+    Returns the command's result; its stdout is the platform's receipt (`{"status": "ok", "chatId", "messageId"}`).
+    """
+    return run_command(["kolo", "notify-owner", "-m", TITLE_PREFIX + text, *owner_channel_args(monitor_root)], runner=runner)
 
 
 def _sender_display(value: str) -> str:

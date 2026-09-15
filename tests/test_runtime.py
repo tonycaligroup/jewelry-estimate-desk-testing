@@ -6325,12 +6325,16 @@ class AuthPreflightTests(unittest.TestCase):
             self.assertEqual(notice["attempts"], 1)
             self.assertIn("backend down", notice["last_error"])
             self.assertEqual(auth_health.load_record(ws)["active_failure"]["class"], status)
-            working = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            working = Mock(return_value=subprocess.CompletedProcess([], 0, '{"status": "ok", "chatId": "chat-1", "messageId": "msg-1"}\n', ""))
             second = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=working)
             self.assertEqual(second, {"sent": True, "reason": "sent"})
             notice = auth_health.load_record(ws)["notice"]
             self.assertEqual(notice["sent_on"], datetime.now(timezone.utc).strftime("%Y-%m-%d"))
             self.assertNotIn("last_error", notice)
+            # The platform's receipt is the delivery record, kept apart from the failure itself.
+            self.assertEqual(notice["receipt"], {"chat_id": "chat-1", "message_id": "msg-1"})
+            silent = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            self.assertEqual(auth_health._receipt(silent.return_value)["note"], "command succeeded without a message id")
             third = auth_health.notify_if_due(ws, monitor_root, status, "text", runner=working)
             self.assertEqual(third["sent"], False)
             self.assertEqual(working.call_count, 1)

@@ -300,7 +300,7 @@ def notify_if_due(
         notice["attempts"] = int(notice.get("attempts") or 0) + 1
         notice["last_attempt_at"] = moment.isoformat()
         try:
-            kolo_safe.tell_owner(monitor_root, text, runner=runner)
+            receipt = _receipt(kolo_safe.tell_owner(monitor_root, text, runner=runner))
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             words = str(exc)
             for extra in (getattr(exc, "stderr", None), getattr(exc, "stdout", None)):
@@ -312,11 +312,23 @@ def notify_if_due(
             return {"sent": False, "reason": "notify failed; will retry on a later tick"}
         sent = dict(notice.get("sent") or {}) if isinstance(notice.get("sent"), dict) else {}
         sent[status] = moment.strftime("%Y-%m-%d")
-        notice.update({"sent": sent, "sent_on": sent[status], "sent_at": moment.isoformat(), "class": status})
+        notice.update({"sent": sent, "sent_on": sent[status], "sent_at": moment.isoformat(), "class": status, "receipt": receipt})
         notice.pop("last_error", None)
         record["notice"] = notice
         save_record(workspace, record)
         return {"sent": True, "reason": "sent"}
+
+
+def _receipt(result: Any) -> dict[str, Any]:
+    """The platform's delivery record from notify-owner's stdout: chat and message ids, or a note that none came."""
+    stdout = getattr(result, "stdout", "")
+    try:
+        value = json.loads(stdout) if isinstance(stdout, str) else None
+    except ValueError:
+        value = None
+    if isinstance(value, dict) and value.get("messageId"):
+        return {"chat_id": str(value.get("chatId") or ""), "message_id": str(value.get("messageId"))}
+    return {"chat_id": "", "message_id": "", "note": "command succeeded without a message id"}
 
 
 def describe(record: dict[str, Any]) -> str:
